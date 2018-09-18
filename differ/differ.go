@@ -65,7 +65,7 @@ type oneEntry struct {
 }
 
 func (oneEntry *oneEntry) String() string {
-	return fmt.Sprintf("Key: %v Seqno: %v RevId: %v Cas: %v Flags %v Expiry: %v Hash: %s",
+	return fmt.Sprintf("<Key>: %v <Seqno>: %v <RevId>: %v <Cas>: %v <Flags>: %v <Expiry>: %v <Hash>: %s",
 		oneEntry.Key, oneEntry.Seqno, oneEntry.RevId, oneEntry.Cas, oneEntry.Flags, oneEntry.Expiry, hex.EncodeToString(oneEntry.BodyHash[:]))
 }
 
@@ -322,12 +322,13 @@ func (differ *FilesDiffer) PrettyPrintResult() {
 	} else {
 		if mismatchCnt > 0 {
 			fmt.Printf("%v Docs exist in both files but mismatch:\n", mismatchCnt)
-			fmt.Printf("--------------------------------------\n")
+			fmt.Printf("=========================================\n")
 			for i := 0; i < mismatchCnt; i++ {
+				fmt.Printf("--------------------------------------\n")
 				fmt.Printf("File1: %v\n", differ.BothExistButMismatch[i][0].String())
 				fmt.Printf("File2: %v\n", differ.BothExistButMismatch[i][1].String())
 			}
-			fmt.Printf("--------------------------------------\n")
+			fmt.Printf("=========================================\n")
 		}
 		if missing2Cnt > 0 {
 			fmt.Printf("%v Docs exist in file 1 that are missing from file2:\n", missing2Cnt)
