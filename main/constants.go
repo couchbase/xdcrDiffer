@@ -24,9 +24,13 @@ const FileModeReadWrite = 0666
 const StreamingBucketName = "xdcrDiffTool"
 const VbucketSeqnoStatName = "vbucket-seqno"
 const VbucketHighSeqnoStatsKey = "vb_%v:high_seqno"
+const VbucketUuidStatsKey = "vb_%v:uuid"
+const SourceCheckpointFileName = "SourceCheckpoint"
+const TargetCheckpointFileName = "TargetCheckpoint"
+const CheckpointFileBufferSize = 200000
 
 // time to wait to stop processing of target cluster after processing of source cluster is completed
-var DelayBetweenSourceAndTarget time.Duration = 2 * time.Second
+var DelayBetweenSourceAndTarget time.Duration = 1 * time.Second
 
 // length of mutation metadata + body, which consists of
 //  seqno   - 8 bytes

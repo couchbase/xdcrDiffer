@@ -20,28 +20,30 @@ import (
 
 // implements StreamObserver
 type DcpHandler struct {
-	dcpClient *DcpClient
-	fileDir   string
-	index     int
-	vbList    []uint16
-	dataChan  chan *Mutation
-	waitGrp   sync.WaitGroup
-	finChan   chan bool
-	bucketMap map[uint16]map[int]*Bucket
+	dcpClient         *DcpClient
+	checkpointManager *CheckpointManager
+	fileDir           string
+	index             int
+	vbList            []uint16
+	dataChan          chan *Mutation
+	waitGrp           sync.WaitGroup
+	finChan           chan bool
+	bucketMap         map[uint16]map[int]*Bucket
 }
 
-func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16) (*DcpHandler, error) {
+func NewDcpHandler(dcpClient *DcpClient, checkpointManager *CheckpointManager, fileDir string, index int, vbList []uint16) (*DcpHandler, error) {
 	if len(vbList) == 0 {
 		return nil, fmt.Errorf("vbList is empty for handler %v", index)
 	}
 	return &DcpHandler{
-		dcpClient: dcpClient,
-		fileDir:   fileDir,
-		index:     index,
-		vbList:    vbList,
-		dataChan:  make(chan *Mutation, DcpHandlerChanSize),
-		finChan:   make(chan bool),
-		bucketMap: make(map[uint16]map[int]*Bucket),
+		dcpClient:         dcpClient,
+		checkpointManager: checkpointManager,
+		fileDir:           fileDir,
+		index:             index,
+		vbList:            vbList,
+		dataChan:          make(chan *Mutation, DcpHandlerChanSize),
+		finChan:           make(chan bool),
+		bucketMap:         make(map[uint16]map[int]*Bucket),
 	}, nil
 }
 
@@ -126,6 +128,7 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 		panic(fmt.Sprintf("cannot find bucket for index %v", index))
 	}
 	bucket.write(serializeMutation(mut))
+	dh.checkpointManager.HandleMutationProcessedEvent(mut)
 }
 
 func (dh *DcpHandler) writeToDataChan(mut *Mutation) {
@@ -137,6 +140,7 @@ func (dh *DcpHandler) writeToDataChan(mut *Mutation) {
 }
 
 func (dh *DcpHandler) SnapshotMarker(startSeqno, endSeqno uint64, vbno uint16, snapshotType gocbcore.SnapshotState) {
+	dh.checkpointManager.updateSnapshot(vbno, startSeqno, endSeqno)
 }
 
 func (dh *DcpHandler) Mutation(seqno, revId uint64, flags, expiry, lockTime uint32, cas uint64, datatype uint8, vbno uint16, key, value []byte) {

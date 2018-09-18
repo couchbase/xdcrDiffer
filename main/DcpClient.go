@@ -17,43 +17,41 @@ import (
 )
 
 type DcpClient struct {
-	name            string
-	url             string
-	bucketName      string
-	userName        string
-	password        string
-	fileDir         string
-	errChan         chan error
-	doneChan        chan bool
-	numberOfWorkers int
-	completeBySeqno bool
-	cluster         *gocb.Cluster
-	bucket          *gocb.StreamingBucket
-	endSeqnoMap     map[uint16]uint64
-	dcpHandlers     []*DcpHandler
-	vbHandlerMap    map[uint16]*DcpHandler
+	name              string
+	url               string
+	bucketName        string
+	userName          string
+	password          string
+	fileDir           string
+	errChan           chan error
+	waitGroup         *sync.WaitGroup
+	numberOfWorkers   int
+	cluster           *gocb.Cluster
+	bucket            *gocb.StreamingBucket
+	dcpHandlers       []*DcpHandler
+	vbHandlerMap      map[uint16]*DcpHandler
+	checkpointManager *CheckpointManager
 	// value = true if processing on the vb has been completed
 	vbState   map[uint16]bool
 	stopped   bool
 	stateLock sync.RWMutex
 }
 
-func NewDcpClient(name, url, bucketName, userName, password, fileDir string, numberOfWorkers int, errChan chan error, doneChan chan bool, completeBySeqno bool) *DcpClient {
+func NewDcpClient(name, url, bucketName, userName, password, fileDir, oldCheckpointFileDir, newCheckpointFileDir string, numberOfWorkers int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool) *DcpClient {
 	return &DcpClient{
-		name:            name,
-		url:             url,
-		bucketName:      bucketName,
-		userName:        userName,
-		password:        password,
-		fileDir:         fileDir,
-		numberOfWorkers: numberOfWorkers,
-		errChan:         errChan,
-		doneChan:        doneChan,
-		completeBySeqno: completeBySeqno,
-		endSeqnoMap:     make(map[uint16]uint64),
-		dcpHandlers:     make([]*DcpHandler, numberOfWorkers),
-		vbHandlerMap:    make(map[uint16]*DcpHandler),
-		vbState:         make(map[uint16]bool),
+		checkpointManager: NewCheckpointManager(oldCheckpointFileDir, newCheckpointFileDir, name, bucketName, completeBySeqno),
+		name:              name,
+		url:               url,
+		bucketName:        bucketName,
+		userName:          userName,
+		password:          password,
+		fileDir:           fileDir,
+		numberOfWorkers:   numberOfWorkers,
+		errChan:           errChan,
+		waitGroup:         waitGroup,
+		dcpHandlers:       make([]*DcpHandler, numberOfWorkers),
+		vbHandlerMap:      make(map[uint16]*DcpHandler),
+		vbState:           make(map[uint16]bool),
 	}
 }
 
@@ -66,35 +64,50 @@ func (c *DcpClient) Start() error {
 		return err
 	}
 
+	// checkpointManager needs c.cluster and needs to be initialized after DcpClient initialization
+	err = c.initializeAndStartCheckpointManager()
+	if err != nil {
+		return err
+	}
+
+	// openStreams() needs to be called after checkpointManager initialization
 	return c.openStreams()
 }
 
 func (c *DcpClient) Stop() error {
-	fmt.Printf("Dcp client %v stopping\n", c.name)
-	defer fmt.Printf("Dcp client %v stopped\n", c.name)
-
 	c.stateLock.Lock()
 	defer c.stateLock.Unlock()
 
 	if c.stopped {
-		fmt.Printf("Skipping stop() because client is alreasy dtopped\n")
+		fmt.Printf("Skipping stop() because client is already stopped\n")
 		return nil
 	}
 
+	fmt.Printf("Dcp client %v stopping\n", c.name)
+	defer fmt.Printf("Dcp client %v stopped\n", c.name)
+
+	defer c.waitGroup.Done()
+
+	var err error
 	for i := 0; i < NumerOfVbuckets; i++ {
-		_, err := c.bucket.IoRouter().CloseStream(uint16(i), c.closeStreamFunc)
+		_, err = c.bucket.IoRouter().CloseStream(uint16(i), c.closeStreamFunc)
 		if err != nil {
-			fmt.Printf("Error stopping dcp stream for vb %v. err=%v\n", i, err)
+			fmt.Printf("%v error stopping dcp stream for vb %v. err=%v\n", c.name, i, err)
 		}
 	}
 
-	err := c.bucket.IoRouter().Close()
+	err = c.bucket.IoRouter().Close()
 	if err != nil {
-		fmt.Printf("Error closing gocb agent. err=%v\n", err)
+		fmt.Printf("%v error closing gocb agent. err=%v\n", c.name, err)
 	}
 
 	for _, dcpHandler := range c.dcpHandlers {
 		dcpHandler.Stop()
+	}
+
+	err = c.checkpointManager.Stop()
+	if err != nil {
+		fmt.Printf("%v error stopping checkpoint manager. err=%v\n", c.name, err)
 	}
 
 	c.stopped = true
@@ -107,14 +120,6 @@ func (c *DcpClient) initialize() error {
 		return err
 	}
 
-	if c.completeBySeqno {
-		err = c.initializeEndSeqnos()
-		if err != nil {
-			return err
-		}
-		fmt.Printf("c.endSeqnoMap=%v\n", c.endSeqnoMap)
-	}
-
 	err = c.initializeBucket()
 	if err != nil {
 		return err
@@ -122,6 +127,11 @@ func (c *DcpClient) initialize() error {
 
 	return c.initializeDcpHandlers()
 
+}
+
+func (c *DcpClient) initializeAndStartCheckpointManager() error {
+	c.checkpointManager.SetCluster(c.cluster)
+	return c.checkpointManager.Start()
 }
 
 func (c *DcpClient) initializeCluster() (err error) {
@@ -142,20 +152,6 @@ func (c *DcpClient) initializeCluster() (err error) {
 
 	c.cluster = cluster
 	return nil
-}
-
-func (c *DcpClient) initializeEndSeqnos() (err error) {
-	statsBucket, err := c.cluster.OpenBucket(c.bucketName, "" /*password*/)
-	if err != nil {
-		return
-	}
-
-	statsMap, err := statsBucket.Stats(VbucketSeqnoStatName)
-	if err != nil {
-		return
-	}
-
-	return ParseHighSeqnoStat(statsMap, c.endSeqnoMap)
 }
 
 func (c *DcpClient) initializeBucket() (err error) {
@@ -179,7 +175,7 @@ func (c *DcpClient) initializeDcpHandlers() error {
 			vbList[j-lowIndex] = uint16(j)
 		}
 
-		dcpHandler, err := NewDcpHandler(c, c.fileDir, i, vbList)
+		dcpHandler, err := NewDcpHandler(c, c.checkpointManager, c.fileDir, i, vbList)
 		if err != nil {
 			fmt.Printf("Error constructing dcp handler. err=%v\n", err)
 			return err
@@ -203,11 +199,9 @@ func (c *DcpClient) initializeDcpHandlers() error {
 func (c *DcpClient) openStreams() error {
 	var vbno uint16
 	for vbno = 0; vbno < NumerOfVbuckets; vbno++ {
-		endSeqno := gocbcore.SeqNo(0xFFFFFFFFFFFFFFFF)
-		if c.completeBySeqno {
-			endSeqno = gocbcore.SeqNo(c.endSeqnoMap[vbno])
-		}
-		_, err := c.bucket.IoRouter().OpenStream(vbno, 0, 0, 0, endSeqno, 0, 0, c.vbHandlerMap[vbno], c.openStreamFunc)
+		vbts := c.checkpointManager.GetStartVBTS(vbno)
+
+		_, err := c.bucket.IoRouter().OpenStream(vbno, 0, gocbcore.VbUuid(vbts.Checkpoint.Vbuuid), gocbcore.SeqNo(vbts.Checkpoint.Seqno), gocbcore.SeqNo(vbts.EndSeqno), gocbcore.SeqNo(vbts.Checkpoint.SnapshotStartSeqno), gocbcore.SeqNo(vbts.Checkpoint.SnapshotEndSeqno), c.vbHandlerMap[vbno], c.openStreamFunc)
 		if err != nil {
 			fmt.Printf("err opening dcp stream for vb %v. err=%v\n", vbno, err)
 			return err
@@ -241,11 +235,13 @@ func (c *DcpClient) handleVbucketCompletion(vbno uint16, err error) {
 		c.reportError(err)
 	} else {
 		c.stateLock.Lock()
-		defer c.stateLock.Unlock()
 		c.vbState[vbno] = true
-		if len(c.vbState) == NumerOfVbuckets {
+		numOfCompletedVb := len(c.vbState)
+		c.stateLock.Unlock()
+
+		if numOfCompletedVb == NumerOfVbuckets {
 			fmt.Printf("all vbuckets have completed for dcp client %v\n", c.name)
-			close(c.doneChan)
+			c.Stop()
 		}
 	}
 }

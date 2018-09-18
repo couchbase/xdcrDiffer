@@ -71,25 +71,45 @@ func BalanceLoad(num_of_worker int, num_of_load int) [][]int {
 	return load_distribution
 }
 
-func ParseHighSeqnoStat(statsMap map[string]map[string]string, highSeqnoMap map[uint16]uint64) error {
+func ParseHighSeqnoStat(statsMap map[string]map[string]string, highSeqnoMap map[uint16]uint64, vbuuidMap map[uint16]uint64, getHighSeqno bool) error {
 	for _, statsMapPerServer := range statsMap {
 		for vbno := 0; vbno < NumerOfVbuckets; vbno++ {
-			statsKey := fmt.Sprintf(VbucketHighSeqnoStatsKey, vbno)
-			highSeqnoStr, ok := statsMapPerServer[statsKey]
-			if ok && highSeqnoStr != "" {
-				highSeqno, err := strconv.ParseUint(highSeqnoStr, 10, 64)
+			uuidKey := fmt.Sprintf(VbucketUuidStatsKey, vbno)
+			uuidStr, ok := statsMapPerServer[uuidKey]
+			if ok && uuidStr != "" {
+				uuid, err := strconv.ParseUint(uuidStr, 10, 64)
 				if err != nil {
-					err = fmt.Errorf("high seqno for vbno=%v in stats map is not a valid uint64. high seqno=%v\n", vbno, highSeqnoStr)
+					err = fmt.Errorf("uuid for vbno=%v in stats map is not a valid uint64. uuid=%v\n", vbno, uuidStr)
 					fmt.Printf("%v\n", err)
 					return err
 				}
-				highSeqnoMap[uint16(vbno)] = highSeqno
+				vbuuidMap[uint16(vbno)] = uuid
+			}
+
+			if getHighSeqno {
+				highSeqnoKey := fmt.Sprintf(VbucketHighSeqnoStatsKey, vbno)
+				highSeqnoStr, ok := statsMapPerServer[highSeqnoKey]
+				if ok && highSeqnoStr != "" {
+					highSeqno, err := strconv.ParseUint(highSeqnoStr, 10, 64)
+					if err != nil {
+						err = fmt.Errorf("high seqno for vbno=%v in stats map is not a valid uint64. high seqno=%v\n", vbno, highSeqnoStr)
+						fmt.Printf("%v\n", err)
+						return err
+					}
+					highSeqnoMap[uint16(vbno)] = highSeqno
+				}
 			}
 		}
 	}
 
 	if len(highSeqnoMap) != NumerOfVbuckets {
 		err := fmt.Errorf("did not get all high seqnos. len(highSeqnoMap) =%v\n", len(highSeqnoMap))
+		fmt.Printf("%v\n", err)
+		return err
+	}
+
+	if len(vbuuidMap) != NumerOfVbuckets {
+		err := fmt.Errorf("did not get all vb uuid. len(vbuuidMap) =%v\n", len(vbuuidMap))
 		fmt.Printf("%v\n", err)
 		return err
 	}

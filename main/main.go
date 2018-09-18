@@ -13,6 +13,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -34,6 +35,12 @@ var options struct {
 	completeByDuration uint64
 	// whether tool should complete after processing all mutations at tool start time
 	completeBySeqno bool
+	// dir of old checkpoint files to load from when tool starts
+	// if not specified, tool will start from 0
+	oldCheckpointFileDir string
+	// dir of new checkpoint files to write to when tool shuts down
+	// if not specified, tool will not save checkpoint files
+	newCheckpointFileDir string
 }
 
 func argParse() {
@@ -61,8 +68,12 @@ func argParse() {
 		"number of worker threads")
 	flag.Uint64Var(&options.completeByDuration, "completeByDuration", 2,
 		"duration that the tool should run")
-	flag.BoolVar(&options.completeBySeqno, "completeBySeqno", false,
+	flag.BoolVar(&options.completeBySeqno, "completeBySeqno", true,
 		"whether tool should automatically complete (after processing all mutations at start time)")
+	flag.StringVar(&options.oldCheckpointFileDir, "oldCheckpointFileDir", "",
+		"dir of old checkpoint files to load from when tool starts")
+	flag.StringVar(&options.newCheckpointFileDir, "newCheckpointFileDir", "",
+		"dir of new checkpoint files to write to when tool shuts down")
 
 	flag.Parse()
 }
@@ -83,19 +94,19 @@ func main() {
 	fmt.Printf("tool started\n")
 
 	errChan := make(chan error, 1)
-	doneChan := make(chan bool, 1)
+	waitGroup := &sync.WaitGroup{}
 
-	sourceDcpClient, err := startDcpClient("source", options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.numberOfWorkers, errChan, doneChan, options.completeBySeqno)
+	sourceDcpClient, err := startDcpClient("source", options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.oldCheckpointFileDir, options.newCheckpointFileDir, options.numberOfWorkers, errChan, waitGroup, options.completeBySeqno)
 	if err != nil {
 		fmt.Printf("Error starting source dcp client. err=%v\n", err)
 		// TODO retry?
 		os.Exit(1)
 	}
 
+	time.Sleep(DelayBetweenSourceAndTarget)
+
 	/*
-		// target dcp client always has completeBySeqno set to false
-		// it is always terminated 2 seconds after source cluster termination
-		targetDcpClient, err := startDcpClient("target", options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.targetFileDir, options.numberOfWorkers, errChan, doneChan, false)
+		targetDcpClient, err := startDcpClient("target", options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.targetFileDir, options.oldCheckpointFileDir, options.newCheckpointFileDir, options.numberOfWorkers, errChan, waitGroup, options.completeBySeqno)
 		if err != nil {
 			fmt.Printf("Error starting target dcp client. err=%v\n", err)
 			sourceDcpClient.Stop()
@@ -105,14 +116,15 @@ func main() {
 	*/
 
 	if options.completeBySeqno {
-		waitForSourceCompletion(sourceDcpClient, nil /*targetDcpClient*/, errChan, doneChan)
+		waitForCompletion(sourceDcpClient, nil /*targetDcpClient*/, errChan, waitGroup)
 	} else {
 		waitForDuration(sourceDcpClient, nil /*targetDcpClient*/, errChan, options.completeByDuration)
 	}
 }
 
-func startDcpClient(name, url, bucketName, userName, password, fileDir string, numberOfWorkers uint64, errChan chan error, doneChan chan bool, completeBySeqno bool) (*DcpClient, error) {
-	dcpClient := NewDcpClient(name, url, bucketName, userName, password, fileDir, int(numberOfWorkers), errChan, doneChan, completeBySeqno)
+func startDcpClient(name, url, bucketName, userName, password, fileDir, oldCheckpointFileDir, newCheckpointFileDir string, numberOfWorkers uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool) (*DcpClient, error) {
+	waitGroup.Add(1)
+	dcpClient := NewDcpClient(name, url, bucketName, userName, password, fileDir, oldCheckpointFileDir, newCheckpointFileDir, int(numberOfWorkers), errChan, waitGroup, completeBySeqno)
 	err := dcpClient.Start()
 	if err == nil {
 		return dcpClient, nil
@@ -121,8 +133,10 @@ func startDcpClient(name, url, bucketName, userName, password, fileDir string, n
 	}
 }
 
-//wait for source cluster to complete, then terminate target cluster
-func waitForSourceCompletion(sourceDcpClient *DcpClient, targetDcpClient *DcpClient, errChan chan error, doneChan chan bool) {
+func waitForCompletion(sourceDcpClient *DcpClient, targetDcpClient *DcpClient, errChan chan error, waitGroup *sync.WaitGroup) {
+	doneChan := make(chan bool, 1)
+	go waitForWaitGroup(waitGroup, doneChan)
+
 	select {
 	case err := <-errChan:
 		fmt.Printf("Exiting tool due to error from dcp client %v\n", err)
@@ -135,12 +149,7 @@ func waitForSourceCompletion(sourceDcpClient *DcpClient, targetDcpClient *DcpCli
 			fmt.Printf("Error stopping target dcp client. err=%v\n", err)
 		}*/
 	case <-doneChan:
-		fmt.Printf("Source cluster has completed\n")
-		time.Sleep(DelayBetweenSourceAndTarget)
-		/*err = targetDcpClient.Stop()
-		if err != nil {
-			fmt.Printf("Error stopping target dcp client. err=%v\n", err)
-		}*/
+		fmt.Printf("Source cluster and target cluster have completed\n")
 	}
 }
 
@@ -165,4 +174,9 @@ func waitForDuration(sourceDcpClient *DcpClient, targetDcpClient *DcpClient, err
 	if err != nil {
 		fmt.Printf("Error stopping target dcp client. err=%v\n", err)
 	}*/
+}
+
+func waitForWaitGroup(waitGroup *sync.WaitGroup, doneChan chan bool) {
+	waitGroup.Wait()
+	close(doneChan)
 }
