@@ -69,10 +69,7 @@ func (oneEntry *oneEntry) String() string {
 		oneEntry.Key, oneEntry.Seqno, oneEntry.RevId, oneEntry.Cas, oneEntry.Flags, oneEntry.Expiry, hex.EncodeToString(oneEntry.BodyHash[:]))
 }
 
-type entryPair struct {
-	A *oneEntry
-	B *oneEntry
-}
+type entryPair [2]*oneEntry
 
 type ByKeyName []*oneEntry
 
@@ -264,11 +261,10 @@ func (differ *FilesDiffer) diffSorted() bool {
 		} else {
 			if keyCompare == 0 {
 				// Both document are the same, but others mismatched
-				pair := &entryPair{
-					A: item1,
-					B: item2,
-				}
-				differ.BothExistButMismatch = append(differ.BothExistButMismatch, pair)
+				var onePair entryPair
+				onePair[0] = item1
+				onePair[1] = item1
+				differ.BothExistButMismatch = append(differ.BothExistButMismatch, &onePair)
 				i++
 				j++
 			} else if keyCompare < 0 {
@@ -328,8 +324,8 @@ func (differ *FilesDiffer) PrettyPrintResult() {
 			fmt.Printf("%v Docs exist in both files but mismatch:\n", mismatchCnt)
 			fmt.Printf("--------------------------------------\n")
 			for i := 0; i < mismatchCnt; i++ {
-				fmt.Printf("File1: %v\n", differ.BothExistButMismatch[i].A.String())
-				fmt.Printf("File2: %v\n", differ.BothExistButMismatch[i].B.String())
+				fmt.Printf("File1: %v\n", differ.BothExistButMismatch[i][0].String())
+				fmt.Printf("File2: %v\n", differ.BothExistButMismatch[i][1].String())
 			}
 			fmt.Printf("--------------------------------------\n")
 		}
