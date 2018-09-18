@@ -17,7 +17,7 @@ import (
 )
 
 type DcpClient struct {
-	name              string
+	Name              string
 	url               string
 	bucketName        string
 	userName          string
@@ -37,10 +37,10 @@ type DcpClient struct {
 	stateLock sync.RWMutex
 }
 
-func NewDcpClient(name, url, bucketName, userName, password, fileDir, oldCheckpointFileDir, newCheckpointFileDir string, numberOfWorkers int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool) *DcpClient {
+func NewDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfWorkers int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool) *DcpClient {
 	return &DcpClient{
-		checkpointManager: NewCheckpointManager(oldCheckpointFileDir, newCheckpointFileDir, name, bucketName, completeBySeqno),
-		name:              name,
+		checkpointManager: NewCheckpointManager(checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, name, bucketName, completeBySeqno),
+		Name:              name,
 		url:               url,
 		bucketName:        bucketName,
 		userName:          userName,
@@ -56,8 +56,8 @@ func NewDcpClient(name, url, bucketName, userName, password, fileDir, oldCheckpo
 }
 
 func (c *DcpClient) Start() error {
-	fmt.Printf("Dcp client %v starting\n", c.name)
-	defer fmt.Printf("Dcp client %v started\n", c.name)
+	fmt.Printf("Dcp client %v starting\n", c.Name)
+	defer fmt.Printf("Dcp client %v started\n", c.Name)
 
 	err := c.initialize()
 	if err != nil {
@@ -83,8 +83,8 @@ func (c *DcpClient) Stop() error {
 		return nil
 	}
 
-	fmt.Printf("Dcp client %v stopping\n", c.name)
-	defer fmt.Printf("Dcp client %v stopped\n", c.name)
+	fmt.Printf("Dcp client %v stopping\n", c.Name)
+	defer fmt.Printf("Dcp client %v stopped\n", c.Name)
 
 	defer c.waitGroup.Done()
 
@@ -92,13 +92,13 @@ func (c *DcpClient) Stop() error {
 	for i := 0; i < NumerOfVbuckets; i++ {
 		_, err = c.bucket.IoRouter().CloseStream(uint16(i), c.closeStreamFunc)
 		if err != nil {
-			fmt.Printf("%v error stopping dcp stream for vb %v. err=%v\n", c.name, i, err)
+			fmt.Printf("%v error stopping dcp stream for vb %v. err=%v\n", c.Name, i, err)
 		}
 	}
 
 	err = c.bucket.IoRouter().Close()
 	if err != nil {
-		fmt.Printf("%v error closing gocb agent. err=%v\n", c.name, err)
+		fmt.Printf("%v error closing gocb agent. err=%v\n", c.Name, err)
 	}
 
 	for _, dcpHandler := range c.dcpHandlers {
@@ -107,11 +107,17 @@ func (c *DcpClient) Stop() error {
 
 	err = c.checkpointManager.Stop()
 	if err != nil {
-		fmt.Printf("%v error stopping checkpoint manager. err=%v\n", c.name, err)
+		fmt.Printf("%v error stopping checkpoint manager. err=%v\n", c.Name, err)
 	}
 
 	c.stopped = true
 	return nil
+}
+
+func (c *DcpClient) hasStopped() bool {
+	c.stateLock.RLock()
+	defer c.stateLock.RUnlock()
+	return c.stopped
 }
 
 func (c *DcpClient) initialize() error {
@@ -219,6 +225,11 @@ func (c *DcpClient) openStreamFunc(f []gocbcore.FailoverEntry, err error) {
 }
 
 func (c *DcpClient) reportError(err error) {
+	// avoid printing spurious errors if we are stopping
+	if !c.hasStopped() {
+		fmt.Printf("% dcp client encountered error=%v\n", c.Name, err)
+	}
+
 	select {
 	case c.errChan <- err:
 	default:
@@ -240,7 +251,7 @@ func (c *DcpClient) handleVbucketCompletion(vbno uint16, err error) {
 		c.stateLock.Unlock()
 
 		if numOfCompletedVb == NumerOfVbuckets {
-			fmt.Printf("all vbuckets have completed for dcp client %v\n", c.name)
+			fmt.Printf("all vbuckets have completed for dcp client %v\n", c.Name)
 			c.Stop()
 		}
 	}

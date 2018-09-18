@@ -102,14 +102,14 @@ func ParseHighSeqnoStat(statsMap map[string]map[string]string, highSeqnoMap map[
 		}
 	}
 
-	if len(highSeqnoMap) != NumerOfVbuckets {
-		err := fmt.Errorf("did not get all high seqnos. len(highSeqnoMap) =%v\n", len(highSeqnoMap))
+	if len(vbuuidMap) != NumerOfVbuckets {
+		err := fmt.Errorf("did not get all vb uuid. len(vbuuidMap) =%v\n", len(vbuuidMap))
 		fmt.Printf("%v\n", err)
 		return err
 	}
 
-	if len(vbuuidMap) != NumerOfVbuckets {
-		err := fmt.Errorf("did not get all vb uuid. len(vbuuidMap) =%v\n", len(vbuuidMap))
+	if getHighSeqno && len(highSeqnoMap) != NumerOfVbuckets {
+		err := fmt.Errorf("did not get all high seqnos. len(highSeqnoMap) =%v\n", len(highSeqnoMap))
 		fmt.Printf("%v\n", err)
 		return err
 	}

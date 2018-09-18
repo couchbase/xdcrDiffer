@@ -28,6 +28,8 @@ const VbucketUuidStatsKey = "vb_%v:uuid"
 const SourceCheckpointFileName = "SourceCheckpoint"
 const TargetCheckpointFileName = "TargetCheckpoint"
 const CheckpointFileBufferSize = 200000
+const SourceClusterName = "source"
+const TargetClusterName = "target"
 
 // time to wait to stop processing of target cluster after processing of source cluster is completed
 var DelayBetweenSourceAndTarget time.Duration = 1 * time.Second

@@ -21,7 +21,7 @@ type CheckpointManager struct {
 	snapshots             map[uint16]*Snapshot
 }
 
-func NewCheckpointManager(oldCheckpointFileDir, newCheckpointFileDir, clusterName, bucketName string, completeBySeqno bool) *CheckpointManager {
+func NewCheckpointManager(checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, clusterName, bucketName string, completeBySeqno bool) *CheckpointManager {
 	cm := &CheckpointManager{
 		clusterName:     clusterName,
 		bucketName:      bucketName,
@@ -31,12 +31,14 @@ func NewCheckpointManager(oldCheckpointFileDir, newCheckpointFileDir, clusterNam
 		snapshots:       make(map[uint16]*Snapshot),
 	}
 
-	if oldCheckpointFileDir != "" {
-		cm.oldCheckpointFileName = oldCheckpointFileDir + FileDirDelimiter + clusterName
-	}
+	if checkpointFileDir != "" {
+		if oldCheckpointFileName != "" {
+			cm.oldCheckpointFileName = checkpointFileDir + FileDirDelimiter + clusterName + FileNameDelimiter + oldCheckpointFileName
+		}
 
-	if newCheckpointFileDir != "" {
-		cm.newCheckpointFileName = newCheckpointFileDir + FileDirDelimiter + clusterName
+		if newCheckpointFileName != "" {
+			cm.newCheckpointFileName = checkpointFileDir + FileDirDelimiter + clusterName + FileNameDelimiter + newCheckpointFileName
+		}
 	}
 
 	var vbno uint16
