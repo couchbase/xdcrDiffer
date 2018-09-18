@@ -11,6 +11,7 @@ import (
 
 // implements StreamObserver
 type DcpHandler struct {
+	dcpClient *DcpClient
 	fileDir   string
 	index     int
 	vbList    []uint16
@@ -20,11 +21,12 @@ type DcpHandler struct {
 	bucketMap map[uint16]map[int]*Bucket
 }
 
-func NewDcpHandler(fileDir string, index int, vbList []uint16) (*DcpHandler, error) {
+func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16) (*DcpHandler, error) {
 	if len(vbList) == 0 {
 		return nil, fmt.Errorf("vbList is empty for handler %v", index)
 	}
 	return &DcpHandler{
+		dcpClient: dcpClient,
 		fileDir:   fileDir,
 		index:     index,
 		vbList:    vbList,
@@ -141,6 +143,7 @@ func (dh *DcpHandler) Expiration(seqno, revId, cas uint64, vbno uint16, key []by
 }
 
 func (dh *DcpHandler) End(vbno uint16, err error) {
+	dh.dcpClient.handleVbucketCompletion(vbno, err)
 }
 
 type Bucket struct {

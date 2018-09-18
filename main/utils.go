@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math"
+	"strconv"
 )
 
 func GetFileName(fileDir string, vbno uint16, bucketIndex int) string {
@@ -59,4 +60,30 @@ func BalanceLoad(num_of_worker int, num_of_load int) [][]int {
 	}
 
 	return load_distribution
+}
+
+func ParseHighSeqnoStat(statsMap map[string]map[string]string, highSeqnoMap map[uint16]uint64) error {
+	for _, statsMapPerServer := range statsMap {
+		for vbno := 0; vbno < NumerOfVbuckets; vbno++ {
+			statsKey := fmt.Sprintf(VbucketHighSeqnoStatsKey, vbno)
+			highSeqnoStr, ok := statsMapPerServer[statsKey]
+			if ok && highSeqnoStr != "" {
+				highSeqno, err := strconv.ParseUint(highSeqnoStr, 10, 64)
+				if err != nil {
+					err = fmt.Errorf("high seqno for vbno=%v in stats map is not a valid uint64. high seqno=%v\n", vbno, highSeqnoStr)
+					fmt.Printf("%v\n", err)
+					return err
+				}
+				highSeqnoMap[uint16(vbno)] = highSeqno
+			}
+		}
+	}
+
+	if len(highSeqnoMap) != NumerOfVbuckets {
+		err := fmt.Errorf("did not get all high seqnos. len(highSeqnoMap) =%v\n", len(highSeqnoMap))
+		fmt.Printf("%v\n", err)
+		return err
+	}
+
+	return nil
 }

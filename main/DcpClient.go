@@ -4,29 +4,34 @@ import (
 	"fmt"
 	"github.com/couchbase/gocb"
 	gocbcore "gopkg.in/couchbase/gocbcore.v7"
-	"math"
 	"sync"
-	"time"
 )
 
 type DcpClient struct {
+	name            string
 	url             string
 	bucketName      string
 	userName        string
 	password        string
 	fileDir         string
 	errChan         chan error
-	waitGroup       *sync.WaitGroup
+	doneChan        chan bool
 	numberOfWorkers int
+	completeBySeqno bool
+	cluster         *gocb.Cluster
 	bucket          *gocb.StreamingBucket
+	endSeqnoMap     map[uint16]uint64
 	dcpHandlers     []*DcpHandler
 	vbHandlerMap    map[uint16]*DcpHandler
-	stopped         bool
-	stateLock       sync.RWMutex
+	// value = true if processing on the vb has been completed
+	vbState   map[uint16]bool
+	stopped   bool
+	stateLock sync.RWMutex
 }
 
-func NewDcpClient(url, bucketName, userName, password, fileDir string, numberOfWorkers int, errChan chan error, waitGroup *sync.WaitGroup) *DcpClient {
+func NewDcpClient(name, url, bucketName, userName, password, fileDir string, numberOfWorkers int, errChan chan error, doneChan chan bool, completeBySeqno bool) *DcpClient {
 	return &DcpClient{
+		name:            name,
 		url:             url,
 		bucketName:      bucketName,
 		userName:        userName,
@@ -34,33 +39,31 @@ func NewDcpClient(url, bucketName, userName, password, fileDir string, numberOfW
 		fileDir:         fileDir,
 		numberOfWorkers: numberOfWorkers,
 		errChan:         errChan,
-		waitGroup:       waitGroup,
+		doneChan:        doneChan,
+		completeBySeqno: completeBySeqno,
+		endSeqnoMap:     make(map[uint16]uint64),
 		dcpHandlers:     make([]*DcpHandler, numberOfWorkers),
 		vbHandlerMap:    make(map[uint16]*DcpHandler),
+		vbState:         make(map[uint16]bool),
 	}
 }
 
 func (c *DcpClient) Start() error {
+	fmt.Printf("Dcp client %v starting\n", c.name)
+	defer fmt.Printf("Dcp client %v started\n", c.name)
+
 	err := c.initialize()
 	if err != nil {
 		return err
 	}
 
-	// test. stop after 60 seconds
-	go c.waitForStop()
-
 	return c.openStreams()
 }
 
-func (c *DcpClient) waitForStop() {
-	timer := time.NewTimer(60 * time.Second)
-	select {
-	case <-timer.C:
-		c.Stop()
-	}
-}
-
 func (c *DcpClient) Stop() error {
+	fmt.Printf("Dcp client %v stopping\n", c.name)
+	defer fmt.Printf("Dcp client %v stopped\n", c.name)
+
 	c.stateLock.Lock()
 	defer c.stateLock.Unlock()
 
@@ -68,8 +71,6 @@ func (c *DcpClient) Stop() error {
 		fmt.Printf("Skipping stop() because client is alreasy dtopped\n")
 		return nil
 	}
-
-	defer c.waitGroup.Done()
 
 	for i := 0; i < NumerOfVbuckets; i++ {
 		_, err := c.bucket.IoRouter().CloseStream(uint16(i), c.closeStreamFunc)
@@ -92,35 +93,29 @@ func (c *DcpClient) Stop() error {
 }
 
 func (c *DcpClient) initialize() error {
-	err := c.initializeBucket()
+	err := c.initializeCluster()
 	if err != nil {
-		fmt.Printf("Error getting gocb bucket. err=%v\n", err)
 		return err
 	}
 
-	err = c.initializeDcpHandlers()
-	if err != nil {
-		fmt.Printf("Error initializing dcp handlers. err=%v\n", err)
-		return err
-	}
-
-	return nil
-
-}
-
-func (c *DcpClient) openStreams() error {
-	for i := 0; i < NumerOfVbuckets; i++ {
-		_, err := c.bucket.IoRouter().OpenStream(uint16(i), 0, 0, 0, math.MaxInt32, 0, 0, c.vbHandlerMap[uint16(i)], c.openStreamFunc)
+	if c.completeBySeqno {
+		err = c.initializeEndSeqnos()
 		if err != nil {
-			fmt.Printf("err opening dcp stream for vb %v. err=%v\n", i, err)
 			return err
 		}
+		fmt.Printf("c.endSeqnoMap=%v\n", c.endSeqnoMap)
 	}
 
-	return nil
+	err = c.initializeBucket()
+	if err != nil {
+		return err
+	}
+
+	return c.initializeDcpHandlers()
+
 }
 
-func (c *DcpClient) initializeBucket() (err error) {
+func (c *DcpClient) initializeCluster() (err error) {
 	cluster, err := gocb.Connect(c.url)
 	if err != nil {
 		fmt.Printf("Error connecting to cluster. err=%v\n", err)
@@ -136,7 +131,26 @@ func (c *DcpClient) initializeBucket() (err error) {
 		return
 	}
 
-	bucket, err := cluster.OpenStreamingBucket(StreamingBucketName, c.bucketName, "")
+	c.cluster = cluster
+	return nil
+}
+
+func (c *DcpClient) initializeEndSeqnos() (err error) {
+	statsBucket, err := c.cluster.OpenBucket(c.bucketName, "" /*password*/)
+	if err != nil {
+		return
+	}
+
+	statsMap, err := statsBucket.Stats(VbucketSeqnoStatName)
+	if err != nil {
+		return
+	}
+
+	return ParseHighSeqnoStat(statsMap, c.endSeqnoMap)
+}
+
+func (c *DcpClient) initializeBucket() (err error) {
+	bucket, err := c.cluster.OpenStreamingBucket(StreamingBucketName, c.bucketName, "")
 	if err != nil {
 		fmt.Printf("Error opening streaming bucket. bucket=%v, err=%v\n", c.bucketName, err)
 	}
@@ -156,7 +170,7 @@ func (c *DcpClient) initializeDcpHandlers() error {
 			vbList[j-lowIndex] = uint16(j)
 		}
 
-		dcpHandler, err := NewDcpHandler(c.fileDir, i, vbList)
+		dcpHandler, err := NewDcpHandler(c, c.fileDir, i, vbList)
 		if err != nil {
 			fmt.Printf("Error constructing dcp handler. err=%v\n", err)
 			return err
@@ -177,6 +191,23 @@ func (c *DcpClient) initializeDcpHandlers() error {
 	return nil
 }
 
+func (c *DcpClient) openStreams() error {
+	var vbno uint16
+	for vbno = 0; vbno < NumerOfVbuckets; vbno++ {
+		endSeqno := gocbcore.SeqNo(0xFFFFFFFFFFFFFFFF)
+		if c.completeBySeqno {
+			endSeqno = gocbcore.SeqNo(c.endSeqnoMap[vbno])
+		}
+		_, err := c.bucket.IoRouter().OpenStream(vbno, 0, 0, 0, endSeqno, 0, 0, c.vbHandlerMap[vbno], c.openStreamFunc)
+		if err != nil {
+			fmt.Printf("err opening dcp stream for vb %v. err=%v\n", vbno, err)
+			return err
+		}
+	}
+
+	return nil
+}
+
 // OpenStreamCallback
 func (c *DcpClient) openStreamFunc(f []gocbcore.FailoverEntry, err error) {
 	if err != nil {
@@ -194,4 +225,18 @@ func (c *DcpClient) reportError(err error) {
 
 // CloseStreamCallback
 func (c *DcpClient) closeStreamFunc(err error) {
+}
+
+func (c *DcpClient) handleVbucketCompletion(vbno uint16, err error) {
+	if err != nil {
+		c.reportError(err)
+	} else {
+		c.stateLock.Lock()
+		defer c.stateLock.Unlock()
+		c.vbState[vbno] = true
+		if len(c.vbState) == NumerOfVbuckets {
+			fmt.Printf("all vbuckets have completed for dcp client %v\n", c.name)
+			close(c.doneChan)
+		}
+	}
 }
