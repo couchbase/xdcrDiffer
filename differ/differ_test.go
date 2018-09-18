@@ -172,7 +172,7 @@ func verifyMisMatch(mismatchKeys []string, differ *FilesDiffer) bool {
 	for _, key := range mismatchKeys {
 		found := false
 		for _, onePair := range differ.BothExistButMismatch {
-			if key == onePair.A.Key {
+			if key == onePair[0].Key {
 				found = true
 				break
 			}

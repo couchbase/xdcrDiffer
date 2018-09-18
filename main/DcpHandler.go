@@ -158,8 +158,9 @@ func (dh *DcpHandler) End(vbno uint16, err error) {
 type Bucket struct {
 	data []byte
 	// current index in data for next write
-	index int
-	file  *os.File
+	index    int
+	file     *os.File
+	fileName string
 }
 
 func NewBucket(fileDir string, vbno uint16, bucketIndex int) (*Bucket, error) {
@@ -169,9 +170,10 @@ func NewBucket(fileDir string, vbno uint16, bucketIndex int) (*Bucket, error) {
 		return nil, err
 	}
 	return &Bucket{
-		data:  make([]byte, BucketBufferCapacity),
-		index: 0,
-		file:  file,
+		data:     make([]byte, BucketBufferCapacity),
+		index:    0,
+		file:     file,
+		fileName: fileName,
 	}, nil
 }
 
