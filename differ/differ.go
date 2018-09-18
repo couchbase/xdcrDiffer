@@ -59,7 +59,8 @@ type oneEntry struct {
 	Seqno    uint64
 	RevId    uint64
 	Cas      uint64
-	Expiry   uint64
+	Flags    uint32
+	Expiry   uint32
 	BodyHash [sha512.Size]byte
 }
 
@@ -100,6 +101,8 @@ func (entry oneEntry) Diff(other oneEntry) (int, bool) {
 	} else if entry.RevId != other.RevId {
 		return 0, false
 	} else if entry.Cas != other.Cas {
+		return 0, false
+	} else if entry.Flags != other.Flags {
 		return 0, false
 	} else if !shaCompare(entry.BodyHash, other.BodyHash) {
 		return 0, false
@@ -153,12 +156,19 @@ func getOneEntry(fileHandle *os.File) (*oneEntry, error) {
 	}
 	entry.Cas = binary.BigEndian.Uint64(casBytes)
 
-	expiryBytes := make([]byte, 8)
+	flagBytes := make([]byte, 4)
+	bytesRead, err = fileHandle.Read(flagBytes)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to read flagsBytes, bytes read: %v, err: %v", bytesRead, err)
+	}
+	entry.Flags = binary.BigEndian.Uint32(flagBytes)
+
+	expiryBytes := make([]byte, 4)
 	bytesRead, err = fileHandle.Read(expiryBytes)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read expiryBytes, bytes read: %v, err: %v", bytesRead, err)
 	}
-	entry.Expiry = binary.BigEndian.Uint64(expiryBytes)
+	entry.Expiry = binary.BigEndian.Uint32(expiryBytes)
 
 	hashBytes := make([]byte, sha512.Size)
 	bytesRead, err = fileHandle.Read(hashBytes)

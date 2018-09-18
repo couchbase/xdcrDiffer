@@ -46,9 +46,10 @@ func randInt(min int, max int) int {
 //  seqno   - 8 bytes
 //  revId   - 8 bytes
 //  cas     - 8 bytes
-//  expiry  - 8 bytes?
+//  flags   - 4 bytes
+//  expiry  - 4 bytes
 //  hash    - 64 bytes
-func genTestData() (key string, seqno, revId, cas, expiry uint64, hash [sha512.Size]byte, ret []byte) {
+func genTestData() (key string, seqno, revId, cas uint64, flags, expiry uint32, hash [sha512.Size]byte, ret []byte) {
 	randomOnce.Do(func() {
 		rand.Seed(time.Now().UTC().UnixNano())
 	})
@@ -57,22 +58,21 @@ func genTestData() (key string, seqno, revId, cas, expiry uint64, hash [sha512.S
 	seqno = rand.Uint64()
 	revId = rand.Uint64()
 	cas = rand.Uint64()
-	expiry = rand.Uint64()
+	flags = rand.Uint32()
+	expiry = rand.Uint32()
 	// Note we don't have the actual body hash so just randomly generate a hash using key
 	hash = sha512.Sum512([]byte(key))
 
-	dataSlice := createDataByteSlice(key, seqno, revId, cas, expiry, hash)
+	dataSlice := createDataByteSlice(key, seqno, revId, cas, flags, expiry, hash)
 
-	return key, seqno, revId, cas, expiry, hash, dataSlice
+	return key, seqno, revId, cas, flags, expiry, hash, dataSlice
 }
 
-func createDataByteSlice(key string, seqno, revId, cas, expiry uint64, hash [sha512.Size]byte) []byte {
+func createDataByteSlice(key string, seqno, revId, cas uint64, flags, expiry uint32, hash [sha512.Size]byte) []byte {
 	var keyLen uint16 = uint16(len(key))
-	retLength := 34 + sha512.Size + keyLen
+	// 96 - see main/constants.go + 2 bytes for keyLen
+	retLength := 96 + keyLen + 2
 	ret := make([]byte, retLength)
-
-	// fmt.Printf("%v bytes generated: keyLen: %v key: %v seqno: %v revId: %v cas: %v expiry: %v hash: %v\n",
-	// 	retLength, keyLen, key, seqno, revId, cas, expiry, hash)
 
 	pos := 0
 	binary.BigEndian.PutUint16(ret[pos:pos+2], keyLen)
@@ -85,8 +85,10 @@ func createDataByteSlice(key string, seqno, revId, cas, expiry uint64, hash [sha
 	pos += 8
 	binary.BigEndian.PutUint64(ret[pos:pos+8], cas)
 	pos += 8
-	binary.BigEndian.PutUint64(ret[pos:pos+8], expiry)
-	pos += 8
+	binary.BigEndian.PutUint32(ret[pos:pos+4], flags)
+	pos += 4
+	binary.BigEndian.PutUint32(ret[pos:pos+4], expiry)
+	pos += 4
 	copy(ret[pos:], hash[:])
 
 	return ret
@@ -96,7 +98,7 @@ func genMultipleRecords(numOfRecords int) []byte {
 	var retSlice []byte
 
 	for i := 0; i < numOfRecords; i++ {
-		_, _, _, _, _, _, record := genTestData()
+		_, _, _, _, _, _, _, record := genTestData()
 		retSlice = append(retSlice, record...)
 	}
 
@@ -147,8 +149,8 @@ func genMismatchedFiles(numOfRecords, mismatchCnt int, fileName1, fileName2 stri
 	defer f2.Close()
 
 	for i := 0; i < mismatchCnt; i++ {
-		key, seqno, revId, cas, expiry, hash, oneData := genTestData()
-		mismatchedData := createDataByteSlice(key, seqno, revId, cas+1, expiry, hash)
+		key, seqno, revId, cas, flags, expiry, hash, oneData := genTestData()
+		mismatchedData := createDataByteSlice(key, seqno, revId, cas+1, flags, expiry, hash)
 
 		_, err = f1.Write(oneData)
 		if err != nil {
@@ -187,7 +189,7 @@ func TestLoader(t *testing.T) {
 	var outputFileTemp string = "/tmp/xdcrDiffer.tmp"
 	defer os.Remove(outputFileTemp)
 
-	key, seqno, _, _, _, _, data := genTestData()
+	key, seqno, _, _, _, _, _, data := genTestData()
 
 	err := ioutil.WriteFile(outputFileTemp, data, 0644)
 	assert.Nil(err)
