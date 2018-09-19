@@ -12,6 +12,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"os"
 	"sync"
 	"time"
@@ -32,6 +33,7 @@ var options struct {
 	targetFileDir    string
 	numberOfWorkers  uint64
 	numberOfBuckets  uint64
+	numberOfFileDesc uint64
 	// the duration that the tools should be run, in minutes
 	completeByDuration uint64
 	// whether tool should complete after processing all mutations at tool start time
@@ -71,6 +73,8 @@ func argParse() {
 		"number of worker threads")
 	flag.Uint64Var(&options.numberOfBuckets, "numberOfBuckets", 10,
 		"number of buckets per vbucket")
+	flag.Uint64Var(&options.numberOfFileDesc, "numberOfFileDesc", 0,
+		"number of file descriptors")
 	flag.Uint64Var(&options.completeByDuration, "completeByDuration", 1,
 		"duration that the tool should run")
 	flag.BoolVar(&options.completeBySeqno, "completeBySeqno", false,
@@ -103,7 +107,12 @@ func main() {
 	errChan := make(chan error, 1)
 	waitGroup := &sync.WaitGroup{}
 
-	sourceDcpClient, err := startDcpClient(SourceClusterName, options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfWorkers, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno)
+	var fileDescPool *fdp.FdPool
+	if options.numberOfFileDesc > 0 {
+		fileDescPool = fdp.NewFileDescriptorPool(options.numberOfFileDesc)
+	}
+
+	sourceDcpClient, err := startDcpClient(SourceClusterName, options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfWorkers, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 	if err != nil {
 		fmt.Printf("Error starting source dcp client. err=%v\n", err)
 		// TODO retry?
@@ -112,7 +121,7 @@ func main() {
 
 	time.Sleep(DelayBetweenSourceAndTarget)
 
-	targetDcpClient, err := startDcpClient(TargetClusterName, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfWorkers, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno)
+	targetDcpClient, err := startDcpClient(TargetClusterName, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfWorkers, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 	if err != nil {
 		fmt.Printf("Error starting target dcp client. err=%v\n", err)
 		sourceDcpClient.Stop()
@@ -132,9 +141,9 @@ func main() {
 
 }
 
-func startDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfWorkers, numberOfBuckets uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool) (*DcpClient, error) {
+func startDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfWorkers, numberOfBuckets uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool *fdp.FdPool) (*DcpClient, error) {
 	waitGroup.Add(1)
-	dcpClient := NewDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, int(numberOfWorkers), int(numberOfBuckets), errChan, waitGroup, completeBySeqno)
+	dcpClient := NewDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, int(numberOfWorkers), int(numberOfBuckets), errChan, waitGroup, completeBySeqno, fdPool)
 	err := dcpClient.Start()
 	if err == nil {
 		return dcpClient, nil
