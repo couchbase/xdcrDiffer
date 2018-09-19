@@ -103,6 +103,7 @@ func (c *DcpClient) Stop() error {
 		}
 	}
 
+	fmt.Printf("Dcp client %v stopping IoRouter...\n", c.Name)
 	err = c.bucket.IoRouter().Close()
 	if err != nil {
 		fmt.Printf("%v error closing gocb agent. err=%v\n", c.Name, err)

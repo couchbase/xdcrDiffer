@@ -79,6 +79,9 @@ func (fdp *FdPool) RegisterFileHandle(fileName string) (WriteFileCb, error) {
 	}
 	fdp.fdMap[fileName] = ifd
 
+	// Try to open so we can see if we hit the limit
+	ifd.InitOpen()
+
 	return ifd.Write, nil
 }
 
@@ -92,6 +95,23 @@ func (fdp *FdPool) DeRegisterFileHandle(fileName string) error {
 	}
 	fd.Close()
 	return nil
+}
+
+func (fd *internalFd) InitOpen() (err error) {
+	fd.mtx.Lock()
+	defer fd.mtx.Unlock()
+
+	if fd.state == Closed {
+		// Try to put itself in the fds to be in use. If not successful, request a release then try again
+		select {
+		case *fd.requestOpenChan <- fd:
+			// Got permission to open and stay open
+			err = fd.open()
+		default:
+			err = fmt.Errorf("Not opened")
+		}
+	}
+	return
 }
 
 func (fd *internalFd) Write(input []byte) (bytesWritten int, err error) {
@@ -124,17 +144,25 @@ func (fd *internalFd) Write(input []byte) (bytesWritten int, err error) {
 	return
 }
 
+func (fd *internalFd) open() (err error) {
+	fd.fileHandle, err = os.OpenFile(fd.fileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return
+	}
+	fd.state = Open
+	fd.wg.Add(1)
+	go fd.waitForClose()
+	return
+}
+
 func (fd *internalFd) openAndWrite(input []byte) (int, error) {
 	var err error
 	fd.state = Open
 
-	fd.fileHandle, err = os.OpenFile(fd.fileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	err = fd.open()
 	if err != nil {
 		return 0, err
 	}
-
-	fd.wg.Add(1)
-	go fd.waitForClose()
 
 	bytesWritten, err := fd.fileHandle.Write(input)
 	return bytesWritten, err
