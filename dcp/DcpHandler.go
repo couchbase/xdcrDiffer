@@ -241,16 +241,16 @@ func (b *Bucket) flushToFile() error {
 }
 
 func (b *Bucket) close() {
+	err := b.flushToFile()
+	if err != nil {
+		fmt.Printf("Error flushing to file %v at bucket close err=%v\n", b.fileName, err)
+	}
 	if b.fdPoolCb != nil {
 		b.closeOp()
 	} else {
-		err := b.flushToFile()
-		if err != nil {
-			fmt.Printf("Error flushing to file %v at bucket close err=%v\n", b.file.Name(), err)
-		}
 		err = b.file.Close()
 		if err != nil {
-			fmt.Printf("Error closing file %v.  err=%v\n", b.file.Name(), err)
+			fmt.Printf("Error closing file %v.  err=%v\n", b.fileName, err)
 		}
 	}
 }
