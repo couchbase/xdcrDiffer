@@ -30,9 +30,9 @@ func GetFileName(fileDir string, vbno uint16, bucketIndex int) string {
 }
 
 // hash key into a bucket index in range [0, NumberOfBucketsPerVbucket)
-func GetBucketIndexFromKey(key []byte) int {
+func GetBucketIndexFromKey(key []byte, numberOfBuckets int) int {
 	crc := crc32.ChecksumIEEE(key)
-	return int(math.Mod(float64(crc), float64(NumberOfBucketsPerVbucket)))
+	return int(math.Mod(float64(crc), float64(numberOfBuckets)))
 }
 
 // evenly distribute load across workers

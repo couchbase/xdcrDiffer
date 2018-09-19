@@ -26,6 +26,7 @@ type DcpClient struct {
 	errChan           chan error
 	waitGroup         *sync.WaitGroup
 	numberOfWorkers   int
+	numberOfBuckets   int
 	cluster           *gocb.Cluster
 	bucket            *gocb.StreamingBucket
 	dcpHandlers       []*DcpHandler
@@ -37,7 +38,7 @@ type DcpClient struct {
 	stateLock sync.RWMutex
 }
 
-func NewDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfWorkers int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool) *DcpClient {
+func NewDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfWorkers, numberOfBuckets int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool) *DcpClient {
 	return &DcpClient{
 		checkpointManager: NewCheckpointManager(checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, name, bucketName, completeBySeqno),
 		Name:              name,
@@ -47,6 +48,7 @@ func NewDcpClient(name, url, bucketName, userName, password, fileDir, checkpoint
 		password:          password,
 		fileDir:           fileDir,
 		numberOfWorkers:   numberOfWorkers,
+		numberOfBuckets:   numberOfBuckets,
 		errChan:           errChan,
 		waitGroup:         waitGroup,
 		dcpHandlers:       make([]*DcpHandler, numberOfWorkers),
@@ -143,7 +145,7 @@ func (c *DcpClient) initializeAndStartCheckpointManager() error {
 func (c *DcpClient) initializeCluster() (err error) {
 	cluster, err := gocb.Connect(c.url)
 	if err != nil {
-		fmt.Printf("Error connecting to cluster. err=%v\n", err)
+		fmt.Printf("Error connecting to cluster %v. err=%v\n", c.url, err)
 		return
 	}
 	err = cluster.Authenticate(gocb.PasswordAuthenticator{
@@ -181,7 +183,7 @@ func (c *DcpClient) initializeDcpHandlers() error {
 			vbList[j-lowIndex] = uint16(j)
 		}
 
-		dcpHandler, err := NewDcpHandler(c, c.checkpointManager, c.fileDir, i, vbList)
+		dcpHandler, err := NewDcpHandler(c, c.checkpointManager, c.fileDir, i, vbList, c.numberOfBuckets)
 		if err != nil {
 			fmt.Printf("Error constructing dcp handler. err=%v\n", err)
 			return err
