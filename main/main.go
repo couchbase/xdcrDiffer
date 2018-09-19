@@ -135,10 +135,6 @@ func main() {
 		waitForDuration(sourceDcpClient, targetDcpClient, errChan, options.completeByDuration)
 	}
 
-	// test
-	//differ := NewDiffer(options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, nil)
-	//go differ.Diff()
-
 }
 
 func startDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfWorkers, numberOfBuckets uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool *fdp.FdPool) (*DcpClient, error) {

@@ -13,12 +13,14 @@ import (
 	"fmt"
 	"github.com/couchbase/gocb"
 	gocbcore "gopkg.in/couchbase/gocbcore.v7"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
 const NumberOfDiffWorkers = 1
+const KeyNotFoundErrMsg = "key not found"
 
 type Differ struct {
 	sourceUrl        string
@@ -75,13 +77,6 @@ func (d *Differ) Diff() error {
 		return err
 	}
 
-	// test
-	d.keys = make([][]byte, 4)
-	d.keys[0] = []byte("pymc0")
-	d.keys[1] = []byte("pymc1")
-	d.keys[2] = []byte("pymc2")
-	d.keys[3] = []byte("pymc3")
-
 	loadDistribution := BalanceLoad(NumberOfDiffWorkers, len(d.keys))
 	waitGroup := &sync.WaitGroup{}
 	for i := 0; i < NumberOfDiffWorkers; i++ {
@@ -89,7 +84,8 @@ func (d *Differ) Diff() error {
 		highIndex := loadDistribution[i][1]
 		waitGroup.Add(1)
 		diffWorker := NewDifferWorker(d.sourceBucket, d.targetBucket, d.keys[lowIndex:highIndex], waitGroup)
-		diffWorker.diff()
+		sourceResults, targetResults := diffWorker.getResults()
+		diffWorker.diff(sourceResults, targetResults)
 	}
 
 	waitGroup.Wait()
@@ -106,7 +102,7 @@ func NewDifferWorker(sourceBucket, targetBucket *gocb.Bucket, keys [][]byte, wai
 	}
 }
 
-func (dw *DifferWorker) diff() {
+func (dw *DifferWorker) getResults() (map[string]*GetResult, map[string]*GetResult) {
 	defer dw.waitGroup.Done()
 
 	sourceResults := make(map[string]*GetResult)
@@ -138,7 +134,34 @@ func (dw *DifferWorker) diff() {
 		}
 	}
 done:
-	fmt.Printf("source=%v, target=%v\n", sourceResults, targetResults)
+	return sourceResults, targetResults
+}
+
+func (dw *DifferWorker) diff(sourceResults, targetResults map[string]*GetResult) {
+	for key, sourceResult := range sourceResults {
+		targetResult := targetResults[key]
+		if isKeyNotFoundError(sourceResult.Error) && !isKeyNotFoundError(targetResult.Error) {
+			fmt.Printf("%v exists on target and not on source\n", key)
+			continue
+		}
+		if !isKeyNotFoundError(sourceResult.Error) && isKeyNotFoundError(targetResult.Error) {
+			fmt.Printf("%v exists on source and not on target\n", key)
+			continue
+		}
+		if !areGetResultsTheSame(sourceResult.Result, targetResult.Result) {
+			fmt.Printf("Diff exists for %v. Source:%v, target:%v\n", key, sourceResult, targetResult)
+		}
+
+	}
+}
+
+func isKeyNotFoundError(err error) bool {
+	return err != nil && err.Error() == KeyNotFoundErrMsg
+}
+
+func areGetResultsTheSame(result1, result2 *gocbcore.GetResult) bool {
+	return reflect.DeepEqual(result1.Value, result2.Value) && result1.Flags == result2.Flags &&
+		result1.Datatype == result2.Datatype && result1.Cas == result2.Cas
 }
 
 func (dw *DifferWorker) get(key []byte, resultsMap map[string]*GetResult, isSource bool) {
@@ -162,6 +185,13 @@ func (dw *DifferWorker) get(key []byte, resultsMap map[string]*GetResult, isSour
 type GetResult struct {
 	Result *gocbcore.GetResult
 	Error  error
+}
+
+func (r *GetResult) String() string {
+	if r.Result == nil {
+		return fmt.Sprintf("nil result")
+	}
+	return fmt.Sprintf("Cas=%v Datatype=%v Flags=%v Value=%v", r.Result.Cas, r.Result.Datatype, r.Result.Flags, r.Result.Value)
 }
 
 func (d *Differ) initialize() error {
