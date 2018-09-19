@@ -48,6 +48,9 @@ type internalFd struct {
 	// Channels to file descriptor pool to request open or ask someone to give up their open fds
 	requestOpenChan *(chan (*internalFd))
 	requestRelease  *(chan bool)
+	exitChan        chan bool
+
+	wg sync.WaitGroup
 }
 
 func NewFileDescriptorPool(maxFds uint64) *FdPool {
@@ -72,6 +75,7 @@ func (fdp *FdPool) RegisterFileHandle(fileName string) (WriteFileCb, error) {
 		state:           Closed,
 		requestOpenChan: &(fdp.fdsInUseChan),
 		requestRelease:  &(fdp.fdNeedsOpen),
+		exitChan:        make(chan bool, 1),
 	}
 	fdp.fdMap[fileName] = ifd
 
@@ -129,13 +133,21 @@ func (fd *internalFd) openAndWrite(input []byte) (int, error) {
 		return 0, err
 	}
 
+	fd.wg.Add(1)
 	go fd.waitForClose()
 
 	bytesWritten, err := fd.fileHandle.Write(input)
 	return bytesWritten, err
 }
 
+// External API only
 func (fd *internalFd) Close() {
+	fd.exitChan <- true
+	fd.closeInternal()
+	fd.wg.Wait()
+}
+
+func (fd *internalFd) closeInternal() {
 	fd.mtx.Lock()
 	defer fd.mtx.Unlock()
 	if fd.state != Closed {
@@ -145,9 +157,14 @@ func (fd *internalFd) Close() {
 }
 
 func (fd *internalFd) waitForClose() {
+	defer fd.wg.Done()
 	select {
 	case <-*fd.requestRelease:
-		fd.Close()
+		fd.closeInternal()
+		// Free up one fd from the max queue
+		<-*fd.requestOpenChan
+	case <-fd.exitChan:
+		// Exit path
 		// Free up one fd from the max queue
 		<-*fd.requestOpenChan
 	}
