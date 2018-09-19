@@ -7,7 +7,7 @@
 // either express or implied. See the License for the specific language governing permissions
 // and limitations under the License.
 
-package main
+package utils
 
 import (
 	"bytes"
@@ -15,16 +15,17 @@ import (
 	"hash/crc32"
 	"math"
 	"strconv"
+	"github.com/nelio2k/xdcrDiffer/base"
 )
 
 func GetFileName(fileDir string, vbno uint16, bucketIndex int) string {
 	var buffer bytes.Buffer
 	buffer.WriteString(fileDir)
-	buffer.WriteString(FileDirDelimiter)
-	buffer.WriteString(FileNamePrefix)
-	buffer.WriteString(FileNameDelimiter)
+	buffer.WriteString(base.FileDirDelimiter)
+	buffer.WriteString(base.FileNamePrefix)
+	buffer.WriteString(base.FileNameDelimiter)
 	buffer.WriteString(fmt.Sprintf("%v", vbno))
-	buffer.WriteString(FileNameDelimiter)
+	buffer.WriteString(base.FileNameDelimiter)
 	buffer.WriteString(fmt.Sprintf("%v", bucketIndex))
 	return buffer.String()
 }
@@ -73,8 +74,8 @@ func BalanceLoad(num_of_worker int, num_of_load int) [][]int {
 
 func ParseHighSeqnoStat(statsMap map[string]map[string]string, highSeqnoMap map[uint16]uint64, vbuuidMap map[uint16]uint64, getHighSeqno bool) error {
 	for _, statsMapPerServer := range statsMap {
-		for vbno := 0; vbno < NumerOfVbuckets; vbno++ {
-			uuidKey := fmt.Sprintf(VbucketUuidStatsKey, vbno)
+		for vbno := 0; vbno < base.NumerOfVbuckets; vbno++ {
+			uuidKey := fmt.Sprintf(base.VbucketUuidStatsKey, vbno)
 			uuidStr, ok := statsMapPerServer[uuidKey]
 			if ok && uuidStr != "" {
 				uuid, err := strconv.ParseUint(uuidStr, 10, 64)
@@ -87,7 +88,7 @@ func ParseHighSeqnoStat(statsMap map[string]map[string]string, highSeqnoMap map[
 			}
 
 			if getHighSeqno {
-				highSeqnoKey := fmt.Sprintf(VbucketHighSeqnoStatsKey, vbno)
+				highSeqnoKey := fmt.Sprintf(base.VbucketHighSeqnoStatsKey, vbno)
 				highSeqnoStr, ok := statsMapPerServer[highSeqnoKey]
 				if ok && highSeqnoStr != "" {
 					highSeqno, err := strconv.ParseUint(highSeqnoStr, 10, 64)
@@ -102,13 +103,13 @@ func ParseHighSeqnoStat(statsMap map[string]map[string]string, highSeqnoMap map[
 		}
 	}
 
-	if len(vbuuidMap) != NumerOfVbuckets {
+	if len(vbuuidMap) != base.NumerOfVbuckets {
 		err := fmt.Errorf("did not get all vb uuid. len(vbuuidMap) =%v\n", len(vbuuidMap))
 		fmt.Printf("%v\n", err)
 		return err
 	}
 
-	if getHighSeqno && len(highSeqnoMap) != NumerOfVbuckets {
+	if getHighSeqno && len(highSeqnoMap) != base.NumerOfVbuckets {
 		err := fmt.Errorf("did not get all high seqnos. len(highSeqnoMap) =%v\n", len(highSeqnoMap))
 		fmt.Printf("%v\n", err)
 		return err

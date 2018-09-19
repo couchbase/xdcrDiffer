@@ -12,6 +12,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/nelio2k/xdcrDiffer/base"
+	"github.com/nelio2k/xdcrDiffer/dcp"
+	"github.com/nelio2k/xdcrDiffer/differ"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"os"
 	"sync"
@@ -104,6 +107,14 @@ func main() {
 
 	fmt.Printf("tool started\n")
 
+	generateDataFiles()
+
+	diffDataFiles()
+
+}
+
+func generateDataFiles() {
+
 	errChan := make(chan error, 1)
 	waitGroup := &sync.WaitGroup{}
 
@@ -112,16 +123,16 @@ func main() {
 		fileDescPool = fdp.NewFileDescriptorPool(options.numberOfFileDesc)
 	}
 
-	sourceDcpClient, err := startDcpClient(SourceClusterName, options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfWorkers, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
+	sourceDcpClient, err := startDcpClient(base.SourceClusterName, options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfWorkers, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 	if err != nil {
 		fmt.Printf("Error starting source dcp client. err=%v\n", err)
 		// TODO retry?
 		os.Exit(1)
 	}
 
-	time.Sleep(DelayBetweenSourceAndTarget)
+	time.Sleep(base.DelayBetweenSourceAndTarget)
 
-	targetDcpClient, err := startDcpClient(TargetClusterName, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfWorkers, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
+	targetDcpClient, err := startDcpClient(base.TargetClusterName, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfWorkers, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 	if err != nil {
 		fmt.Printf("Error starting target dcp client. err=%v\n", err)
 		sourceDcpClient.Stop()
@@ -134,12 +145,16 @@ func main() {
 	} else {
 		waitForDuration(sourceDcpClient, targetDcpClient, errChan, options.completeByDuration)
 	}
-
 }
 
-func startDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfWorkers, numberOfBuckets uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool *fdp.FdPool) (*DcpClient, error) {
+func diffDataFiles() {
+	differDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, int(options.numberOfWorkers))
+	differDriver.Run()
+}
+
+func startDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfWorkers, numberOfBuckets uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool *fdp.FdPool) (*dcp.DcpClient, error) {
 	waitGroup.Add(1)
-	dcpClient := NewDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, int(numberOfWorkers), int(numberOfBuckets), errChan, waitGroup, completeBySeqno, fdPool)
+	dcpClient := dcp.NewDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, int(numberOfWorkers), int(numberOfBuckets), errChan, waitGroup, completeBySeqno, fdPool)
 	err := dcpClient.Start()
 	if err == nil {
 		return dcpClient, nil
@@ -148,7 +163,7 @@ func startDcpClient(name, url, bucketName, userName, password, fileDir, checkpoi
 	}
 }
 
-func waitForCompletion(sourceDcpClient *DcpClient, targetDcpClient *DcpClient, errChan chan error, waitGroup *sync.WaitGroup) {
+func waitForCompletion(sourceDcpClient, targetDcpClient *dcp.DcpClient, errChan chan error, waitGroup *sync.WaitGroup) {
 	doneChan := make(chan bool, 1)
 	go waitForWaitGroup(waitGroup, doneChan)
 
@@ -168,7 +183,7 @@ func waitForCompletion(sourceDcpClient *DcpClient, targetDcpClient *DcpClient, e
 	}
 }
 
-func waitForDuration(sourceDcpClient *DcpClient, targetDcpClient *DcpClient, errChan chan error, duration uint64) {
+func waitForDuration(sourceDcpClient, targetDcpClient *dcp.DcpClient, errChan chan error, duration uint64) {
 	timer := time.NewTimer(time.Duration(duration) * time.Minute)
 
 	select {
@@ -183,7 +198,7 @@ func waitForDuration(sourceDcpClient *DcpClient, targetDcpClient *DcpClient, err
 		fmt.Printf("Error stopping source dcp client. err=%v\n", err)
 	}
 
-	time.Sleep(DelayBetweenSourceAndTarget)
+	time.Sleep(base.DelayBetweenSourceAndTarget)
 
 	err = targetDcpClient.Stop()
 	if err != nil {

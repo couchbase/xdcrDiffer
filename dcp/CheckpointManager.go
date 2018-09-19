@@ -1,9 +1,11 @@
-package main
+package dcp
 
 import (
 	"encoding/json"
 	"fmt"
 	"github.com/couchbase/gocb"
+	"github.com/nelio2k/xdcrDiffer/base"
+	"github.com/nelio2k/xdcrDiffer/utils"
 	"os"
 	"sync"
 	"time"
@@ -36,16 +38,16 @@ func NewCheckpointManager(checkpointFileDir, oldCheckpointFileName, newCheckpoin
 
 	if checkpointFileDir != "" {
 		if oldCheckpointFileName != "" {
-			cm.oldCheckpointFileName = checkpointFileDir + FileDirDelimiter + clusterName + FileNameDelimiter + oldCheckpointFileName
+			cm.oldCheckpointFileName = checkpointFileDir + base.FileDirDelimiter + clusterName + base.FileNameDelimiter + oldCheckpointFileName
 		}
 
 		if newCheckpointFileName != "" {
-			cm.newCheckpointFileName = checkpointFileDir + FileDirDelimiter + clusterName + FileNameDelimiter + newCheckpointFileName
+			cm.newCheckpointFileName = checkpointFileDir + base.FileDirDelimiter + clusterName + base.FileNameDelimiter + newCheckpointFileName
 		}
 	}
 
 	var vbno uint16
-	for vbno = 0; vbno < NumerOfVbuckets; vbno++ {
+	for vbno = 0; vbno < base.NumerOfVbuckets; vbno++ {
 		cm.seqnoMap[vbno] = &SeqnoWithLock{}
 		cm.snapshots[vbno] = &Snapshot{}
 	}
@@ -88,7 +90,7 @@ func (cm *CheckpointManager) reportStatus() {
 		case <-ticker.C:
 			cm.reportStatusOnce()
 		case <-cm.finChan:
-			fmt.Printf("%v exiting reporting since tool is stopping", cm.clusterName)
+			fmt.Printf("%v exiting reporting since tool is stopping\n", cm.clusterName)
 			return
 		}
 	}
@@ -97,7 +99,7 @@ func (cm *CheckpointManager) reportStatus() {
 func (cm *CheckpointManager) reportStatusOnce() {
 	var vbno uint16
 	var sum uint64
-	for vbno = 0; vbno < NumerOfVbuckets; vbno++ {
+	for vbno = 0; vbno < base.NumerOfVbuckets; vbno++ {
 		sum += cm.seqnoMap[vbno].getSeqno()
 	}
 	fmt.Printf("%v processed %v mutations\n", cm.clusterName, sum)
@@ -120,14 +122,14 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() (map[uint16]uint64, error
 
 	defer statsBucket.Close()
 
-	statsMap, err := statsBucket.Stats(VbucketSeqnoStatName)
+	statsMap, err := statsBucket.Stats(base.VbucketSeqnoStatName)
 	if err != nil {
 		return nil, err
 	}
 
 	vbuuidMap := make(map[uint16]uint64)
 	endSeqnoMap := make(map[uint16]uint64)
-	err = ParseHighSeqnoStat(statsMap, endSeqnoMap, vbuuidMap, cm.completeBySeqno)
+	err = utils.ParseHighSeqnoStat(statsMap, endSeqnoMap, vbuuidMap, cm.completeBySeqno)
 	if err != nil {
 		return nil, err
 	}
@@ -137,7 +139,7 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() (map[uint16]uint64, error
 	if !cm.completeBySeqno {
 		// set endSeqno to maxInt
 		var vbno uint16
-		for vbno = 0; vbno < NumerOfVbuckets; vbno++ {
+		for vbno = 0; vbno < base.NumerOfVbuckets; vbno++ {
 			endSeqnoMap[vbno] = 0xFFFFFFFFFFFFFFFF
 		}
 	}
@@ -161,7 +163,7 @@ func (cm *CheckpointManager) setStartVBTS(endSeqnoMap map[uint16]uint64) error {
 		}
 	} else {
 		var vbno uint16
-		for vbno = 0; vbno < NumerOfVbuckets; vbno++ {
+		for vbno = 0; vbno < base.NumerOfVbuckets; vbno++ {
 			// if we are not loading checkpoints, it is ok to leave all fields in Checkpoint with default values, 0
 			cm.startVBTS[vbno] = &VBTS{
 				Checkpoint: &Checkpoint{},
@@ -184,7 +186,7 @@ func (cm *CheckpointManager) loadCheckpoints() (*CheckpointDoc, error) {
 		return nil, err
 	}
 
-	buffer := make([]byte, CheckpointFileBufferSize)
+	buffer := make([]byte, base.CheckpointFileBufferSize)
 	bufferBytes, err := checkpointFile.Read(buffer)
 	if err != nil {
 		fmt.Printf("Error reading checkpoint file. err=%v\n", err)
@@ -198,7 +200,7 @@ func (cm *CheckpointManager) loadCheckpoints() (*CheckpointDoc, error) {
 		return nil, err
 	}
 
-	if len(checkpointDoc.Checkpoints) < NumerOfVbuckets {
+	if len(checkpointDoc.Checkpoints) < base.NumerOfVbuckets {
 		return nil, fmt.Errorf("checkpoint file %v has less than 1024 vbuckets.", cm.oldCheckpointFileName)
 	}
 
@@ -220,7 +222,7 @@ func (cm *CheckpointManager) SaveCheckpoint() error {
 	}
 
 	var vbno uint16
-	for vbno = 0; vbno < NumerOfVbuckets; vbno++ {
+	for vbno = 0; vbno < base.NumerOfVbuckets; vbno++ {
 		vbuuid := cm.vbuuidMap[vbno]
 		seqno := cm.seqnoMap[vbno].getSeqno()
 		var snapshotStartSeqno uint64
@@ -247,7 +249,7 @@ func (cm *CheckpointManager) SaveCheckpoint() error {
 		return err
 	}
 
-	checkpointFile, err := os.OpenFile(cm.newCheckpointFileName, os.O_RDWR|os.O_CREATE, FileModeReadWrite)
+	checkpointFile, err := os.OpenFile(cm.newCheckpointFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
 	if err != nil {
 		return err
 	}

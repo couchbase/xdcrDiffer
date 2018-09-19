@@ -7,11 +7,12 @@
 // either express or implied. See the License for the specific language governing permissions
 // and limitations under the License.
 
-package main
+package differ
 
 import (
 	"fmt"
 	"github.com/couchbase/gocb"
+	"github.com/nelio2k/xdcrDiffer/utils"
 	gocbcore "gopkg.in/couchbase/gocbcore.v7"
 	"reflect"
 	"sync"
@@ -77,7 +78,7 @@ func (d *Differ) Diff() error {
 		return err
 	}
 
-	loadDistribution := BalanceLoad(NumberOfDiffWorkers, len(d.keys))
+	loadDistribution := utils.BalanceLoad(NumberOfDiffWorkers, len(d.keys))
 	waitGroup := &sync.WaitGroup{}
 	for i := 0; i < NumberOfDiffWorkers; i++ {
 		lowIndex := loadDistribution[i][0]

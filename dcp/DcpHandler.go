@@ -7,13 +7,15 @@
 // either express or implied. See the License for the specific language governing permissions
 // and limitations under the License.
 
-package main
+package dcp
 
 import (
 	"crypto/sha512"
 	"encoding/binary"
 	"fmt"
+	"github.com/nelio2k/xdcrDiffer/base"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
+	"github.com/nelio2k/xdcrDiffer/utils"
 	gocbcore "gopkg.in/couchbase/gocbcore.v7"
 	"os"
 	"sync"
@@ -45,7 +47,7 @@ func NewDcpHandler(dcpClient *DcpClient, checkpointManager *CheckpointManager, f
 		index:             index,
 		vbList:            vbList,
 		numberOfBuckets:   numberOfBuckets,
-		dataChan:          make(chan *Mutation, DcpHandlerChanSize),
+		dataChan:          make(chan *Mutation, base.DcpHandlerChanSize),
 		finChan:           make(chan bool),
 		bucketMap:         make(map[uint16]map[int]*Bucket),
 		fdPool:            fdPool,
@@ -123,7 +125,7 @@ done:
 
 func (dh *DcpHandler) processMutation(mut *Mutation) {
 	vbno := mut.vbno
-	index := GetBucketIndexFromKey(mut.key, dh.numberOfBuckets)
+	index := utils.GetBucketIndexFromKey(mut.key, dh.numberOfBuckets)
 	innerMap := dh.bucketMap[vbno]
 	if innerMap == nil {
 		panic(fmt.Sprintf("cannot find bucketMap for vbno %v", vbno))
@@ -176,14 +178,14 @@ type Bucket struct {
 }
 
 func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool *fdp.FdPool) (*Bucket, error) {
-	fileName := GetFileName(fileDir, vbno, bucketIndex)
+	fileName := utils.GetFileName(fileDir, vbno, bucketIndex)
 	var cb fdp.WriteFileCb
 	var closeOp func() error
 	var err error
 	var file *os.File
 
 	if fdPool == nil {
-		file, err = os.OpenFile(fileName, os.O_RDWR|os.O_CREATE, FileModeReadWrite)
+		file, err = os.OpenFile(fileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
 		if err != nil {
 			return nil, err
 		}
@@ -197,7 +199,7 @@ func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool *fdp.FdPool)
 		}
 	}
 	return &Bucket{
-		data:     make([]byte, BucketBufferCapacity),
+		data:     make([]byte, base.BucketBufferCapacity),
 		index:    0,
 		file:     file,
 		fileName: fileName,
@@ -207,7 +209,7 @@ func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool *fdp.FdPool)
 }
 
 func (b *Bucket) write(item []byte) error {
-	if b.index+len(item) > BucketBufferCapacity {
+	if b.index+len(item) > base.BucketBufferCapacity {
 		err := b.flushToFile()
 		if err != nil {
 			return err
@@ -289,7 +291,7 @@ func CreateMutation(vbno uint16, key []byte, seqno, revId, cas uint64, flags, ex
 //  hash    - 64 bytes
 func serializeMutation(mut *Mutation) []byte {
 	keyLen := len(mut.key)
-	ret := make([]byte, keyLen+BodyLength+2)
+	ret := make([]byte, keyLen+base.BodyLength+2)
 	bodyHash := sha512.Sum512(mut.value)
 
 	pos := 0

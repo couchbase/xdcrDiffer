@@ -7,12 +7,14 @@
 // either express or implied. See the License for the specific language governing permissions
 // and limitations under the License.
 
-package main
+package dcp
 
 import (
 	"fmt"
 	"github.com/couchbase/gocb"
+	"github.com/nelio2k/xdcrDiffer/base"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
+	"github.com/nelio2k/xdcrDiffer/utils"
 	gocbcore "gopkg.in/couchbase/gocbcore.v7"
 	"sync"
 )
@@ -94,7 +96,7 @@ func (c *DcpClient) Stop() error {
 	defer c.waitGroup.Done()
 
 	var err error
-	for i := 0; i < NumerOfVbuckets; i++ {
+	for i := 0; i < base.NumerOfVbuckets; i++ {
 		_, err = c.bucket.IoRouter().CloseStream(uint16(i), c.closeStreamFunc)
 		if err != nil {
 			fmt.Printf("%v error stopping dcp stream for vb %v. err=%v\n", c.Name, i, err)
@@ -168,7 +170,7 @@ func (c *DcpClient) initializeCluster() (err error) {
 }
 
 func (c *DcpClient) initializeBucket() (err error) {
-	bucket, err := c.cluster.OpenStreamingBucket(StreamingBucketName, c.bucketName, "")
+	bucket, err := c.cluster.OpenStreamingBucket(base.StreamingBucketName, c.bucketName, "")
 	if err != nil {
 		fmt.Printf("Error opening streaming bucket. bucket=%v, err=%v\n", c.bucketName, err)
 	}
@@ -179,7 +181,7 @@ func (c *DcpClient) initializeBucket() (err error) {
 }
 
 func (c *DcpClient) initializeDcpHandlers() error {
-	loadDistribution := BalanceLoad(c.numberOfWorkers, NumerOfVbuckets)
+	loadDistribution := utils.BalanceLoad(c.numberOfWorkers, base.NumerOfVbuckets)
 	for i := 0; i < c.numberOfWorkers; i++ {
 		lowIndex := loadDistribution[i][0]
 		highIndex := loadDistribution[i][1]
@@ -211,7 +213,7 @@ func (c *DcpClient) initializeDcpHandlers() error {
 
 func (c *DcpClient) openStreams() error {
 	var vbno uint16
-	for vbno = 0; vbno < NumerOfVbuckets; vbno++ {
+	for vbno = 0; vbno < base.NumerOfVbuckets; vbno++ {
 		vbts := c.checkpointManager.GetStartVBTS(vbno)
 
 		_, err := c.bucket.IoRouter().OpenStream(vbno, 0, gocbcore.VbUuid(vbts.Checkpoint.Vbuuid), gocbcore.SeqNo(vbts.Checkpoint.Seqno), gocbcore.SeqNo(vbts.EndSeqno), gocbcore.SeqNo(vbts.Checkpoint.SnapshotStartSeqno), gocbcore.SeqNo(vbts.Checkpoint.SnapshotEndSeqno), c.vbHandlerMap[vbno], c.openStreamFunc)
@@ -257,7 +259,7 @@ func (c *DcpClient) handleVbucketCompletion(vbno uint16, err error) {
 		numOfCompletedVb := len(c.vbState)
 		c.stateLock.Unlock()
 
-		if numOfCompletedVb == NumerOfVbuckets {
+		if numOfCompletedVb == base.NumerOfVbuckets {
 			fmt.Printf("all vbuckets have completed for dcp client %v\n", c.Name)
 			c.Stop()
 		}
