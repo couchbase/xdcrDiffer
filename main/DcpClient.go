@@ -12,6 +12,7 @@ package main
 import (
 	"fmt"
 	"github.com/couchbase/gocb"
+	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	gocbcore "gopkg.in/couchbase/gocbcore.v7"
 	"sync"
 )
@@ -32,13 +33,14 @@ type DcpClient struct {
 	dcpHandlers       []*DcpHandler
 	vbHandlerMap      map[uint16]*DcpHandler
 	checkpointManager *CheckpointManager
+	fdPool            *fdp.FdPool
 	// value = true if processing on the vb has been completed
 	vbState   map[uint16]bool
 	stopped   bool
 	stateLock sync.RWMutex
 }
 
-func NewDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfWorkers, numberOfBuckets int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool) *DcpClient {
+func NewDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfWorkers, numberOfBuckets int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool *fdp.FdPool) *DcpClient {
 	return &DcpClient{
 		checkpointManager: NewCheckpointManager(checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, name, bucketName, completeBySeqno),
 		Name:              name,
@@ -54,6 +56,7 @@ func NewDcpClient(name, url, bucketName, userName, password, fileDir, checkpoint
 		dcpHandlers:       make([]*DcpHandler, numberOfWorkers),
 		vbHandlerMap:      make(map[uint16]*DcpHandler),
 		vbState:           make(map[uint16]bool),
+		fdPool:            fdPool,
 	}
 }
 
@@ -103,9 +106,11 @@ func (c *DcpClient) Stop() error {
 		fmt.Printf("%v error closing gocb agent. err=%v\n", c.Name, err)
 	}
 
+	fmt.Printf("Dcp client %v stopping handlers")
 	for _, dcpHandler := range c.dcpHandlers {
 		dcpHandler.Stop()
 	}
+	fmt.Printf("Dcp client %v done stopping handlers")
 
 	err = c.checkpointManager.Stop()
 	if err != nil {
@@ -183,7 +188,7 @@ func (c *DcpClient) initializeDcpHandlers() error {
 			vbList[j-lowIndex] = uint16(j)
 		}
 
-		dcpHandler, err := NewDcpHandler(c, c.checkpointManager, c.fileDir, i, vbList, c.numberOfBuckets)
+		dcpHandler, err := NewDcpHandler(c, c.checkpointManager, c.fileDir, i, vbList, c.numberOfBuckets, c.fdPool)
 		if err != nil {
 			fmt.Printf("Error constructing dcp handler. err=%v\n", err)
 			return err
@@ -229,7 +234,7 @@ func (c *DcpClient) openStreamFunc(f []gocbcore.FailoverEntry, err error) {
 func (c *DcpClient) reportError(err error) {
 	// avoid printing spurious errors if we are stopping
 	if !c.hasStopped() {
-		fmt.Printf("% dcp client encountered error=%v\n", c.Name, err)
+		fmt.Printf("%s dcp client encountered error=%v\n", c.Name, err)
 	}
 
 	select {

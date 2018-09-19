@@ -13,6 +13,7 @@ import (
 	"crypto/sha512"
 	"encoding/binary"
 	"fmt"
+	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	gocbcore "gopkg.in/couchbase/gocbcore.v7"
 	"os"
 	"sync"
@@ -30,9 +31,10 @@ type DcpHandler struct {
 	waitGrp           sync.WaitGroup
 	finChan           chan bool
 	bucketMap         map[uint16]map[int]*Bucket
+	fdPool            *fdp.FdPool
 }
 
-func NewDcpHandler(dcpClient *DcpClient, checkpointManager *CheckpointManager, fileDir string, index int, vbList []uint16, numberOfBuckets int) (*DcpHandler, error) {
+func NewDcpHandler(dcpClient *DcpClient, checkpointManager *CheckpointManager, fileDir string, index int, vbList []uint16, numberOfBuckets int, fdPool *fdp.FdPool) (*DcpHandler, error) {
 	if len(vbList) == 0 {
 		return nil, fmt.Errorf("vbList is empty for handler %v", index)
 	}
@@ -46,6 +48,7 @@ func NewDcpHandler(dcpClient *DcpClient, checkpointManager *CheckpointManager, f
 		dataChan:          make(chan *Mutation, DcpHandlerChanSize),
 		finChan:           make(chan bool),
 		bucketMap:         make(map[uint16]map[int]*Bucket),
+		fdPool:            fdPool,
 	}, nil
 }
 
@@ -73,7 +76,7 @@ func (dh *DcpHandler) initialize() error {
 		innerMap := make(map[int]*Bucket)
 		dh.bucketMap[vbno] = innerMap
 		for i := 0; i < dh.numberOfBuckets; i++ {
-			bucket, err := NewBucket(dh.fileDir, vbno, i)
+			bucket, err := NewBucket(dh.fileDir, vbno, i, dh.fdPool)
 			if err != nil {
 				return err
 			}
@@ -167,19 +170,39 @@ type Bucket struct {
 	index    int
 	file     *os.File
 	fileName string
+
+	fdPoolCb fdp.WriteFileCb
+	closeOp  func() error
 }
 
-func NewBucket(fileDir string, vbno uint16, bucketIndex int) (*Bucket, error) {
+func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool *fdp.FdPool) (*Bucket, error) {
 	fileName := GetFileName(fileDir, vbno, bucketIndex)
-	file, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE, FileModeReadWrite)
-	if err != nil {
-		return nil, err
+	var cb fdp.WriteFileCb
+	var closeOp func() error
+	var err error
+	var file *os.File
+
+	if fdPool == nil {
+		file, err = os.OpenFile(fileName, os.O_RDWR|os.O_CREATE, FileModeReadWrite)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		cb, err = fdPool.RegisterFileHandle(fileName)
+		if err != nil {
+			return nil, err
+		}
+		closeOp = func() error {
+			return fdPool.DeRegisterFileHandle(fileName)
+		}
 	}
 	return &Bucket{
 		data:     make([]byte, BucketBufferCapacity),
 		index:    0,
 		file:     file,
 		fileName: fileName,
+		fdPoolCb: cb,
+		closeOp:  closeOp,
 	}, nil
 }
 
@@ -197,7 +220,14 @@ func (b *Bucket) write(item []byte) error {
 }
 
 func (b *Bucket) flushToFile() error {
-	numOfBytes, err := b.file.Write(b.data[:b.index])
+	var numOfBytes int
+	var err error
+
+	if b.fdPoolCb != nil {
+		numOfBytes, err = b.fdPoolCb(b.data[:b.index])
+	} else {
+		numOfBytes, err = b.file.Write(b.data[:b.index])
+	}
 	if err != nil {
 		return err
 	}
@@ -209,13 +239,17 @@ func (b *Bucket) flushToFile() error {
 }
 
 func (b *Bucket) close() {
-	err := b.flushToFile()
-	if err != nil {
-		fmt.Printf("Error flushing to file %v at bucket close err=%v\n", b.file.Name(), err)
-	}
-	err = b.file.Close()
-	if err != nil {
-		fmt.Printf("Error closing file %v.  err=%v\n", b.file.Name(), err)
+	if b.fdPoolCb != nil {
+		b.closeOp()
+	} else {
+		err := b.flushToFile()
+		if err != nil {
+			fmt.Printf("Error flushing to file %v at bucket close err=%v\n", b.file.Name(), err)
+		}
+		err = b.file.Close()
+		if err != nil {
+			fmt.Printf("Error closing file %v.  err=%v\n", b.file.Name(), err)
+		}
 	}
 }
 
