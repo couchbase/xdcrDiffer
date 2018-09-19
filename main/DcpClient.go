@@ -106,11 +106,11 @@ func (c *DcpClient) Stop() error {
 		fmt.Printf("%v error closing gocb agent. err=%v\n", c.Name, err)
 	}
 
-	fmt.Printf("Dcp client %v stopping handlers")
+	fmt.Printf("Dcp client %v stopping handlers\n", c.Name)
 	for _, dcpHandler := range c.dcpHandlers {
 		dcpHandler.Stop()
 	}
-	fmt.Printf("Dcp client %v done stopping handlers")
+	fmt.Printf("Dcp client %v done stopping handlers\n", c.Name)
 
 	err = c.checkpointManager.Stop()
 	if err != nil {

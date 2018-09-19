@@ -6,6 +6,7 @@ import (
 	"github.com/couchbase/gocb"
 	"os"
 	"sync"
+	"time"
 )
 
 type CheckpointManager struct {
@@ -19,6 +20,7 @@ type CheckpointManager struct {
 	vbuuidMap             map[uint16]uint64
 	seqnoMap              map[uint16]*SeqnoWithLock
 	snapshots             map[uint16]*Snapshot
+	finChan               chan bool
 }
 
 func NewCheckpointManager(checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, clusterName, bucketName string, completeBySeqno bool) *CheckpointManager {
@@ -29,6 +31,7 @@ func NewCheckpointManager(checkpointFileDir, oldCheckpointFileName, newCheckpoin
 		startVBTS:       make(map[uint16]*VBTS),
 		seqnoMap:        make(map[uint16]*SeqnoWithLock),
 		snapshots:       make(map[uint16]*Snapshot),
+		finChan:         make(chan bool),
 	}
 
 	if checkpointFileDir != "" {
@@ -55,11 +58,49 @@ func (cm *CheckpointManager) SetCluster(cluster *gocb.Cluster) {
 }
 
 func (cm *CheckpointManager) Start() error {
-	return cm.initialize()
+	err := cm.initialize()
+	if err != nil {
+		return err
+	}
+
+	go cm.reportStatus()
+
+	return nil
 }
 
 func (cm *CheckpointManager) Stop() error {
-	return cm.SaveCheckpoint()
+	err := cm.SaveCheckpoint()
+	if err != nil {
+		fmt.Printf("%v error saving checkpoint. err=%v\n", cm.clusterName, err)
+	}
+
+	close(cm.finChan)
+
+	return nil
+}
+
+func (cm *CheckpointManager) reportStatus() {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			cm.reportStatusOnce()
+		case <-cm.finChan:
+			fmt.Printf("%v exiting reporting since tool is stopping", cm.clusterName)
+			return
+		}
+	}
+}
+
+func (cm *CheckpointManager) reportStatusOnce() {
+	var vbno uint16
+	var sum uint64
+	for vbno = 0; vbno < NumerOfVbuckets; vbno++ {
+		sum += cm.seqnoMap[vbno].getSeqno()
+	}
+	fmt.Printf("%v processed %v mutations\n", cm.clusterName, sum)
 }
 
 func (cm *CheckpointManager) initialize() error {
@@ -167,7 +208,7 @@ func (cm *CheckpointManager) loadCheckpoints() (*CheckpointDoc, error) {
 func (cm *CheckpointManager) SaveCheckpoint() error {
 	if cm.newCheckpointFileName == "" {
 		// checkpointing disabled
-		fmt.Printf("Skipping checkpointing for %v since checkpointing has been disabled", cm.clusterName)
+		fmt.Printf("Skipping checkpointing for %v since checkpointing has been disabled\n", cm.clusterName)
 		return nil
 	}
 
