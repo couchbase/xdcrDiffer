@@ -24,19 +24,20 @@ import (
 var done = make(chan bool)
 
 var options struct {
-	sourceUrl        string
-	sourceUsername   string
-	sourcePassword   string
-	sourceBucketName string
-	sourceFileDir    string
-	targetUrl        string
-	targetUsername   string
-	targetPassword   string
-	targetBucketName string
-	targetFileDir    string
-	numberOfWorkers  uint64
-	numberOfBuckets  uint64
-	numberOfFileDesc uint64
+	sourceUrl                    string
+	sourceUsername               string
+	sourcePassword               string
+	sourceBucketName             string
+	sourceFileDir                string
+	targetUrl                    string
+	targetUsername               string
+	targetPassword               string
+	targetBucketName             string
+	targetFileDir                string
+	numberOfWorkersForDcp        uint64
+	numberOfWorkersForFileDiffer uint64
+	numberOfBuckets              uint64
+	numberOfFileDesc             uint64
 	// the duration that the tools should be run, in minutes
 	completeByDuration uint64
 	// whether tool should complete after processing all mutations at tool start time
@@ -72,8 +73,10 @@ func argParse() {
 		"bucket name for target cluster")
 	flag.StringVar(&options.targetFileDir, "targetFileDir", "target",
 		"directory to store mutations in target cluster")
-	flag.Uint64Var(&options.numberOfWorkers, "numberOfWorkers", 10,
-		"number of worker threads")
+	flag.Uint64Var(&options.numberOfWorkersForDcp, "numberOfWorkersForDcp", 10,
+		"number of worker threads for dcp")
+	flag.Uint64Var(&options.numberOfWorkersForFileDiffer, "numberOfWorkersForFileDiffer", 10,
+		"number of worker threads for file differ ")
 	flag.Uint64Var(&options.numberOfBuckets, "numberOfBuckets", 10,
 		"number of buckets per vbucket")
 	flag.Uint64Var(&options.numberOfFileDesc, "numberOfFileDesc", 0,
@@ -123,7 +126,7 @@ func generateDataFiles() {
 		fileDescPool = fdp.NewFileDescriptorPool(options.numberOfFileDesc)
 	}
 
-	sourceDcpClient, err := startDcpClient(base.SourceClusterName, options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfWorkers, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
+	sourceDcpClient, err := startDcpClient(base.SourceClusterName, options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfWorkersForDcp, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 	if err != nil {
 		fmt.Printf("Error starting source dcp client. err=%v\n", err)
 		// TODO retry?
@@ -132,7 +135,7 @@ func generateDataFiles() {
 
 	time.Sleep(base.DelayBetweenSourceAndTarget)
 
-	targetDcpClient, err := startDcpClient(base.TargetClusterName, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfWorkers, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
+	targetDcpClient, err := startDcpClient(base.TargetClusterName, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfWorkersForDcp, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 	if err != nil {
 		fmt.Printf("Error starting target dcp client. err=%v\n", err)
 		sourceDcpClient.Stop()
@@ -148,7 +151,7 @@ func generateDataFiles() {
 }
 
 func diffDataFiles() {
-	differDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, int(options.numberOfWorkers))
+	differDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBuckets))
 	differDriver.Run()
 }
 

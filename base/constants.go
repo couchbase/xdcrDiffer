@@ -14,7 +14,6 @@ import (
 )
 
 const NumerOfVbuckets = 1024
-const NumberOfBucketsPerVbucket = 10
 const DcpHandlerChanSize = 100000
 const FileNamePrefix = "diffTool"
 const FileNameDelimiter = "_"

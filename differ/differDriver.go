@@ -20,14 +20,16 @@ type DifferDriver struct {
 	sourceFileDir   string
 	targetFileDir   string
 	numberOfWorkers int
+	numberOfBuckets int
 	waitGroup       *sync.WaitGroup
 }
 
-func NewDifferDriver(sourceFileDir, targetFileDir string, numberOfWorkers int) *DifferDriver {
+func NewDifferDriver(sourceFileDir, targetFileDir string, numberOfWorkers, numberOfBuckets int) *DifferDriver {
 	return &DifferDriver{
 		sourceFileDir:   sourceFileDir,
 		targetFileDir:   targetFileDir,
 		numberOfWorkers: numberOfWorkers,
+		numberOfBuckets: numberOfBuckets,
 		waitGroup:       &sync.WaitGroup{},
 	}
 }
@@ -43,7 +45,7 @@ func (dr *DifferDriver) Run() {
 		}
 
 		dr.waitGroup.Add(1)
-		differHandler := NewDifferHandler(i, dr.sourceFileDir, dr.targetFileDir, vbList, dr.waitGroup)
+		differHandler := NewDifferHandler(i, dr.sourceFileDir, dr.targetFileDir, vbList, dr.numberOfBuckets, dr.waitGroup)
 		go differHandler.run()
 	}
 
@@ -51,20 +53,22 @@ func (dr *DifferDriver) Run() {
 }
 
 type DifferHandler struct {
-	index         int
-	sourceFileDir string
-	targetFileDir string
-	vbList        []uint16
-	waitGroup     *sync.WaitGroup
+	index           int
+	sourceFileDir   string
+	targetFileDir   string
+	vbList          []uint16
+	numberOfBuckets int
+	waitGroup       *sync.WaitGroup
 }
 
-func NewDifferHandler(index int, sourceFileDir, targetFileDir string, vbList []uint16, waitGroup *sync.WaitGroup) *DifferHandler {
+func NewDifferHandler(index int, sourceFileDir, targetFileDir string, vbList []uint16, numberOfBuckets int, waitGroup *sync.WaitGroup) *DifferHandler {
 	return &DifferHandler{
-		index:         index,
-		sourceFileDir: sourceFileDir,
-		targetFileDir: targetFileDir,
-		vbList:        vbList,
-		waitGroup:     waitGroup,
+		index:           index,
+		sourceFileDir:   sourceFileDir,
+		targetFileDir:   targetFileDir,
+		vbList:          vbList,
+		numberOfBuckets: numberOfBuckets,
+		waitGroup:       waitGroup,
 	}
 }
 
@@ -75,7 +79,7 @@ func (dh *DifferHandler) run() {
 
 	var vbno uint16
 	for _, vbno = range dh.vbList {
-		for bucketIndex := 0; bucketIndex < base.NumberOfBucketsPerVbucket; bucketIndex++ {
+		for bucketIndex := 0; bucketIndex < dh.numberOfBuckets; bucketIndex++ {
 			sourceFileName := utils.GetFileName(dh.sourceFileDir, vbno, bucketIndex)
 			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex)
 			filesDiffer := NewFilesDiffer(sourceFileName, targetFileName)
