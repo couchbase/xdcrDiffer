@@ -286,7 +286,7 @@ func (differ *FilesDiffer) diffSorted() bool {
 
 	for ; j < file2Len; j++ {
 		// This means that all the rest of the entries in file2 are missing from file1
-		differ.MissingFromFile1 = append(differ.MissingFromFile1, differ.file1.sortedEntries[j])
+		differ.MissingFromFile1 = append(differ.MissingFromFile1, differ.file2.sortedEntries[j])
 	}
 
 	return len(differ.BothExistButMismatch) == 0 && len(differ.MissingFromFile1) == 0 && len(differ.MissingFromFile2) == 0

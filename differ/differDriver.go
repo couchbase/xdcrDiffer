@@ -11,9 +11,9 @@ package differ
 
 import (
 	"fmt"
-	"sync"
 	"github.com/nelio2k/xdcrDiffer/base"
 	"github.com/nelio2k/xdcrDiffer/utils"
+	"sync"
 )
 
 type DifferDriver struct {
@@ -44,7 +44,7 @@ func (dr *DifferDriver) Run() {
 
 		dr.waitGroup.Add(1)
 		differHandler := NewDifferHandler(i, dr.sourceFileDir, dr.targetFileDir, vbList, dr.waitGroup)
-		differHandler.run()
+		go differHandler.run()
 	}
 
 	dr.waitGroup.Wait()
@@ -71,7 +71,7 @@ func NewDifferHandler(index int, sourceFileDir, targetFileDir string, vbList []u
 func (dh *DifferHandler) run() {
 	fmt.Printf("DiffHandler %v starting\n", dh.index)
 	defer fmt.Printf("DiffHandler %v stopping\n", dh.index)
-	defer dh.waitGroup.Wait()
+	defer dh.waitGroup.Done()
 
 	var vbno uint16
 	for _, vbno = range dh.vbList {
@@ -80,6 +80,7 @@ func (dh *DifferHandler) run() {
 			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex)
 			filesDiffer := NewFilesDiffer(sourceFileName, targetFileName)
 			filesDiffer.Diff()
+			fmt.Printf("Diff for %v and %v is done\n", vbno, bucketIndex)
 		}
 	}
 }

@@ -80,7 +80,7 @@ func argParse() {
 		"number of file descriptors")
 	flag.Uint64Var(&options.completeByDuration, "completeByDuration", 1,
 		"duration that the tool should run")
-	flag.BoolVar(&options.completeBySeqno, "completeBySeqno", false,
+	flag.BoolVar(&options.completeBySeqno, "completeBySeqno", true,
 		"whether tool should automatically complete (after processing all mutations at start time)")
 	flag.StringVar(&options.checkpointFileDir, "checkpointFileDir", "checkpoint",
 		"directory for checkpoint files")
