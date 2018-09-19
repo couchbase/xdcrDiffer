@@ -162,10 +162,16 @@ func (fd *internalFd) waitForClose() {
 	case <-*fd.requestRelease:
 		fd.closeInternal()
 		// Free up one fd from the max queue
-		<-*fd.requestOpenChan
+		select {
+		case <-*fd.requestOpenChan:
+		default:
+		}
 	case <-fd.exitChan:
 		// Exit path
-		// Free up one fd from the max queue
-		<-*fd.requestOpenChan
+		// Free up one fd from the max queue, if possible
+		select {
+		case <-*fd.requestOpenChan:
+		default:
+		}
 	}
 }
