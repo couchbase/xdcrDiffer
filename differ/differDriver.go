@@ -79,8 +79,10 @@ func (dh *DifferHandler) run() {
 			sourceFileName := utils.GetFileName(dh.sourceFileDir, vbno, bucketIndex)
 			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex)
 			filesDiffer := NewFilesDiffer(sourceFileName, targetFileName)
-			filesDiffer.Diff()
-			fmt.Printf("Diff for %v and %v is done\n", vbno, bucketIndex)
+			same := filesDiffer.Diff()
+			if !same {
+				filesDiffer.PrettyPrintResult()
+			}
 		}
 	}
 }

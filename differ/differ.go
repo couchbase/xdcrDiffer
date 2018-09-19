@@ -263,7 +263,7 @@ func (differ *FilesDiffer) diffSorted() bool {
 				// Both document are the same, but others mismatched
 				var onePair entryPair
 				onePair[0] = item1
-				onePair[1] = item1
+				onePair[1] = item2
 				differ.BothExistButMismatch = append(differ.BothExistButMismatch, &onePair)
 				i++
 				j++
