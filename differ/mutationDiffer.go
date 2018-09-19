@@ -23,7 +23,7 @@ import (
 const NumberOfDiffWorkers = 1
 const KeyNotFoundErrMsg = "key not found"
 
-type Differ struct {
+type MutationDiffer struct {
 	sourceUrl        string
 	sourceBucketName string
 	sourceUserName   string
@@ -50,7 +50,7 @@ type DifferWorker struct {
 	targetResultCount uint32
 }
 
-func NewDiffer(sourceUrl string,
+func NewMutationDiffer(sourceUrl string,
 	sourceBucketName string,
 	sourceUserName string,
 	sourcePassword string,
@@ -58,8 +58,8 @@ func NewDiffer(sourceUrl string,
 	targetBucketName string,
 	targetUserName string,
 	targetPassword string,
-	keys [][]byte) *Differ {
-	return &Differ{
+	keys [][]byte) *MutationDiffer {
+	return &MutationDiffer{
 		sourceUrl:        sourceUrl,
 		sourceBucketName: sourceBucketName,
 		sourceUserName:   sourceUserName,
@@ -72,7 +72,7 @@ func NewDiffer(sourceUrl string,
 	}
 }
 
-func (d *Differ) Diff() error {
+func (d *MutationDiffer) Diff() error {
 	err := d.initialize()
 	if err != nil {
 		return err
@@ -142,15 +142,18 @@ func (dw *DifferWorker) diff(sourceResults, targetResults map[string]*GetResult)
 	for key, sourceResult := range sourceResults {
 		targetResult := targetResults[key]
 		if isKeyNotFoundError(sourceResult.Error) && !isKeyNotFoundError(targetResult.Error) {
+			fmt.Printf("-------------------------------------------------\n")
 			fmt.Printf("%v exists on target and not on source\n", key)
 			continue
 		}
 		if !isKeyNotFoundError(sourceResult.Error) && isKeyNotFoundError(targetResult.Error) {
+			fmt.Printf("-------------------------------------------------\n")
 			fmt.Printf("%v exists on source and not on target\n", key)
 			continue
 		}
 		if !areGetResultsTheSame(sourceResult.Result, targetResult.Result) {
-			fmt.Printf("Diff exists for %v. Source:%v, target:%v\n", key, sourceResult, targetResult)
+			fmt.Printf("-------------------------------------------------\n")
+			fmt.Printf("%v is different on source and target. Source:%v, target:%v\n", key, sourceResult, targetResult)
 		}
 
 	}
@@ -161,6 +164,12 @@ func isKeyNotFoundError(err error) bool {
 }
 
 func areGetResultsTheSame(result1, result2 *gocbcore.GetResult) bool {
+	if result1 == nil {
+		return result2 == nil
+	}
+	if result2 == nil {
+		return false
+	}
 	return reflect.DeepEqual(result1.Value, result2.Value) && result1.Flags == result2.Flags &&
 		result1.Datatype == result2.Datatype && result1.Cas == result2.Cas
 }
@@ -195,7 +204,7 @@ func (r *GetResult) String() string {
 	return fmt.Sprintf("Cas=%v Datatype=%v Flags=%v Value=%v", r.Result.Cas, r.Result.Datatype, r.Result.Flags, r.Result.Value)
 }
 
-func (d *Differ) initialize() error {
+func (d *MutationDiffer) initialize() error {
 	var err error
 	d.sourceBucket, err = d.openBucket(d.sourceUrl, d.sourceBucketName, d.sourceUserName, d.sourcePassword)
 	if err != nil {
@@ -208,7 +217,7 @@ func (d *Differ) initialize() error {
 	return nil
 }
 
-func (d *Differ) openBucket(url, bucketName, username, password string) (*gocb.Bucket, error) {
+func (d *MutationDiffer) openBucket(url, bucketName, username, password string) (*gocb.Bucket, error) {
 	cluster, err := gocb.Connect(url)
 	if err != nil {
 		fmt.Printf("Error connecting to cluster %v. err=%v\n", url, err)

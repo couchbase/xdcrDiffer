@@ -238,12 +238,14 @@ func (differ *FilesDiffer) asyncLoad(attr *FileAttributes, err *error) {
 	*err = attr.LoadFileIntoBuffer()
 }
 
-func (differ *FilesDiffer) diffSorted() bool {
+func (differ *FilesDiffer) diffSorted() [][]byte {
+	diffKeys := make([][]byte, 0)
+
 	file1Len := len(differ.file1.sortedEntries)
 	file2Len := len(differ.file2.sortedEntries)
 
 	if file1Len == 0 && file2Len == 0 {
-		return true
+		return diffKeys
 	}
 
 	var i int
@@ -265,15 +267,18 @@ func (differ *FilesDiffer) diffSorted() bool {
 				onePair[0] = item1
 				onePair[1] = item2
 				differ.BothExistButMismatch = append(differ.BothExistButMismatch, &onePair)
+				diffKeys = append(diffKeys, []byte(item1.Key))
 				i++
 				j++
 			} else if keyCompare < 0 {
 				// Like "a" < "b", where a is 1 and b is 2
 				differ.MissingFromFile2 = append(differ.MissingFromFile2, item1)
+				diffKeys = append(diffKeys, []byte(item1.Key))
 				i++
 			} else {
 				// "b" > "a", leading to keyCompare > 0
 				differ.MissingFromFile1 = append(differ.MissingFromFile1, item2)
+				diffKeys = append(diffKeys, []byte(item2.Key))
 				j++
 			}
 		}
@@ -282,18 +287,20 @@ func (differ *FilesDiffer) diffSorted() bool {
 	for ; i < file1Len; i++ {
 		// This means that all the rest of the entries in file1 are missing from file2
 		differ.MissingFromFile2 = append(differ.MissingFromFile2, differ.file1.sortedEntries[i])
+		diffKeys = append(diffKeys, []byte(differ.file1.sortedEntries[i].Key))
 	}
 
 	for ; j < file2Len; j++ {
 		// This means that all the rest of the entries in file2 are missing from file1
 		differ.MissingFromFile1 = append(differ.MissingFromFile1, differ.file2.sortedEntries[j])
+		diffKeys = append(diffKeys, []byte(differ.file2.sortedEntries[i].Key))
 	}
 
-	return len(differ.BothExistButMismatch) == 0 && len(differ.MissingFromFile1) == 0 && len(differ.MissingFromFile2) == 0
+	return diffKeys
 }
 
 // Returns true if they are the same
-func (differ *FilesDiffer) Diff() bool {
+func (differ *FilesDiffer) Diff() [][]byte {
 	differ.dataLoadWg.Add(1)
 	go differ.asyncLoad(&differ.file1, &differ.err1)
 	differ.dataLoadWg.Add(1)

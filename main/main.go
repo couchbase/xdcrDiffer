@@ -112,8 +112,9 @@ func main() {
 
 	generateDataFiles()
 
-	diffDataFiles()
+	diffKeys := diffDataFiles()
 
+	verifyDiffKeys(diffKeys)
 }
 
 func generateDataFiles() {
@@ -150,9 +151,19 @@ func generateDataFiles() {
 	}
 }
 
-func diffDataFiles() {
+func diffDataFiles() [][]byte {
 	differDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBuckets))
-	differDriver.Run()
+	return differDriver.Run()
+}
+
+func verifyDiffKeys(diffKeys [][]byte) {
+	fmt.Printf("diffKeys=%v\n", diffKeys)
+	if len(diffKeys) > 0 {
+		differ := differ.NewMutationDiffer(options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, diffKeys)
+		differ.Diff()
+	} else {
+		fmt.Printf("Skipping mutation diff since no diff has been identified\n")
+	}
 }
 
 func startDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfWorkers, numberOfBuckets uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool *fdp.FdPool) (*dcp.DcpClient, error) {

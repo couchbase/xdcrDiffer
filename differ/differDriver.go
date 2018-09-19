@@ -22,6 +22,8 @@ type DifferDriver struct {
 	numberOfWorkers int
 	numberOfBuckets int
 	waitGroup       *sync.WaitGroup
+	diffKeyList     [][]byte
+	stateLock       *sync.RWMutex
 }
 
 func NewDifferDriver(sourceFileDir, targetFileDir string, numberOfWorkers, numberOfBuckets int) *DifferDriver {
@@ -31,10 +33,12 @@ func NewDifferDriver(sourceFileDir, targetFileDir string, numberOfWorkers, numbe
 		numberOfWorkers: numberOfWorkers,
 		numberOfBuckets: numberOfBuckets,
 		waitGroup:       &sync.WaitGroup{},
+		diffKeyList:     make([][]byte, 0),
+		stateLock:       &sync.RWMutex{},
 	}
 }
 
-func (dr *DifferDriver) Run() {
+func (dr *DifferDriver) Run() [][]byte {
 	loadDistribution := utils.BalanceLoad(dr.numberOfWorkers, base.NumerOfVbuckets)
 	for i := 0; i < dr.numberOfWorkers; i++ {
 		lowIndex := loadDistribution[i][0]
@@ -45,14 +49,29 @@ func (dr *DifferDriver) Run() {
 		}
 
 		dr.waitGroup.Add(1)
-		differHandler := NewDifferHandler(i, dr.sourceFileDir, dr.targetFileDir, vbList, dr.numberOfBuckets, dr.waitGroup)
+		differHandler := NewDifferHandler(dr, i, dr.sourceFileDir, dr.targetFileDir, vbList, dr.numberOfBuckets, dr.waitGroup)
 		go differHandler.run()
 	}
 
 	dr.waitGroup.Wait()
+
+	return dr.getDiffKeys()
+}
+
+func (dr *DifferDriver) addDiffKeys(diffKeys [][]byte) {
+	dr.stateLock.Lock()
+	defer dr.stateLock.Unlock()
+	dr.diffKeyList = append(dr.diffKeyList, diffKeys...)
+}
+
+func (dr *DifferDriver) getDiffKeys() [][]byte {
+	dr.stateLock.RLock()
+	defer dr.stateLock.RUnlock()
+	return dr.diffKeyList
 }
 
 type DifferHandler struct {
+	driver          *DifferDriver
 	index           int
 	sourceFileDir   string
 	targetFileDir   string
@@ -61,8 +80,9 @@ type DifferHandler struct {
 	waitGroup       *sync.WaitGroup
 }
 
-func NewDifferHandler(index int, sourceFileDir, targetFileDir string, vbList []uint16, numberOfBuckets int, waitGroup *sync.WaitGroup) *DifferHandler {
+func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFileDir string, vbList []uint16, numberOfBuckets int, waitGroup *sync.WaitGroup) *DifferHandler {
 	return &DifferHandler{
+		driver:          driver,
 		index:           index,
 		sourceFileDir:   sourceFileDir,
 		targetFileDir:   targetFileDir,
@@ -83,9 +103,10 @@ func (dh *DifferHandler) run() {
 			sourceFileName := utils.GetFileName(dh.sourceFileDir, vbno, bucketIndex)
 			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex)
 			filesDiffer := NewFilesDiffer(sourceFileName, targetFileName)
-			same := filesDiffer.Diff()
-			if !same {
+			diffKeys := filesDiffer.Diff()
+			if len(diffKeys) > 0 {
 				filesDiffer.PrettyPrintResult()
+				dh.driver.addDiffKeys(diffKeys)
 			}
 		}
 	}
