@@ -47,7 +47,7 @@ func NewCheckpointManager(checkpointFileDir, oldCheckpointFileName, newCheckpoin
 	}
 
 	var vbno uint16
-	for vbno = 0; vbno < base.NumerOfVbuckets; vbno++ {
+	for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
 		cm.seqnoMap[vbno] = &SeqnoWithLock{}
 		cm.snapshots[vbno] = &Snapshot{}
 	}
@@ -99,7 +99,7 @@ func (cm *CheckpointManager) reportStatus() {
 func (cm *CheckpointManager) reportStatusOnce() {
 	var vbno uint16
 	var sum uint64
-	for vbno = 0; vbno < base.NumerOfVbuckets; vbno++ {
+	for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
 		sum += cm.seqnoMap[vbno].getSeqno()
 	}
 	fmt.Printf("%v processed %v mutations\n", cm.clusterName, sum)
@@ -139,7 +139,7 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() (map[uint16]uint64, error
 	if !cm.completeBySeqno {
 		// set endSeqno to maxInt
 		var vbno uint16
-		for vbno = 0; vbno < base.NumerOfVbuckets; vbno++ {
+		for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
 			endSeqnoMap[vbno] = 0xFFFFFFFFFFFFFFFF
 		}
 	}
@@ -163,7 +163,7 @@ func (cm *CheckpointManager) setStartVBTS(endSeqnoMap map[uint16]uint64) error {
 		}
 	} else {
 		var vbno uint16
-		for vbno = 0; vbno < base.NumerOfVbuckets; vbno++ {
+		for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
 			// if we are not loading checkpoints, it is ok to leave all fields in Checkpoint with default values, 0
 			cm.startVBTS[vbno] = &VBTS{
 				Checkpoint: &Checkpoint{},
@@ -200,7 +200,7 @@ func (cm *CheckpointManager) loadCheckpoints() (*CheckpointDoc, error) {
 		return nil, err
 	}
 
-	if len(checkpointDoc.Checkpoints) < base.NumerOfVbuckets {
+	if len(checkpointDoc.Checkpoints) < base.NumberOfVbuckets {
 		return nil, fmt.Errorf("checkpoint file %v has less than 1024 vbuckets.", cm.oldCheckpointFileName)
 	}
 
@@ -222,7 +222,7 @@ func (cm *CheckpointManager) SaveCheckpoint() error {
 	}
 
 	var vbno uint16
-	for vbno = 0; vbno < base.NumerOfVbuckets; vbno++ {
+	for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
 		vbuuid := cm.vbuuidMap[vbno]
 		seqno := cm.seqnoMap[vbno].getSeqno()
 		var snapshotStartSeqno uint64

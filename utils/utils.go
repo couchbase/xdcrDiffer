@@ -74,7 +74,7 @@ func BalanceLoad(num_of_worker int, num_of_load int) [][]int {
 
 func ParseHighSeqnoStat(statsMap map[string]map[string]string, highSeqnoMap map[uint16]uint64, vbuuidMap map[uint16]uint64, getHighSeqno bool) error {
 	for _, statsMapPerServer := range statsMap {
-		for vbno := 0; vbno < base.NumerOfVbuckets; vbno++ {
+		for vbno := 0; vbno < base.NumberOfVbuckets; vbno++ {
 			uuidKey := fmt.Sprintf(base.VbucketUuidStatsKey, vbno)
 			uuidStr, ok := statsMapPerServer[uuidKey]
 			if ok && uuidStr != "" {
@@ -103,13 +103,13 @@ func ParseHighSeqnoStat(statsMap map[string]map[string]string, highSeqnoMap map[
 		}
 	}
 
-	if len(vbuuidMap) != base.NumerOfVbuckets {
+	if len(vbuuidMap) != base.NumberOfVbuckets {
 		err := fmt.Errorf("did not get all vb uuid. len(vbuuidMap) =%v\n", len(vbuuidMap))
 		fmt.Printf("%v\n", err)
 		return err
 	}
 
-	if getHighSeqno && len(highSeqnoMap) != base.NumerOfVbuckets {
+	if getHighSeqno && len(highSeqnoMap) != base.NumberOfVbuckets {
 		err := fmt.Errorf("did not get all high seqnos. len(highSeqnoMap) =%v\n", len(highSeqnoMap))
 		fmt.Printf("%v\n", err)
 		return err

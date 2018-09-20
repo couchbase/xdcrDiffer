@@ -102,6 +102,7 @@ func (dh *DcpHandler) cleanup() {
 				fmt.Printf("Cannot find bucket for vbno %v and index %v at cleanup\n", vbno, i)
 				continue
 			}
+			fmt.Printf("%v DcpHandler closing bucket %v\n", dh.dcpClient.Name, i)
 			bucket.close()
 		}
 	}
@@ -246,7 +247,10 @@ func (b *Bucket) close() {
 		fmt.Printf("Error flushing to file %v at bucket close err=%v\n", b.fileName, err)
 	}
 	if b.fdPoolCb != nil {
-		b.closeOp()
+		err = b.closeOp()
+		if err != nil {
+			fmt.Printf("Error closing file %v.  err=%v\n", b.fileName, err)
+		}
 	} else {
 		err = b.file.Close()
 		if err != nil {

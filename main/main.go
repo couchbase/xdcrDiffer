@@ -110,11 +110,40 @@ func main() {
 
 	fmt.Printf("tool started\n")
 
+	if err := cleanUpAndSetup(); err != nil {
+		fmt.Printf("Unable to clean and set up directory structure: %v\n", err)
+		os.Exit(1)
+	}
+
 	generateDataFiles()
 
 	diffKeys := diffDataFiles()
 
 	verifyDiffKeys(diffKeys)
+}
+
+func cleanUpAndSetup() error {
+	err := os.RemoveAll(options.sourceFileDir)
+	if err != nil {
+		fmt.Errorf("Error removing sourceFileDir: %v\n", err)
+		return err
+	}
+	err = os.RemoveAll(options.targetFileDir)
+	if err != nil {
+		fmt.Errorf("Error removing targetFileDir: %v\n", err)
+		return err
+	}
+	err = os.MkdirAll(options.sourceFileDir, 0777)
+	if err != nil {
+		fmt.Errorf("Error removing targetFileDir: %v\n", err)
+		return err
+	}
+	err = os.MkdirAll(options.targetFileDir, 0777)
+	if err != nil {
+		fmt.Errorf("Error removing targetFileDir: %v\n", err)
+		return err
+	}
+	return nil
 }
 
 func generateDataFiles() {

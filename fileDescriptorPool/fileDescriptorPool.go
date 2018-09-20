@@ -136,6 +136,10 @@ func (fd *internalFd) InitOpen(readOnly bool) (err error) {
 		case *fd.requestOpenChan <- fd:
 			// Got permission to open and stay open
 			err = fd.open(readOnly)
+			if err != nil {
+				fmt.Printf("Error opening file %v - %v\n", fd.fileName, err)
+				<-*fd.requestOpenChan
+			}
 		default:
 			// Hit the max limit so don't keep it open
 			err = fmt.Errorf("Not opened")

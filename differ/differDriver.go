@@ -47,7 +47,7 @@ func NewDifferDriver(sourceFileDir, targetFileDir string, numberOfWorkers, numbe
 }
 
 func (dr *DifferDriver) Run() [][]byte {
-	loadDistribution := utils.BalanceLoad(dr.numberOfWorkers, base.NumerOfVbuckets)
+	loadDistribution := utils.BalanceLoad(dr.numberOfWorkers, base.NumberOfVbuckets)
 	for i := 0; i < dr.numberOfWorkers; i++ {
 		lowIndex := loadDistribution[i][0]
 		highIndex := loadDistribution[i][1]

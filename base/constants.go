@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const NumerOfVbuckets = 1024
+const NumberOfVbuckets = 1024
 const DcpHandlerChanSize = 100000
 const FileNamePrefix = "diffTool"
 const FileNameDelimiter = "_"
