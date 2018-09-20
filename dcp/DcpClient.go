@@ -35,14 +35,14 @@ type DcpClient struct {
 	dcpHandlers       []*DcpHandler
 	vbHandlerMap      map[uint16]*DcpHandler
 	checkpointManager *CheckpointManager
-	fdPool            *fdp.FdPool
+	fdPool            fdp.FdPoolIface
 	// value = true if processing on the vb has been completed
 	vbState   map[uint16]bool
 	stopped   bool
 	stateLock sync.RWMutex
 }
 
-func NewDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfWorkers, numberOfBuckets int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool *fdp.FdPool) *DcpClient {
+func NewDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfWorkers, numberOfBuckets int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface) *DcpClient {
 	return &DcpClient{
 		checkpointManager: NewCheckpointManager(checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, name, bucketName, completeBySeqno),
 		Name:              name,

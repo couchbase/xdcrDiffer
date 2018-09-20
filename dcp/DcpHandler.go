@@ -33,10 +33,10 @@ type DcpHandler struct {
 	waitGrp           sync.WaitGroup
 	finChan           chan bool
 	bucketMap         map[uint16]map[int]*Bucket
-	fdPool            *fdp.FdPool
+	fdPool            fdp.FdPoolIface
 }
 
-func NewDcpHandler(dcpClient *DcpClient, checkpointManager *CheckpointManager, fileDir string, index int, vbList []uint16, numberOfBuckets int, fdPool *fdp.FdPool) (*DcpHandler, error) {
+func NewDcpHandler(dcpClient *DcpClient, checkpointManager *CheckpointManager, fileDir string, index int, vbList []uint16, numberOfBuckets int, fdPool fdp.FdPoolIface) (*DcpHandler, error) {
 	if len(vbList) == 0 {
 		return nil, fmt.Errorf("vbList is empty for handler %v", index)
 	}
@@ -177,7 +177,7 @@ type Bucket struct {
 	closeOp  func() error
 }
 
-func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool *fdp.FdPool) (*Bucket, error) {
+func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool fdp.FdPoolIface) (*Bucket, error) {
 	fileName := utils.GetFileName(fileDir, vbno, bucketIndex)
 	var cb fdp.FileOp
 	var closeOp func() error

@@ -122,7 +122,7 @@ func generateDataFiles() {
 	errChan := make(chan error, 1)
 	waitGroup := &sync.WaitGroup{}
 
-	var fileDescPool *fdp.FdPool
+	var fileDescPool fdp.FdPoolIface
 	if options.numberOfFileDesc > 0 {
 		fileDescPool = fdp.NewFileDescriptorPool(int(options.numberOfFileDesc))
 	}
@@ -166,7 +166,7 @@ func verifyDiffKeys(diffKeys [][]byte) {
 	}
 }
 
-func startDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfWorkers, numberOfBuckets uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool *fdp.FdPool) (*dcp.DcpClient, error) {
+func startDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfWorkers, numberOfBuckets uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface) (*dcp.DcpClient, error) {
 	waitGroup.Add(1)
 	dcpClient := dcp.NewDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, int(numberOfWorkers), int(numberOfBuckets), errChan, waitGroup, completeBySeqno, fdPool)
 	err := dcpClient.Start()
