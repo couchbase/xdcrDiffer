@@ -71,12 +71,6 @@ func (c *DcpClient) Start() error {
 		return err
 	}
 
-	// checkpointManager needs c.cluster and needs to be initialized after DcpClient initialization
-	err = c.initializeAndStartCheckpointManager()
-	if err != nil {
-		return err
-	}
-
 	// openStreams() needs to be called after checkpointManager initialization
 	return c.openStreams()
 }
@@ -133,16 +127,30 @@ func (c *DcpClient) hasStopped() bool {
 func (c *DcpClient) initialize() error {
 	err := c.initializeCluster()
 	if err != nil {
+		fmt.Println("Error initializing cluster")
 		return err
 	}
 
 	err = c.initializeBucket()
 	if err != nil {
+		fmt.Println("Error initializing bucket")
 		return err
 	}
 
-	return c.initializeDcpHandlers()
+	err = c.initializeDcpHandlers()
+	if err != nil {
+		fmt.Println("Error initializing DCP Handlers")
+		return err
+	}
 
+	// checkpointManager needs c.cluster and needs to be initialized after DcpClient initialization
+	err = c.initializeAndStartCheckpointManager()
+	if err != nil {
+		fmt.Println("Error initializing ckpt mgr")
+		return err
+	}
+
+	return nil
 }
 
 func (c *DcpClient) initializeAndStartCheckpointManager() error {

@@ -16,7 +16,8 @@ import (
 )
 
 type FdPoolIface interface {
-	RegisterFileHandle(fileName string) (WriteFileCb, error)
+	RegisterFileHandle(fileName string) (FileOp, FileOp, error) // Read, Write, err
+	RegisterReadOnlyFileHandle(fileName string) (FileOp, error) // Read, err
 	DeRegisterFileHandle(fileName string) error
 }
 
@@ -27,8 +28,8 @@ const (
 	Open   State = iota
 )
 
-// Returns bytes written/appended, err
-type WriteFileCb func([]byte) (int, error)
+// Returns bytes written/appended/read, err
+type FileOp func([]byte) (int, error)
 
 type FdPool struct {
 	mtx    sync.Mutex
@@ -53,7 +54,7 @@ type internalFd struct {
 	wg sync.WaitGroup
 }
 
-func NewFileDescriptorPool(maxFds uint64) *FdPool {
+func NewFileDescriptorPool(maxFds int) *FdPool {
 	pool := &FdPool{
 		fdMap:        make(map[string]*internalFd),
 		fdsInUseChan: make(chan *internalFd, maxFds),
@@ -62,10 +63,37 @@ func NewFileDescriptorPool(maxFds uint64) *FdPool {
 	return pool
 }
 
-func (fdp *FdPool) RegisterFileHandle(fileName string) (WriteFileCb, error) {
+func (fdp *FdPool) RegisterFileHandle(fileName string) (FileOp, FileOp, error) {
 	fdp.mtx.Lock()
 	defer fdp.mtx.Unlock()
 
+	ifd, err := fdp.registerInternalNoLock(fileName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Try to open so we can see if we hit the limit - if so sys will balk, no need for error return
+	ifd.InitOpen(false /*readonly*/)
+
+	return ifd.Read, ifd.Write, nil
+}
+
+func (fdp *FdPool) RegisterReadOnlyFileHandle(fileName string) (FileOp, error) {
+	fdp.mtx.Lock()
+	defer fdp.mtx.Unlock()
+
+	ifd, err := fdp.registerInternalNoLock(fileName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Try to open so we can see if we hit the limit - if so sys will balk, no need for error return
+	ifd.InitOpen(true /*readonly*/)
+
+	return ifd.Read, nil
+}
+
+func (fdp *FdPool) registerInternalNoLock(fileName string) (*internalFd, error) {
 	if _, ok := fdp.fdMap[fileName]; ok {
 		return nil, fmt.Errorf("FileName %v is already registered", fileName)
 	}
@@ -79,10 +107,7 @@ func (fdp *FdPool) RegisterFileHandle(fileName string) (WriteFileCb, error) {
 	}
 	fdp.fdMap[fileName] = ifd
 
-	// Try to open so we can see if we hit the limit
-	ifd.InitOpen()
-
-	return ifd.Write, nil
+	return ifd, nil
 }
 
 func (fdp *FdPool) DeRegisterFileHandle(fileName string) error {
@@ -97,7 +122,7 @@ func (fdp *FdPool) DeRegisterFileHandle(fileName string) error {
 	return nil
 }
 
-func (fd *internalFd) InitOpen() (err error) {
+func (fd *internalFd) InitOpen(readOnly bool) (err error) {
 	fd.mtx.Lock()
 	defer fd.mtx.Unlock()
 
@@ -106,7 +131,7 @@ func (fd *internalFd) InitOpen() (err error) {
 		select {
 		case *fd.requestOpenChan <- fd:
 			// Got permission to open and stay open
-			err = fd.open()
+			err = fd.open(readOnly)
 		default:
 			err = fmt.Errorf("Not opened")
 		}
@@ -114,7 +139,7 @@ func (fd *internalFd) InitOpen() (err error) {
 	return
 }
 
-func (fd *internalFd) Write(input []byte) (bytesWritten int, err error) {
+func (fd *internalFd) readWriteOpInternal(input []byte, read bool) (bytes int, err error) {
 	fd.mtx.Lock()
 	defer fd.mtx.Unlock()
 
@@ -123,29 +148,50 @@ func (fd *internalFd) Write(input []byte) (bytesWritten int, err error) {
 		select {
 		case *fd.requestOpenChan <- fd:
 			// Got permission to open and stay open
-			bytesWritten, err = fd.openAndWrite(input)
+			if read {
+				bytes, err = fd.openAndRead(input)
+			} else {
+				bytes, err = fd.openAndWrite(input)
+			}
 			if err != nil {
-				// TODO - need to clean up go routine
 				return
 			}
 		default:
 			*fd.requestRelease <- true // This will notify and block until someone frees up
 			*fd.requestOpenChan <- fd
-			bytesWritten, err = fd.openAndWrite(input)
+			if read {
+				bytes, err = fd.openAndRead(input)
+			} else {
+				bytes, err = fd.openAndWrite(input)
+			}
 			if err != nil {
-				// TODO - need to clean up go routine
 				return
 			}
 		}
 	} else {
-		bytesWritten, err = fd.fileHandle.Write(input)
+		if read {
+			bytes, err = fd.fileHandle.Read(input)
+		} else {
+			bytes, err = fd.fileHandle.Write(input)
+		}
 	}
-
 	return
 }
 
-func (fd *internalFd) open() (err error) {
-	fd.fileHandle, err = os.OpenFile(fd.fileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+func (fd *internalFd) Read(input []byte) (int, error) {
+	return fd.readWriteOpInternal(input, true /*read*/)
+}
+
+func (fd *internalFd) Write(input []byte) (bytesWritten int, err error) {
+	return fd.readWriteOpInternal(input, false /*read*/)
+}
+
+func (fd *internalFd) open(readonly bool) (err error) {
+	if readonly {
+		fd.fileHandle, err = os.OpenFile(fd.fileName, os.O_RDONLY, 0444)
+	} else {
+		fd.fileHandle, err = os.OpenFile(fd.fileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	}
 	if err != nil {
 		return
 	}
@@ -155,17 +201,28 @@ func (fd *internalFd) open() (err error) {
 	return
 }
 
+// Mtx should be held
 func (fd *internalFd) openAndWrite(input []byte) (int, error) {
 	var err error
-	fd.state = Open
-
-	err = fd.open()
+	err = fd.open(false /*readonly*/)
 	if err != nil {
 		return 0, err
 	}
 
-	bytesWritten, err := fd.fileHandle.Write(input)
-	return bytesWritten, err
+	fd.state = Open
+	return fd.fileHandle.Write(input)
+}
+
+// Mtx should be held
+func (fd *internalFd) openAndRead(requested []byte) (int, error) {
+	var err error
+	err = fd.open(true /*readonly*/)
+	if err != nil {
+		return 0, err
+	}
+
+	fd.state = Open
+	return fd.fileHandle.Read(requested)
 }
 
 // External API only

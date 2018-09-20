@@ -19,12 +19,12 @@ func TestFD(t *testing.T) {
 	defer os.Remove(testFile2)
 
 	//	fmt.Printf("Registering file1\n")
-	cb, err := fdp.RegisterFileHandle(testFile)
+	_, cb, err := fdp.RegisterFileHandle(testFile)
 	assert.Nil(err)
 	assert.NotNil(cb)
 
 	//	fmt.Printf("Registering file2\n")
-	cb2, err := fdp.RegisterFileHandle(testFile2)
+	_, cb2, err := fdp.RegisterFileHandle(testFile2)
 	assert.Nil(err)
 	assert.NotNil(cb2)
 

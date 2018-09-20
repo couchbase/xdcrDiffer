@@ -124,7 +124,7 @@ func generateDataFiles() {
 
 	var fileDescPool *fdp.FdPool
 	if options.numberOfFileDesc > 0 {
-		fileDescPool = fdp.NewFileDescriptorPool(options.numberOfFileDesc)
+		fileDescPool = fdp.NewFileDescriptorPool(int(options.numberOfFileDesc))
 	}
 
 	sourceDcpClient, err := startDcpClient(base.SourceClusterName, options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfWorkersForDcp, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
@@ -152,7 +152,7 @@ func generateDataFiles() {
 }
 
 func diffDataFiles() [][]byte {
-	differDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBuckets))
+	differDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBuckets), int(options.numberOfFileDesc))
 	return differDriver.Run()
 }
 

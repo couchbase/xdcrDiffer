@@ -12,6 +12,7 @@ package differ
 import (
 	"fmt"
 	"github.com/nelio2k/xdcrDiffer/base"
+	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"github.com/nelio2k/xdcrDiffer/utils"
 	"sync"
 )
@@ -24,9 +25,15 @@ type DifferDriver struct {
 	waitGroup       *sync.WaitGroup
 	diffKeyList     [][]byte
 	stateLock       *sync.RWMutex
+	fileDescPool    *fdp.FdPool
 }
 
-func NewDifferDriver(sourceFileDir, targetFileDir string, numberOfWorkers, numberOfBuckets int) *DifferDriver {
+func NewDifferDriver(sourceFileDir, targetFileDir string, numberOfWorkers, numberOfBuckets int, numberOfFds int) *DifferDriver {
+	var fdPool *fdp.FdPool
+	if numberOfFds > 0 {
+		fdPool = fdp.NewFileDescriptorPool(numberOfFds)
+	}
+
 	return &DifferDriver{
 		sourceFileDir:   sourceFileDir,
 		targetFileDir:   targetFileDir,
@@ -35,6 +42,7 @@ func NewDifferDriver(sourceFileDir, targetFileDir string, numberOfWorkers, numbe
 		waitGroup:       &sync.WaitGroup{},
 		diffKeyList:     make([][]byte, 0),
 		stateLock:       &sync.RWMutex{},
+		fileDescPool:    fdPool,
 	}
 }
 

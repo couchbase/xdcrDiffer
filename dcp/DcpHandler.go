@@ -173,13 +173,13 @@ type Bucket struct {
 	file     *os.File
 	fileName string
 
-	fdPoolCb fdp.WriteFileCb
+	fdPoolCb fdp.FileOp
 	closeOp  func() error
 }
 
 func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool *fdp.FdPool) (*Bucket, error) {
 	fileName := utils.GetFileName(fileDir, vbno, bucketIndex)
-	var cb fdp.WriteFileCb
+	var cb fdp.FileOp
 	var closeOp func() error
 	var err error
 	var file *os.File
@@ -190,7 +190,7 @@ func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool *fdp.FdPool)
 			return nil, err
 		}
 	} else {
-		cb, err = fdPool.RegisterFileHandle(fileName)
+		_, cb, err = fdPool.RegisterFileHandle(fileName)
 		if err != nil {
 			return nil, err
 		}
