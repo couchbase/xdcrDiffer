@@ -300,7 +300,7 @@ func (differ *FilesDiffer) diffSorted() [][]byte {
 }
 
 // Returns true if they are the same
-func (differ *FilesDiffer) Diff() [][]byte {
+func (differ *FilesDiffer) Diff() (bool, [][]byte) {
 	differ.dataLoadWg.Add(1)
 	go differ.asyncLoad(&differ.file1, &differ.err1)
 	differ.dataLoadWg.Add(1)
@@ -314,7 +314,8 @@ func (differ *FilesDiffer) Diff() [][]byte {
 		fmt.Printf("Error when loading file2 contents: %v\n", differ.err2)
 	}
 
-	return differ.diffSorted()
+	diffKeys := differ.diffSorted()
+	return len(diffKeys) == 0, diffKeys
 }
 
 func (differ *FilesDiffer) PrettyPrintResult() {

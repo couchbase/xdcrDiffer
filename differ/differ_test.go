@@ -222,7 +222,7 @@ func TestLoadSameFile(t *testing.T) {
 	differ := NewFilesDiffer(file1, file2)
 	assert.NotNil(differ)
 
-	result := differ.Diff()
+	result, _ := differ.Diff()
 
 	assert.True(result)
 	differ.PrettyPrintResult()
@@ -247,7 +247,7 @@ func TestLoadMismatchedFiles(t *testing.T) {
 	differ := NewFilesDiffer(file1, file2)
 	assert.NotNil(differ)
 
-	result := differ.Diff()
+	result, _ := differ.Diff()
 
 	assert.False(result)
 
@@ -288,7 +288,7 @@ func TestLoadMismatchedFilesAndUneven(t *testing.T) {
 	differ := NewFilesDiffer(file1, file2)
 	assert.NotNil(differ)
 
-	result := differ.Diff()
+	result, _ := differ.Diff()
 
 	assert.False(result)
 

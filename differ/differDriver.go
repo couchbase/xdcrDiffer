@@ -111,8 +111,8 @@ func (dh *DifferHandler) run() {
 			sourceFileName := utils.GetFileName(dh.sourceFileDir, vbno, bucketIndex)
 			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex)
 			filesDiffer := NewFilesDiffer(sourceFileName, targetFileName)
-			diffKeys := filesDiffer.Diff()
-			if len(diffKeys) > 0 {
+			match, diffKeys := filesDiffer.Diff()
+			if !match {
 				filesDiffer.PrettyPrintResult()
 				dh.driver.addDiffKeys(diffKeys)
 			}
