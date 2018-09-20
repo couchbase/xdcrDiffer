@@ -112,7 +112,13 @@ func (dh *DifferHandler) run() {
 		for bucketIndex := 0; bucketIndex < dh.numberOfBuckets; bucketIndex++ {
 			sourceFileName := utils.GetFileName(dh.sourceFileDir, vbno, bucketIndex)
 			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex)
-			filesDiffer := NewFilesDiffer(sourceFileName, targetFileName)
+			filesDiffer, err := NewFilesDifferWithFDPool(sourceFileName, targetFileName, dh.fileDescPool)
+			if err != nil {
+				// Most likely FD overrun, program should exit. Print a msg just in case
+				fmt.Printf("Creating file differ for files %v and %v resulted in error: %v\n",
+					sourceFileName, targetFileName, err)
+				return
+			}
 			match, diffKeys := filesDiffer.Diff()
 			if !match {
 				filesDiffer.PrettyPrintResult()

@@ -13,6 +13,7 @@ import (
 	"crypto/sha512"
 	"encoding/binary"
 	"fmt"
+	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"github.com/stretchr/testify/assert"
 	"io/ioutil"
 	"math/rand"
@@ -299,4 +300,30 @@ func TestLoadMismatchedFilesAndUneven(t *testing.T) {
 	assert.Equal(extraEntries, len(differ.MissingFromFile2))
 	differ.PrettyPrintResult()
 	fmt.Println("============== Test case start: TestLoadMismatchedFilesAndUneven =================")
+}
+
+func TestLoadSameFileWPool(t *testing.T) {
+	fmt.Println("============== Test case start: TestLoadSameFileWPool =================")
+	assert := assert.New(t)
+
+	fileDescPool := fdp.NewFileDescriptorPool(50)
+
+	file1 := "/tmp/test1.bin"
+	file2 := "/tmp/test2.bin"
+	defer os.Remove(file1)
+	defer os.Remove(file2)
+
+	entries := 10000
+
+	err := genSameFiles(entries, file1, file2)
+	assert.Equal(nil, err)
+
+	differ, err := NewFilesDifferWithFDPool(file1, file2, fileDescPool)
+	assert.NotNil(differ)
+	assert.Nil(err)
+
+	result, _ := differ.Diff()
+
+	assert.True(result)
+	fmt.Println("============== Test case end: TestLoadSameFileWPool =================")
 }
