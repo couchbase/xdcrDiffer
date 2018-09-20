@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"io"
 	"os"
 	"sort"
@@ -44,6 +45,8 @@ type FileAttributes struct {
 	name          string
 	entries       map[string]*oneEntry
 	sortedEntries []*oneEntry
+	readOp        fdp.FileOp
+	closeOp       func() error
 }
 
 func NewFileAttribute(fileName string) *FileAttributes {
@@ -115,60 +118,82 @@ func NewFilesDiffer(file1, file2 string) *FilesDiffer {
 	return differ
 }
 
-func getOneEntry(fileHandle *os.File) (*oneEntry, error) {
+func NewFilesDifferWithFDPool(file1, file2 string, fdPool fdp.FdPoolIface) (*FilesDiffer, error) {
+	var err error
+	differ := NewFilesDiffer(file1, file2)
+	if fdPool != nil {
+		differ.file1.readOp, err = fdPool.RegisterReadOnlyFileHandle(file1)
+		if err != nil {
+			return nil, err
+		}
+		differ.file1.closeOp = func() error {
+			return fdPool.DeRegisterFileHandle(file1)
+		}
+		differ.file2.readOp, err = fdPool.RegisterReadOnlyFileHandle(file2)
+		if err != nil {
+			return nil, err
+		}
+		differ.file2.closeOp = func() error {
+			return fdPool.DeRegisterFileHandle(file2)
+		}
+	}
+	return differ, nil
+}
+
+func getOneEntry(readOp fdp.FileOp) (*oneEntry, error) {
 	entry := &oneEntry{}
 
 	keyLenBytes := make([]byte, 2)
-	bytesRead, err := fileHandle.Read(keyLenBytes)
+	bytesRead, err := readOp(keyLenBytes)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read keyLen, bytes read: %v, err: %v", bytesRead, err)
 	}
 	entryKeyLen := binary.BigEndian.Uint16(keyLenBytes)
 
 	keyBytes := make([]byte, entryKeyLen)
-	bytesRead, err = fileHandle.Read(keyBytes)
+	bytesRead, err = readOp(keyBytes)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read key, bytes read: %v, err: %v", bytesRead, err)
 	}
 	entry.Key = string(keyBytes)
 
 	seqnoBytes := make([]byte, 8)
-	bytesRead, err = fileHandle.Read(seqnoBytes)
+	bytesRead, err = readOp(seqnoBytes)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read seqno, bytes read: %v, err: %v", bytesRead, err)
 	}
 	entry.Seqno = binary.BigEndian.Uint64(seqnoBytes)
 
 	revIdBytes := make([]byte, 8)
-	bytesRead, err = fileHandle.Read(revIdBytes)
+	bytesRead, err = readOp(revIdBytes)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read revIdBytes, bytes read: %v, err: %v", bytesRead, err)
 	}
 	entry.RevId = binary.BigEndian.Uint64(revIdBytes)
 
 	casBytes := make([]byte, 8)
-	bytesRead, err = fileHandle.Read(casBytes)
+	bytesRead, err = readOp(casBytes)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read casBytes, bytes read: %v, err: %v", bytesRead, err)
 	}
 	entry.Cas = binary.BigEndian.Uint64(casBytes)
 
 	flagBytes := make([]byte, 4)
-	bytesRead, err = fileHandle.Read(flagBytes)
+	bytesRead, err = readOp(flagBytes)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read flagsBytes, bytes read: %v, err: %v", bytesRead, err)
 	}
 	entry.Flags = binary.BigEndian.Uint32(flagBytes)
 
 	expiryBytes := make([]byte, 4)
-	bytesRead, err = fileHandle.Read(expiryBytes)
+	bytesRead, err = readOp(expiryBytes)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read expiryBytes, bytes read: %v, err: %v", bytesRead, err)
 	}
 	entry.Expiry = binary.BigEndian.Uint32(expiryBytes)
 
 	hashBytes := make([]byte, sha512.Size)
-	bytesRead, err = fileHandle.Read(hashBytes)
+	bytesRead, err = readOp(hashBytes)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read hashBytes, bytes read: %v, err: %v", bytesRead, err)
 	}
@@ -181,12 +206,12 @@ func (a ByKeyName) Len() int           { return len(a) }
 func (a ByKeyName) Swap(i, j int)      { *a[i], *a[j] = *a[j], *a[i] }
 func (a ByKeyName) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
-func (attr *FileAttributes) fillAndDedupEntries(fileHandle *os.File) error {
+func (attr *FileAttributes) fillAndDedupEntries() error {
 	var err error
 	var entry *oneEntry
 
 	for err == nil {
-		entry, err = getOneEntry(fileHandle)
+		entry, err = getOneEntry(attr.readOp)
 		if err != nil {
 			break
 		}
@@ -220,12 +245,17 @@ func (attr *FileAttributes) LoadFileIntoBuffer() error {
 	if len(attr.name) == 0 {
 		return fmt.Errorf("No file specified")
 	}
-	file, err := os.Open(attr.name)
-	defer file.Close()
-	if err != nil {
-		return err
+	if attr.readOp != nil && attr.closeOp != nil {
+		defer attr.closeOp()
+	} else {
+		file, err := os.Open(attr.name)
+		defer file.Close()
+		if err != nil {
+			return err
+		}
+		attr.readOp = file.Read
 	}
-	err = attr.fillAndDedupEntries(file)
+	err := attr.fillAndDedupEntries()
 	if err != nil {
 		return err
 	}
