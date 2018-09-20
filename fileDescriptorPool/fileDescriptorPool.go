@@ -15,6 +15,10 @@ import (
 	"sync"
 )
 
+/**
+ * A portable file descriptor pool that allows the caller to run file ops without worrying about
+ * going over the max number of open files
+ */
 type FdPoolIface interface {
 	RegisterFileHandle(fileName string) (FileOp, FileOp, error) // Read, Write, err
 	RegisterReadOnlyFileHandle(fileName string) (FileOp, error) // Read, err
@@ -118,10 +122,10 @@ func (fdp *FdPool) DeRegisterFileHandle(fileName string) error {
 	if fd, ok = fdp.fdMap[fileName]; !ok {
 		return fmt.Errorf("FileName %v has not been registered", fileName)
 	}
-	fd.Close()
-	return nil
+	return fd.Close()
 }
 
+// Used to open the file when initializing the pool, to make sure the specified max# is doable
 func (fd *internalFd) InitOpen(readOnly bool) (err error) {
 	fd.mtx.Lock()
 	defer fd.mtx.Unlock()
@@ -133,6 +137,7 @@ func (fd *internalFd) InitOpen(readOnly bool) (err error) {
 			// Got permission to open and stay open
 			err = fd.open(readOnly)
 		default:
+			// Hit the max limit so don't keep it open
 			err = fmt.Errorf("Not opened")
 		}
 	}
@@ -186,6 +191,7 @@ func (fd *internalFd) Write(input []byte) (bytesWritten int, err error) {
 	return fd.readWriteOpInternal(input, false /*read*/)
 }
 
+// Mtx needs to be held
 func (fd *internalFd) open(readonly bool) (err error) {
 	if readonly {
 		fd.fileHandle, err = os.OpenFile(fd.fileName, os.O_RDONLY, 0444)
@@ -226,10 +232,11 @@ func (fd *internalFd) openAndRead(requested []byte) (int, error) {
 }
 
 // External API only
-func (fd *internalFd) Close() {
+func (fd *internalFd) Close() error {
 	fd.exitChan <- true
 	fd.closeInternal()
 	fd.wg.Wait()
+	return nil
 }
 
 func (fd *internalFd) closeInternal() {
@@ -252,7 +259,7 @@ func (fd *internalFd) waitForClose() {
 		default:
 		}
 	case <-fd.exitChan:
-		// Exit path
+		// Exit path - no need for closeInternal() because this is only called by Close()
 		// Free up one fd from the max queue, if possible
 		select {
 		case <-*fd.requestOpenChan:
