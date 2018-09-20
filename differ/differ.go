@@ -271,8 +271,8 @@ func (differ *FilesDiffer) asyncLoad(attr *FileAttributes, err *error) {
 	*err = attr.LoadFileIntoBuffer()
 }
 
-func (differ *FilesDiffer) diffSorted() [][]byte {
-	diffKeys := make([][]byte, 0)
+func (differ *FilesDiffer) diffSorted() []string {
+	diffKeys := make([]string, 0)
 
 	file1Len := len(differ.file1.sortedEntries)
 	file2Len := len(differ.file2.sortedEntries)
@@ -300,18 +300,18 @@ func (differ *FilesDiffer) diffSorted() [][]byte {
 				onePair[0] = item1
 				onePair[1] = item2
 				differ.BothExistButMismatch = append(differ.BothExistButMismatch, &onePair)
-				diffKeys = append(diffKeys, []byte(item1.Key))
+				diffKeys = append(diffKeys, item1.Key)
 				i++
 				j++
 			} else if keyCompare < 0 {
 				// Like "a" < "b", where a is 1 and b is 2
 				differ.MissingFromFile2 = append(differ.MissingFromFile2, item1)
-				diffKeys = append(diffKeys, []byte(item1.Key))
+				diffKeys = append(diffKeys, item1.Key)
 				i++
 			} else {
 				// "b" > "a", leading to keyCompare > 0
 				differ.MissingFromFile1 = append(differ.MissingFromFile1, item2)
-				diffKeys = append(diffKeys, []byte(item2.Key))
+				diffKeys = append(diffKeys, item2.Key)
 				j++
 			}
 		}
@@ -320,20 +320,20 @@ func (differ *FilesDiffer) diffSorted() [][]byte {
 	for ; i < file1Len; i++ {
 		// This means that all the rest of the entries in file1 are missing from file2
 		differ.MissingFromFile2 = append(differ.MissingFromFile2, differ.file1.sortedEntries[i])
-		diffKeys = append(diffKeys, []byte(differ.file1.sortedEntries[i].Key))
+		diffKeys = append(diffKeys, differ.file1.sortedEntries[i].Key)
 	}
 
 	for ; j < file2Len; j++ {
 		// This means that all the rest of the entries in file2 are missing from file1
 		differ.MissingFromFile1 = append(differ.MissingFromFile1, differ.file2.sortedEntries[j])
-		diffKeys = append(diffKeys, []byte(differ.file2.sortedEntries[i].Key))
+		diffKeys = append(diffKeys, differ.file2.sortedEntries[i].Key)
 	}
 
 	return diffKeys
 }
 
 // Returns true if they are the same
-func (differ *FilesDiffer) Diff() (bool, [][]byte) {
+func (differ *FilesDiffer) Diff() ([]string, []byte) {
 	differ.dataLoadWg.Add(1)
 	go differ.asyncLoad(&differ.file1, &differ.err1)
 	differ.dataLoadWg.Add(1)
@@ -348,7 +348,13 @@ func (differ *FilesDiffer) Diff() (bool, [][]byte) {
 	}
 
 	diffKeys := differ.diffSorted()
-	return len(diffKeys) == 0, diffKeys
+
+	diffDetails, err := differ.ToJson()
+	if err != nil {
+		fmt.Printf("Error marshaling diff details. err=%v\n", err)
+		return diffKeys, nil
+	}
+	return diffKeys, diffDetails
 }
 
 func (differ *FilesDiffer) PrettyPrintResult() {
@@ -400,31 +406,4 @@ func (differ *FilesDiffer) ToJson() ([]byte, error) {
 	ret, err := json.Marshal(outputMap)
 
 	return ret, err
-}
-
-func (differ *FilesDiffer) OutputToJsonFile(fileName string) error {
-	var writeOp fdp.FileOp
-	var err error
-	if differ.fdPool != nil {
-		_, writeOp, err = differ.fdPool.RegisterFileHandle(fileName)
-		if err != nil {
-			return err
-		}
-		defer differ.fdPool.DeRegisterFileHandle(fileName)
-	} else {
-		fd, err := os.OpenFile(fileName, os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			return nil
-		}
-		defer fd.Close()
-		writeOp = fd.Write
-	}
-	bytes, err := differ.ToJson()
-	if err != nil {
-		return err
-	}
-
-	writeOp(bytes)
-
-	return nil
 }

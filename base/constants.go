@@ -29,6 +29,9 @@ const TargetCheckpointFileName = "TargetCheckpoint"
 const CheckpointFileBufferSize = 200000
 const SourceClusterName = "source"
 const TargetClusterName = "target"
+const DiffKeysFileName = "diffKeys"
+const DiffDetailsFileName = "diffDetails"
+const MutationDiffFileName = "mutationDiffDetails"
 
 // time to wait to stop processing of target cluster after processing of source cluster is completed
 var DelayBetweenSourceAndTarget time.Duration = 1 * time.Second

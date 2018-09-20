@@ -10,17 +10,20 @@
 package differ
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/couchbase/gocb"
+	"github.com/nelio2k/xdcrDiffer/base"
 	"github.com/nelio2k/xdcrDiffer/utils"
 	gocbcore "gopkg.in/couchbase/gocbcore.v7"
+	"io/ioutil"
+	"os"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-const NumberOfDiffWorkers = 1
 const KeyNotFoundErrMsg = "key not found"
 
 type MutationDiffer struct {
@@ -32,17 +35,22 @@ type MutationDiffer struct {
 	targetBucketName string
 	targetUserName   string
 	targetPassword   string
+	diffFileDir      string
+	numberOfWorkers  int
 
 	sourceBucket *gocb.Bucket
 	targetBucket *gocb.Bucket
 
-	// keys to do diff on
-	keys [][]byte
+	missingFromSource map[string]*gocbcore.GetMetaResult
+	missingFromTarget map[string]*gocbcore.GetMetaResult
+	diff              map[string][]*gocbcore.GetMetaResult
+	stateLock         *sync.RWMutex
 }
 
 type DifferWorker struct {
+	differ *MutationDiffer
 	// keys to do diff on
-	keys              [][]byte
+	keys              []string
 	sourceBucket      *gocb.Bucket
 	targetBucket      *gocb.Bucket
 	waitGroup         *sync.WaitGroup
@@ -58,44 +66,126 @@ func NewMutationDiffer(sourceUrl string,
 	targetBucketName string,
 	targetUserName string,
 	targetPassword string,
-	keys [][]byte) *MutationDiffer {
+	diffFileDir string,
+	numberOfWorkers int) *MutationDiffer {
 	return &MutationDiffer{
-		sourceUrl:        sourceUrl,
-		sourceBucketName: sourceBucketName,
-		sourceUserName:   sourceUserName,
-		sourcePassword:   sourcePassword,
-		targetUrl:        targetUrl,
-		targetBucketName: targetBucketName,
-		targetUserName:   targetUserName,
-		targetPassword:   targetPassword,
-		keys:             keys,
+		sourceUrl:         sourceUrl,
+		sourceBucketName:  sourceBucketName,
+		sourceUserName:    sourceUserName,
+		sourcePassword:    sourcePassword,
+		targetUrl:         targetUrl,
+		targetBucketName:  targetBucketName,
+		targetUserName:    targetUserName,
+		targetPassword:    targetPassword,
+		diffFileDir:       diffFileDir,
+		numberOfWorkers:   numberOfWorkers,
+		missingFromSource: make(map[string]*gocbcore.GetMetaResult),
+		missingFromTarget: make(map[string]*gocbcore.GetMetaResult),
+		diff:              make(map[string][]*gocbcore.GetMetaResult),
+		stateLock:         &sync.RWMutex{},
 	}
 }
 
-func (d *MutationDiffer) Diff() error {
-	err := d.initialize()
+func (d *MutationDiffer) Run() error {
+	diffKeys, err := d.loadDiffKeys()
 	if err != nil {
 		return err
 	}
 
-	loadDistribution := utils.BalanceLoad(NumberOfDiffWorkers, len(d.keys))
+	err = d.initialize()
+	if err != nil {
+		return err
+	}
+
+	loadDistribution := utils.BalanceLoad(d.numberOfWorkers, len(diffKeys))
 	waitGroup := &sync.WaitGroup{}
-	for i := 0; i < NumberOfDiffWorkers; i++ {
+	for i := 0; i < d.numberOfWorkers; i++ {
 		lowIndex := loadDistribution[i][0]
 		highIndex := loadDistribution[i][1]
+		if lowIndex == highIndex {
+			// skip workers with 0 load
+			continue
+		}
+		diffWorker := NewDifferWorker(d, d.sourceBucket, d.targetBucket, diffKeys[lowIndex:highIndex], waitGroup)
 		waitGroup.Add(1)
-		diffWorker := NewDifferWorker(d.sourceBucket, d.targetBucket, d.keys[lowIndex:highIndex], waitGroup)
-		sourceResults, targetResults := diffWorker.getResults()
-		diffWorker.diff(sourceResults, targetResults)
+		go diffWorker.run()
 	}
 
 	waitGroup.Wait()
 
+	d.writeDiff()
+
 	return nil
 }
 
-func NewDifferWorker(sourceBucket, targetBucket *gocb.Bucket, keys [][]byte, waitGroup *sync.WaitGroup) *DifferWorker {
+func (d *MutationDiffer) writeDiff() error {
+	diffBytes, err := d.getDiffBytes()
+	if err != nil {
+		return err
+	}
+
+	return d.writeDiffBytesToFile(diffBytes)
+}
+
+func (d *MutationDiffer) getDiffBytes() ([]byte, error) {
+	outputMap := map[string]interface{}{
+		"Mismatch":          d.diff,
+		"MissingFromSource": d.missingFromSource,
+		"MissingFromTarget": d.missingFromTarget,
+	}
+
+	return json.Marshal(outputMap)
+}
+
+func (d *MutationDiffer) writeDiffBytesToFile(diffBytes []byte) error {
+	diffFileName := d.diffFileDir + base.FileDirDelimiter + base.MutationDiffFileName
+	diffFile, err := os.OpenFile(diffFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
+	if err != nil {
+		return err
+	}
+
+	defer diffFile.Close()
+
+	_, err = diffFile.Write(diffBytes)
+	return err
+
+}
+
+func (d *MutationDiffer) loadDiffKeys() ([]string, error) {
+	diffKeysFileName := d.diffFileDir + base.FileDirDelimiter + base.DiffKeysFileName
+	diffKeysBytes, err := ioutil.ReadFile(diffKeysFileName)
+	if err != nil {
+		return nil, err
+	}
+
+	diffKeys := make([]string, 0)
+	err = json.Unmarshal(diffKeysBytes, &diffKeys)
+	if err != nil {
+		return nil, err
+	}
+	return diffKeys, nil
+}
+
+func (d *MutationDiffer) addDiff(missingFromSource map[string]*gocbcore.GetMetaResult,
+	missingFromTarget map[string]*gocbcore.GetMetaResult,
+	diff map[string][]*gocbcore.GetMetaResult) {
+	d.stateLock.Lock()
+	defer d.stateLock.Unlock()
+
+	for key, result := range missingFromSource {
+		d.missingFromSource[key] = result
+	}
+	for key, result := range missingFromTarget {
+		d.missingFromTarget[key] = result
+	}
+	for key, results := range diff {
+		d.diff[key] = results
+	}
+}
+
+func NewDifferWorker(differ *MutationDiffer, sourceBucket, targetBucket *gocb.Bucket, keys []string, waitGroup *sync.WaitGroup) *DifferWorker {
 	return &DifferWorker{
+		differ:       differ,
 		sourceBucket: sourceBucket,
 		targetBucket: targetBucket,
 		keys:         keys,
@@ -103,14 +193,19 @@ func NewDifferWorker(sourceBucket, targetBucket *gocb.Bucket, keys [][]byte, wai
 	}
 }
 
-func (dw *DifferWorker) getResults() (map[string]*GetResult, map[string]*GetResult) {
+func (dw *DifferWorker) run() {
 	defer dw.waitGroup.Done()
+	sourceResults, targetResults := dw.getResults()
+	dw.diff(sourceResults, targetResults)
+}
+
+func (dw *DifferWorker) getResults() (map[string]*GetResult, map[string]*GetResult) {
 
 	sourceResults := make(map[string]*GetResult)
 	targetResults := make(map[string]*GetResult)
 	for _, key := range dw.keys {
-		sourceResults[string(key)] = &GetResult{}
-		targetResults[string(key)] = &GetResult{}
+		sourceResults[key] = &GetResult{}
+		targetResults[key] = &GetResult{}
 	}
 
 	for _, key := range dw.keys {
@@ -139,31 +234,43 @@ done:
 }
 
 func (dw *DifferWorker) diff(sourceResults, targetResults map[string]*GetResult) {
+	missingFromSource := make(map[string]*gocbcore.GetMetaResult)
+	missingFromTarget := make(map[string]*gocbcore.GetMetaResult)
+	diff := make(map[string][]*gocbcore.GetMetaResult)
+
 	for key, sourceResult := range sourceResults {
+		if sourceResult.Key == "" {
+			fmt.Printf("Skipping diff on %v since we did not get results from source\n", key)
+			continue
+		}
+
 		targetResult := targetResults[key]
+		if targetResult.Key == "" {
+			fmt.Printf("Skipping diff on %v since we did not get results from target\n", key)
+			continue
+		}
+
 		if isKeyNotFoundError(sourceResult.Error) && !isKeyNotFoundError(targetResult.Error) {
-			fmt.Printf("-------------------------------------------------\n")
-			fmt.Printf("%v exists on target and not on source\n", key)
+			missingFromSource[key] = targetResult.Result
 			continue
 		}
 		if !isKeyNotFoundError(sourceResult.Error) && isKeyNotFoundError(targetResult.Error) {
-			fmt.Printf("-------------------------------------------------\n")
-			fmt.Printf("%v exists on source and not on target\n", key)
+			missingFromTarget[key] = sourceResult.Result
 			continue
 		}
-		if !areGetResultsTheSame(sourceResult.Result, targetResult.Result) {
-			fmt.Printf("-------------------------------------------------\n")
-			fmt.Printf("%v is different on source and target. Source:%v, target:%v\n", key, sourceResult, targetResult)
+		if !areGetMetaResultsTheSame(sourceResult.Result, targetResult.Result) {
+			diff[key] = []*gocbcore.GetMetaResult{sourceResult.Result, targetResult.Result}
 		}
-
 	}
+
+	dw.differ.addDiff(missingFromSource, missingFromTarget, diff)
 }
 
 func isKeyNotFoundError(err error) bool {
 	return err != nil && err.Error() == KeyNotFoundErrMsg
 }
 
-func areGetResultsTheSame(result1, result2 *gocbcore.GetResult) bool {
+func areGetMetaResultsTheSame(result1, result2 *gocbcore.GetMetaResult) bool {
 	if result1 == nil {
 		return result2 == nil
 	}
@@ -171,13 +278,15 @@ func areGetResultsTheSame(result1, result2 *gocbcore.GetResult) bool {
 		return false
 	}
 	return reflect.DeepEqual(result1.Value, result2.Value) && result1.Flags == result2.Flags &&
-		result1.Datatype == result2.Datatype && result1.Cas == result2.Cas
+		result1.Datatype == result2.Datatype && result1.Cas == result2.Cas && result1.Expiry == result2.Expiry &&
+		result1.SeqNo == result2.SeqNo && result1.Deleted == result2.Deleted
 }
 
-func (dw *DifferWorker) get(key []byte, resultsMap map[string]*GetResult, isSource bool) {
-	getCallbackFunc := func(result *gocbcore.GetResult, err error) {
-		resultsMap[string(key)].Result = result
-		resultsMap[string(key)].Error = err
+func (dw *DifferWorker) get(key string, resultsMap map[string]*GetResult, isSource bool) {
+	getCallbackFunc := func(result *gocbcore.GetMetaResult, err error) {
+		resultsMap[key].Key = string(key)
+		resultsMap[key].Result = result
+		resultsMap[key].Error = err
 		if isSource {
 			atomic.AddUint32(&dw.sourceResultCount, 1)
 		} else {
@@ -186,14 +295,15 @@ func (dw *DifferWorker) get(key []byte, resultsMap map[string]*GetResult, isSour
 	}
 
 	if isSource {
-		dw.sourceBucket.IoRouter().GetEx(gocbcore.GetOptions{Key: key}, getCallbackFunc)
+		dw.sourceBucket.IoRouter().GetMetaEx(gocbcore.GetMetaOptions{Key: []byte(key)}, getCallbackFunc)
 	} else {
-		dw.targetBucket.IoRouter().GetEx(gocbcore.GetOptions{Key: key}, getCallbackFunc)
+		dw.targetBucket.IoRouter().GetMetaEx(gocbcore.GetMetaOptions{Key: []byte(key)}, getCallbackFunc)
 	}
 }
 
 type GetResult struct {
-	Result *gocbcore.GetResult
+	Key    string
+	Result *gocbcore.GetMetaResult
 	Error  error
 }
 

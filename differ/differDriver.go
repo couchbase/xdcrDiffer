@@ -10,25 +10,29 @@
 package differ
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/nelio2k/xdcrDiffer/base"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"github.com/nelio2k/xdcrDiffer/utils"
+	"os"
 	"sync"
 )
 
 type DifferDriver struct {
 	sourceFileDir   string
 	targetFileDir   string
+	diffFileDir     string
 	numberOfWorkers int
 	numberOfBuckets int
 	waitGroup       *sync.WaitGroup
-	diffKeyList     [][]byte
+	diffKeys        []string
+	diffDetails     []byte
 	stateLock       *sync.RWMutex
 	fileDescPool    fdp.FdPoolIface
 }
 
-func NewDifferDriver(sourceFileDir, targetFileDir string, numberOfWorkers, numberOfBuckets int, numberOfFds int) *DifferDriver {
+func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir string, numberOfWorkers, numberOfBuckets int, numberOfFds int) *DifferDriver {
 	var fdPool *fdp.FdPool
 	if numberOfFds > 0 {
 		fdPool = fdp.NewFileDescriptorPool(numberOfFds)
@@ -37,16 +41,18 @@ func NewDifferDriver(sourceFileDir, targetFileDir string, numberOfWorkers, numbe
 	return &DifferDriver{
 		sourceFileDir:   sourceFileDir,
 		targetFileDir:   targetFileDir,
+		diffFileDir:     diffFileDir,
 		numberOfWorkers: numberOfWorkers,
 		numberOfBuckets: numberOfBuckets,
 		waitGroup:       &sync.WaitGroup{},
-		diffKeyList:     make([][]byte, 0),
+		diffKeys:        make([]string, 0),
+		diffDetails:     make([]byte, 0),
 		stateLock:       &sync.RWMutex{},
 		fileDescPool:    fdPool,
 	}
 }
 
-func (dr *DifferDriver) Run() [][]byte {
+func (dr *DifferDriver) Run() error {
 	loadDistribution := utils.BalanceLoad(dr.numberOfWorkers, base.NumberOfVbuckets)
 	for i := 0; i < dr.numberOfWorkers; i++ {
 		lowIndex := loadDistribution[i][0]
@@ -63,19 +69,57 @@ func (dr *DifferDriver) Run() [][]byte {
 
 	dr.waitGroup.Wait()
 
-	return dr.getDiffKeys()
+	return dr.writeDiff()
 }
 
-func (dr *DifferDriver) addDiffKeys(diffKeys [][]byte) {
+func (dr *DifferDriver) addDiff(diffKeys []string, diffDetails []byte) {
 	dr.stateLock.Lock()
 	defer dr.stateLock.Unlock()
-	dr.diffKeyList = append(dr.diffKeyList, diffKeys...)
+	dr.diffKeys = append(dr.diffKeys, diffKeys...)
+	dr.diffDetails = append(dr.diffDetails, diffDetails...)
 }
 
-func (dr *DifferDriver) getDiffKeys() [][]byte {
+func (dr *DifferDriver) writeDiff() error {
 	dr.stateLock.RLock()
 	defer dr.stateLock.RUnlock()
-	return dr.diffKeyList
+
+	err := dr.writeDiffKeys()
+	if err != nil {
+		fmt.Printf("Error writing diff keys. err=%v\n", err)
+	}
+
+	return dr.writeDiffDetails()
+}
+
+func (dr *DifferDriver) writeDiffKeys() error {
+	diffKeysBytes, err := json.Marshal(dr.diffKeys)
+	if err != nil {
+		return err
+	}
+
+	diffKeysFileName := dr.diffFileDir + base.FileDirDelimiter + base.DiffKeysFileName
+	diffKeysFile, err := os.OpenFile(diffKeysFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
+	if err != nil {
+		return err
+	}
+
+	defer diffKeysFile.Close()
+
+	_, err = diffKeysFile.Write(diffKeysBytes)
+	return err
+}
+
+func (dr *DifferDriver) writeDiffDetails() error {
+	diffDetailsFileName := dr.diffFileDir + base.FileDirDelimiter + base.DiffDetailsFileName
+	diffDetailsFile, err := os.OpenFile(diffDetailsFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
+	if err != nil {
+		return err
+	}
+
+	defer diffDetailsFile.Close()
+
+	_, err = diffDetailsFile.Write(dr.diffDetails)
+	return err
 }
 
 type DifferHandler struct {
@@ -112,6 +156,7 @@ func (dh *DifferHandler) run() {
 		for bucketIndex := 0; bucketIndex < dh.numberOfBuckets; bucketIndex++ {
 			sourceFileName := utils.GetFileName(dh.sourceFileDir, vbno, bucketIndex)
 			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex)
+
 			filesDiffer, err := NewFilesDifferWithFDPool(sourceFileName, targetFileName, dh.fileDescPool)
 			if err != nil {
 				// Most likely FD overrun, program should exit. Print a msg just in case
@@ -119,14 +164,11 @@ func (dh *DifferHandler) run() {
 					sourceFileName, targetFileName, err)
 				return
 			}
-			match, diffKeys := filesDiffer.Diff()
-			if !match {
+
+			diffKeys, diffDetails := filesDiffer.Diff()
+			if len(diffKeys) > 0 {
 				filesDiffer.PrettyPrintResult()
-				err = filesDiffer.OutputToJsonFile(fmt.Sprintf("diffResult_%v_%v.json", sourceFileName, targetFileName))
-				if err != nil {
-					fmt.Printf("Error outputting JSON result file between %v and %v\n", sourceFileName, targetFileName)
-				}
-				dh.driver.addDiffKeys(diffKeys)
+				dh.driver.addDiff(diffKeys, diffDetails)
 			}
 		}
 	}

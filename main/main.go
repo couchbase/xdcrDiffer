@@ -24,20 +24,21 @@ import (
 var done = make(chan bool)
 
 var options struct {
-	sourceUrl                    string
-	sourceUsername               string
-	sourcePassword               string
-	sourceBucketName             string
-	sourceFileDir                string
-	targetUrl                    string
-	targetUsername               string
-	targetPassword               string
-	targetBucketName             string
-	targetFileDir                string
-	numberOfWorkersForDcp        uint64
-	numberOfWorkersForFileDiffer uint64
-	numberOfBuckets              uint64
-	numberOfFileDesc             uint64
+	sourceUrl                        string
+	sourceUsername                   string
+	sourcePassword                   string
+	sourceBucketName                 string
+	sourceFileDir                    string
+	targetUrl                        string
+	targetUsername                   string
+	targetPassword                   string
+	targetBucketName                 string
+	targetFileDir                    string
+	numberOfWorkersForDcp            uint64
+	numberOfWorkersForFileDiffer     uint64
+	numberOfWorkersForMutationDiffer uint64
+	numberOfBuckets                  uint64
+	numberOfFileDesc                 uint64
 	// the duration that the tools should be run, in minutes
 	completeByDuration uint64
 	// whether tool should complete after processing all mutations at tool start time
@@ -50,6 +51,10 @@ var options struct {
 	// name of new checkpoint file to write to when tool shuts down
 	// if not specified, tool will not save checkpoint files
 	newCheckpointFileName string
+	// directory for storing diffs
+	diffFileDir string
+	// whether to verify diff keys through aysnc Get on clusters
+	verifyDiffKeys bool
 }
 
 func argParse() {
@@ -77,6 +82,8 @@ func argParse() {
 		"number of worker threads for dcp")
 	flag.Uint64Var(&options.numberOfWorkersForFileDiffer, "numberOfWorkersForFileDiffer", 10,
 		"number of worker threads for file differ ")
+	flag.Uint64Var(&options.numberOfWorkersForMutationDiffer, "numberOfWorkersForMutationDiffer", 10,
+		"number of worker threads for mutation differ ")
 	flag.Uint64Var(&options.numberOfBuckets, "numberOfBuckets", 10,
 		"number of buckets per vbucket")
 	flag.Uint64Var(&options.numberOfFileDesc, "numberOfFileDesc", 0,
@@ -91,6 +98,10 @@ func argParse() {
 		"old checkpoint file to load from when tool starts")
 	flag.StringVar(&options.newCheckpointFileName, "newCheckpointFileName", "",
 		"new checkpoint file to write to when tool shuts down")
+	flag.StringVar(&options.diffFileDir, "diffFileDir", "diff",
+		" directory for storing diffs")
+	flag.BoolVar(&options.verifyDiffKeys, "verifyDiffKeys", true,
+		" whether to verify diff keys through aysnc Get on clusters")
 
 	flag.Parse()
 }
@@ -108,7 +119,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("tool started\n")
+	fmt.Printf("Tool started\n")
 
 	if err := cleanUpAndSetup(); err != nil {
 		fmt.Printf("Unable to clean and set up directory structure: %v\n", err)
@@ -117,9 +128,13 @@ func main() {
 
 	generateDataFiles()
 
-	diffKeys := diffDataFiles()
+	diffDataFiles()
 
-	verifyDiffKeys(diffKeys)
+	if options.verifyDiffKeys {
+		verifyDiffKeysByGet()
+	} else {
+		fmt.Printf("Skipping mutation diff since it has been disabled\n")
+	}
 }
 
 func cleanUpAndSetup() error {
@@ -147,6 +162,8 @@ func cleanUpAndSetup() error {
 }
 
 func generateDataFiles() {
+	fmt.Printf("GenerateDataFiles routine started\n")
+	defer fmt.Printf("GenerateDataFiles routine completed\n")
 
 	errChan := make(chan error, 1)
 	waitGroup := &sync.WaitGroup{}
@@ -180,18 +197,25 @@ func generateDataFiles() {
 	}
 }
 
-func diffDataFiles() [][]byte {
-	differDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBuckets), int(options.numberOfFileDesc))
-	return differDriver.Run()
+func diffDataFiles() {
+	fmt.Printf("DiffDataFiles routine started\n")
+	defer fmt.Printf("DiffDataFiles routine completed\n")
+
+	differDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.diffFileDir, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBuckets), int(options.numberOfFileDesc))
+	err := differDriver.Run()
+	if err != nil {
+		fmt.Printf("Error from diffDataFiles = %v\n", err)
+	}
 }
 
-func verifyDiffKeys(diffKeys [][]byte) {
-	fmt.Printf("diffKeys=%v\n", diffKeys)
-	if len(diffKeys) > 0 {
-		differ := differ.NewMutationDiffer(options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, diffKeys)
-		differ.Diff()
-	} else {
-		fmt.Printf("Skipping mutation diff since no diff has been identified\n")
+func verifyDiffKeysByGet() {
+	fmt.Printf("VerifyDiffKeys routine started\n")
+	defer fmt.Printf("VerifyDiffKeys routine completed\n")
+
+	differ := differ.NewMutationDiffer(options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.diffFileDir, int(options.numberOfWorkersForMutationDiffer))
+	err := differ.Run()
+	if err != nil {
+		fmt.Printf("Error from verifyDiffKeys = %v\n", err)
 	}
 }
 
