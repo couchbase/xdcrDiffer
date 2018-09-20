@@ -122,6 +122,10 @@ func (dh *DifferHandler) run() {
 			match, diffKeys := filesDiffer.Diff()
 			if !match {
 				filesDiffer.PrettyPrintResult()
+				err = filesDiffer.OutputToJsonFile(fmt.Sprintf("diffResult_%v_%v.json", sourceFileName, targetFileName))
+				if err != nil {
+					fmt.Printf("Error outputting JSON result file between %v and %v\n", sourceFileName, targetFileName)
+				}
 				dh.driver.addDiffKeys(diffKeys)
 			}
 		}

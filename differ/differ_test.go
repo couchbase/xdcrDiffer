@@ -299,6 +299,7 @@ func TestLoadMismatchedFilesAndUneven(t *testing.T) {
 	assert.Equal(0, len(differ.MissingFromFile1))
 	assert.Equal(extraEntries, len(differ.MissingFromFile2))
 	differ.PrettyPrintResult()
+	differ.OutputToJsonFile("/tmp/testJson.json")
 	fmt.Println("============== Test case start: TestLoadMismatchedFilesAndUneven =================")
 }
 

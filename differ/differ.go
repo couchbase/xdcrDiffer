@@ -39,6 +39,8 @@ type FilesDiffer struct {
 	MissingFromFile1     []*oneEntry
 	MissingFromFile2     []*oneEntry
 	BothExistButMismatch []*entryPair
+
+	fdPool fdp.FdPoolIface
 }
 
 type FileAttributes struct {
@@ -122,6 +124,7 @@ func NewFilesDifferWithFDPool(file1, file2 string, fdPool fdp.FdPoolIface) (*Fil
 	var err error
 	differ := NewFilesDiffer(file1, file2)
 	if fdPool != nil {
+		differ.fdPool = fdPool
 		differ.file1.readOp, err = fdPool.RegisterReadOnlyFileHandle(file1)
 		if err != nil {
 			return nil, err
@@ -359,7 +362,7 @@ func (differ *FilesDiffer) PrettyPrintResult() {
 		fmt.Printf("Both sides match\n")
 	} else {
 		if mismatchCnt > 0 {
-			fmt.Printf("%v Docs exist in both files but mismatch:\n", mismatchCnt)
+			fmt.Printf("%v Docs exist in both %v and %v but mismatch:\n", mismatchCnt, differ.file1.name, differ.file2.name)
 			fmt.Printf("=========================================\n")
 			for i := 0; i < mismatchCnt; i++ {
 				fmt.Printf("--------------------------------------\n")
@@ -369,7 +372,7 @@ func (differ *FilesDiffer) PrettyPrintResult() {
 			fmt.Printf("=========================================\n")
 		}
 		if missing2Cnt > 0 {
-			fmt.Printf("%v Docs exist in file 1 that are missing from file2:\n", missing2Cnt)
+			fmt.Printf("%v Docs exist in %v that are missing from %v:\n", missing2Cnt, differ.file1.name, differ.file2.name)
 			fmt.Printf("-------------------------------------------------\n")
 			for i := 0; i < missing2Cnt; i++ {
 				fmt.Printf("%v\n", differ.MissingFromFile2[i].String())
@@ -377,7 +380,7 @@ func (differ *FilesDiffer) PrettyPrintResult() {
 			fmt.Printf("-------------------------------------------------\n")
 		}
 		if missing1Cnt > 0 {
-			fmt.Printf("%v Docs exist in file 2 that are missing from file1:\n", missing1Cnt)
+			fmt.Printf("%v Docs exist in %v that are missing from %v:\n", missing1Cnt, differ.file2.name, differ.file1.name)
 			fmt.Printf("-------------------------------------------------\n")
 			for i := 0; i < missing1Cnt; i++ {
 				fmt.Printf("%v\n", differ.MissingFromFile1[i].String())
@@ -397,4 +400,31 @@ func (differ *FilesDiffer) ToJson() ([]byte, error) {
 	ret, err := json.Marshal(outputMap)
 
 	return ret, err
+}
+
+func (differ *FilesDiffer) OutputToJsonFile(fileName string) error {
+	var writeOp fdp.FileOp
+	var err error
+	if differ.fdPool != nil {
+		_, writeOp, err = differ.fdPool.RegisterFileHandle(fileName)
+		if err != nil {
+			return err
+		}
+		defer differ.fdPool.DeRegisterFileHandle(fileName)
+	} else {
+		fd, err := os.OpenFile(fileName, os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return nil
+		}
+		defer fd.Close()
+		writeOp = fd.Write
+	}
+	bytes, err := differ.ToJson()
+	if err != nil {
+		return err
+	}
+
+	writeOp(bytes)
+
+	return nil
 }
