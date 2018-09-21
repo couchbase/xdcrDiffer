@@ -17,6 +17,7 @@ import (
 	gocbcore "gopkg.in/couchbase/gocbcore.v7"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type DcpClient struct {
@@ -31,6 +32,8 @@ type DcpClient struct {
 	checkpointManager  *CheckpointManager
 	numberClosing      uint32
 	closeStreamsDoneCh chan bool
+	activeStreams      uint32
+	finChan            chan bool
 }
 
 func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.WaitGroup) *DcpClient {
@@ -42,6 +45,7 @@ func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.
 		dcpHandlers:        make([]*DcpHandler, dcpDriver.numberOfWorkers),
 		vbHandlerMap:       make(map[uint16]*DcpHandler),
 		closeStreamsDoneCh: make(chan bool),
+		finChan:            make(chan bool),
 	}
 }
 
@@ -54,8 +58,30 @@ func (c *DcpClient) Start() error {
 		return err
 	}
 
+	go c.reportActiveStreams()
+
 	// openStreams() needs to be called after checkpointManager initialization
 	return c.openStreams()
+}
+
+func (c *DcpClient) reportActiveStreams() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			activeStreams := atomic.LoadUint32(&c.activeStreams)
+			fmt.Printf("%v active streams=%v, expected=%v\n", c.Name, activeStreams, len(c.vbList))
+			if activeStreams == uint32(len(c.vbList)) {
+				fmt.Printf("%v all streams active. Stop reporting\n", c.Name)
+				goto done
+			}
+		case <-c.finChan:
+			goto done
+		}
+	}
+done:
 }
 
 func (c *DcpClient) Stop() error {
@@ -178,7 +204,16 @@ func (c *DcpClient) openStreams() error {
 	for _, vbno := range c.vbList {
 		vbts := c.dcpDriver.checkpointManager.GetStartVBTS(vbno)
 
-		_, err := c.bucket.IoRouter().OpenStream(vbno, 0, gocbcore.VbUuid(vbts.Checkpoint.Vbuuid), gocbcore.SeqNo(vbts.Checkpoint.Seqno), gocbcore.SeqNo(vbts.EndSeqno), gocbcore.SeqNo(vbts.Checkpoint.SnapshotStartSeqno), gocbcore.SeqNo(vbts.Checkpoint.SnapshotEndSeqno), c.vbHandlerMap[vbno], c.openStreamFunc)
+		openStreamFunc := func(f []gocbcore.FailoverEntry, err error) {
+			if err != nil {
+				c.reportError(err)
+			} else {
+				atomic.AddUint32(&c.activeStreams, 1)
+			}
+
+		}
+
+		_, err := c.bucket.IoRouter().OpenStream(vbno, 0, gocbcore.VbUuid(vbts.Checkpoint.Vbuuid), gocbcore.SeqNo(vbts.Checkpoint.Seqno), gocbcore.SeqNo(vbts.EndSeqno), gocbcore.SeqNo(vbts.Checkpoint.SnapshotStartSeqno), gocbcore.SeqNo(vbts.Checkpoint.SnapshotEndSeqno), c.vbHandlerMap[vbno], openStreamFunc)
 		if err != nil {
 			fmt.Printf("err opening dcp stream for vb %v. err=%v\n", vbno, err)
 			return err
@@ -186,13 +221,6 @@ func (c *DcpClient) openStreams() error {
 	}
 
 	return nil
-}
-
-// OpenStreamCallback
-func (c *DcpClient) openStreamFunc(f []gocbcore.FailoverEntry, err error) {
-	if err != nil {
-		c.reportError(err)
-	}
 }
 
 func (c *DcpClient) reportError(err error) {

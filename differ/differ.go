@@ -13,7 +13,6 @@ import (
 	"crypto/sha512"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"io"
@@ -333,7 +332,7 @@ func (differ *FilesDiffer) diffSorted() []string {
 }
 
 // Returns true if they are the same
-func (differ *FilesDiffer) Diff() ([]string, []byte) {
+func (differ *FilesDiffer) Diff() ([]string, []*entryPair, []*oneEntry, []*oneEntry) {
 	differ.dataLoadWg.Add(1)
 	go differ.asyncLoad(&differ.file1, &differ.err1)
 	differ.dataLoadWg.Add(1)
@@ -349,12 +348,7 @@ func (differ *FilesDiffer) Diff() ([]string, []byte) {
 
 	diffKeys := differ.diffSorted()
 
-	diffDetails, err := differ.ToJson()
-	if err != nil {
-		fmt.Printf("Error marshaling diff details. err=%v\n", err)
-		return diffKeys, nil
-	}
-	return diffKeys, diffDetails
+	return diffKeys, differ.BothExistButMismatch, differ.MissingFromFile1, differ.MissingFromFile2
 }
 
 func (differ *FilesDiffer) PrettyPrintResult() {
@@ -394,16 +388,4 @@ func (differ *FilesDiffer) PrettyPrintResult() {
 			fmt.Printf("-------------------------------------------------\n")
 		}
 	}
-}
-
-func (differ *FilesDiffer) ToJson() ([]byte, error) {
-	outputMap := map[string]interface{}{
-		"Mismatch":         differ.BothExistButMismatch,
-		"MissingFromFile1": differ.MissingFromFile1,
-		"MissingFromFile2": differ.MissingFromFile2,
-	}
-
-	ret, err := json.Marshal(outputMap)
-
-	return ret, err
 }

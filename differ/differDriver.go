@@ -27,9 +27,12 @@ type DifferDriver struct {
 	numberOfBuckets int
 	waitGroup       *sync.WaitGroup
 	diffKeys        []string
-	diffDetails     []byte
 	stateLock       *sync.RWMutex
 	fileDescPool    *fdp.FdPool
+	// Diff results
+	missingFromSource    []*oneEntry
+	missingFromTarget    []*oneEntry
+	bothExistButMismatch []*entryPair
 }
 
 func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir string, numberOfWorkers, numberOfBuckets int, numberOfFds int) *DifferDriver {
@@ -39,16 +42,18 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir string, numberOfW
 	}
 
 	return &DifferDriver{
-		sourceFileDir:   sourceFileDir,
-		targetFileDir:   targetFileDir,
-		diffFileDir:     diffFileDir,
-		numberOfWorkers: numberOfWorkers,
-		numberOfBuckets: numberOfBuckets,
-		waitGroup:       &sync.WaitGroup{},
-		diffKeys:        make([]string, 0),
-		diffDetails:     make([]byte, 0),
-		stateLock:       &sync.RWMutex{},
-		fileDescPool:    fdPool,
+		sourceFileDir:        sourceFileDir,
+		targetFileDir:        targetFileDir,
+		diffFileDir:          diffFileDir,
+		numberOfWorkers:      numberOfWorkers,
+		numberOfBuckets:      numberOfBuckets,
+		waitGroup:            &sync.WaitGroup{},
+		stateLock:            &sync.RWMutex{},
+		fileDescPool:         fdPool,
+		diffKeys:             make([]string, 0),
+		missingFromSource:    make([]*oneEntry, 0),
+		missingFromTarget:    make([]*oneEntry, 0),
+		bothExistButMismatch: make([]*entryPair, 0),
 	}
 }
 
@@ -72,11 +77,16 @@ func (dr *DifferDriver) Run() error {
 	return dr.writeDiff()
 }
 
-func (dr *DifferDriver) addDiff(diffKeys []string, diffDetails []byte) {
+func (dr *DifferDriver) addDiff(diffKeys []string, bothExistButMismatch []*entryPair,
+	missingFromSource []*oneEntry,
+	missingFromTarget []*oneEntry) {
 	dr.stateLock.Lock()
 	defer dr.stateLock.Unlock()
 	dr.diffKeys = append(dr.diffKeys, diffKeys...)
-	dr.diffDetails = append(dr.diffDetails, diffDetails...)
+	dr.bothExistButMismatch = append(dr.bothExistButMismatch, bothExistButMismatch...)
+	dr.missingFromSource = append(dr.missingFromSource, missingFromSource...)
+	dr.missingFromTarget = append(dr.missingFromTarget, missingFromTarget...)
+
 }
 
 func (dr *DifferDriver) writeDiff() error {
@@ -110,6 +120,11 @@ func (dr *DifferDriver) writeDiffKeys() error {
 }
 
 func (dr *DifferDriver) writeDiffDetails() error {
+	diffDetails, err := dr.diffToJson()
+	if err != nil {
+		return err
+	}
+
 	diffDetailsFileName := dr.diffFileDir + base.FileDirDelimiter + base.DiffDetailsFileName
 	diffDetailsFile, err := os.OpenFile(diffDetailsFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
 	if err != nil {
@@ -118,8 +133,20 @@ func (dr *DifferDriver) writeDiffDetails() error {
 
 	defer diffDetailsFile.Close()
 
-	_, err = diffDetailsFile.Write(dr.diffDetails)
+	_, err = diffDetailsFile.Write(diffDetails)
 	return err
+}
+
+func (dr *DifferDriver) diffToJson() ([]byte, error) {
+	outputMap := map[string]interface{}{
+		"Mismatch":          dr.bothExistButMismatch,
+		"MissingFromSource": dr.missingFromSource,
+		"MissingFromTarget": dr.missingFromTarget,
+	}
+
+	ret, err := json.Marshal(outputMap)
+
+	return ret, err
 }
 
 type DifferHandler struct {
@@ -165,9 +192,9 @@ func (dh *DifferHandler) run() {
 				return
 			}
 
-			diffKeys, diffDetails := filesDiffer.Diff()
+			diffKeys, bothExistButMismatch, missingFromSource, missingFromTarget := filesDiffer.Diff()
 			if len(diffKeys) > 0 {
-				dh.driver.addDiff(diffKeys, diffDetails)
+				dh.driver.addDiff(diffKeys, bothExistButMismatch, missingFromSource, missingFromTarget)
 			}
 		}
 	}

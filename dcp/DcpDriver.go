@@ -63,6 +63,7 @@ func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoint
 func (d *DcpDriver) Start() error {
 	err := d.initializeAndStartCheckpointManager()
 	if err != nil {
+		fmt.Printf("%v error starting checkpoint manager. err=%v\n", d.Name, err)
 		return err
 	}
 
@@ -72,6 +73,7 @@ func (d *DcpDriver) Start() error {
 func (d *DcpDriver) initializeAndStartCheckpointManager() error {
 	err := d.initializeCluster()
 	if err != nil {
+		fmt.Printf("%v error initializing cluster. err=%v\n", d.Name, err)
 		return err
 	}
 	d.checkpointManager.SetCluster(d.cluster)
@@ -81,7 +83,7 @@ func (d *DcpDriver) initializeAndStartCheckpointManager() error {
 func (d *DcpDriver) initializeCluster() (err error) {
 	cluster, err := gocb.Connect(d.url)
 	if err != nil {
-		fmt.Printf("Error connecting to cluster %v. err=%v\n", d.url, err)
+		fmt.Printf("%v error connecting to cluster %v. err=%v\n", d.Name, d.url, err)
 		return
 	}
 	err = cluster.Authenticate(gocb.PasswordAuthenticator{
@@ -90,7 +92,7 @@ func (d *DcpDriver) initializeCluster() (err error) {
 	})
 
 	if err != nil {
-		fmt.Printf(err.Error())
+		fmt.Printf("%v error authenticating cluster. err=%v\n", d.Name, err)
 		return
 	}
 
@@ -148,7 +150,7 @@ func (d *DcpDriver) initializeDcpClients() error {
 
 		err := dcpClient.Start()
 		if err != nil {
-			fmt.Printf("Error starting dcp client. err=%v\n", err)
+			fmt.Printf("%v error starting dcp client. err=%v\n", d.Name, err)
 			return err
 		}
 	}

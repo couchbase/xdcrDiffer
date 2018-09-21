@@ -6,6 +6,7 @@ import (
 	"github.com/couchbase/gocb"
 	"github.com/nelio2k/xdcrDiffer/base"
 	"github.com/nelio2k/xdcrDiffer/utils"
+	"math"
 	"os"
 	"sync"
 	"time"
@@ -85,13 +86,15 @@ func (cm *CheckpointManager) Stop() error {
 }
 
 func (cm *CheckpointManager) reportStatus() {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(time.Duration(base.CheckpointManagerReportInterval) * time.Second)
 	defer ticker.Stop()
+
+	var prevSum uint64 = math.MaxUint64
 
 	for {
 		select {
 		case <-ticker.C:
-			cm.reportStatusOnce()
+			prevSum = cm.reportStatusOnce(prevSum)
 		case <-cm.finChan:
 			fmt.Printf("%v exiting reporting since tool is stopping\n", cm.clusterName)
 			return
@@ -99,13 +102,18 @@ func (cm *CheckpointManager) reportStatus() {
 	}
 }
 
-func (cm *CheckpointManager) reportStatusOnce() {
+func (cm *CheckpointManager) reportStatusOnce(prevSum uint64) uint64 {
 	var vbno uint16
 	var sum uint64
 	for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
 		sum += cm.seqnoMap[vbno].getSeqno()
 	}
-	fmt.Printf("%v %v processed %v mutations\n", time.Now(), cm.clusterName, sum)
+	if prevSum != math.MaxUint64 {
+		fmt.Printf("%v %v processed %v mutations. processing rate=%v mutation/second\n", time.Now(), cm.clusterName, sum, (sum-prevSum)/base.CheckpointManagerReportInterval)
+	} else {
+		fmt.Printf("%v %v processed %v mutations.\n", time.Now(), cm.clusterName, sum)
+	}
+	return sum
 }
 
 func (cm *CheckpointManager) initialize() error {
@@ -120,12 +128,13 @@ func (cm *CheckpointManager) initialize() error {
 func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() (map[uint16]uint64, error) {
 	statsBucket, err := cm.cluster.OpenBucket(cm.bucketName, "" /*password*/)
 	if err != nil {
+		fmt.Printf("%v error opening bucket. err=%v\n", cm.clusterName, err)
 		return nil, err
 	}
 
 	defer statsBucket.Close()
 
-	statsMap, err := statsBucket.Stats(base.VbucketSeqnoStatName)
+	statsMap, err := cm.getStatsWithRetry(statsBucket)
 	if err != nil {
 		return nil, err
 	}
@@ -148,6 +157,24 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() (map[uint16]uint64, error
 	}
 
 	return endSeqnoMap, nil
+}
+
+// get stats is likely to time out. add retry
+func (cm *CheckpointManager) getStatsWithRetry(statsBucket *gocb.Bucket) (map[string]map[string]string, error) {
+	var statsMap map[string]map[string]string
+	var err error
+	getStatsFunc := func() error {
+		statsMap, err = statsBucket.Stats(base.VbucketSeqnoStatName)
+		return err
+	}
+
+	opErr := utils.ExponentialBackoffExecutor("getStatsWithRetry", base.GetStatsRetryInterval, base.MaxNumOfGetStatsRetry,
+		base.BackoffFactor, getStatsFunc)
+	if opErr != nil {
+		return nil, opErr
+	} else {
+		return statsMap, nil
+	}
 }
 
 func (cm *CheckpointManager) setStartVBTS(endSeqnoMap map[uint16]uint64) error {
@@ -271,7 +298,7 @@ func (cm *CheckpointManager) SaveCheckpoint() error {
 		return fmt.Errorf("Incomplete write. expected=%v, actual=%v", len(value), numOfBytes)
 	}
 
-	fmt.Printf("----------------------------------------------------------------")
+	fmt.Printf("----------------------------------------------------------------\n")
 	fmt.Printf("%v totalMutationsChecked=%v, emptyVbs=%v\n", cm.clusterName, total, emptyVbs)
 	return nil
 }

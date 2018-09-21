@@ -17,6 +17,7 @@ import (
 	"math"
 	"strconv"
 	"sync"
+	"time"
 )
 
 func GetFileName(fileDir string, vbno uint16, bucketIndex int) string {
@@ -122,4 +123,31 @@ func ParseHighSeqnoStat(statsMap map[string]map[string]string, highSeqnoMap map[
 func WaitForWaitGroup(waitGroup *sync.WaitGroup, doneChan chan bool) {
 	waitGroup.Wait()
 	close(doneChan)
+}
+
+type ExponentialOpFunc func() error
+
+/**
+ * Executes a anonymous function that returns an error. If the error is non nil, retry with exponential backoff.
+ * Returns base.ErrorFailedAfterRetry + the last recorded error if operation times out, nil otherwise.
+ * Max retries == the times to retry in additional to the initial try, should the initial try fail
+ * initialWait == Initial time with which to start
+ * Factor == exponential backoff factor based off of initialWait
+ */
+func ExponentialBackoffExecutor(name string, initialWait time.Duration, maxRetries int, factor int, op ExponentialOpFunc) error {
+	waitTime := initialWait
+	var opErr error
+	for i := 0; i <= maxRetries; i++ {
+		opErr = op()
+		if opErr == nil {
+			return nil
+		} else if i != maxRetries {
+			fmt.Printf("ExponentialBackoffExecutor for %v encountered error (%v). Sleeping %v\n",
+				name, opErr.Error(), waitTime)
+			time.Sleep(waitTime)
+			waitTime *= time.Duration(factor)
+		}
+	}
+	opErr = fmt.Errorf("Operation failed after max retries. Last error: %v", opErr.Error())
+	return opErr
 }

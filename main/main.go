@@ -87,9 +87,9 @@ func argParse() {
 		"bucket name for target cluster")
 	flag.StringVar(&options.targetFileDir, "targetFileDir", "target",
 		"directory to store mutations in target cluster")
-	flag.Uint64Var(&options.numberOfDcpClients, "numberOfDcpClients", 2,
+	flag.Uint64Var(&options.numberOfDcpClients, "numberOfDcpClients", 5,
 		"number of dcp clients")
-	flag.Uint64Var(&options.numberOfWorkersPerDcpClient, "numberOfWorkersPerDcpClient", 10,
+	flag.Uint64Var(&options.numberOfWorkersPerDcpClient, "numberOfWorkersPerDcpClient", 20,
 		"number of workers for each dcp client")
 	flag.Uint64Var(&options.numberOfWorkersForFileDiffer, "numberOfWorkersForFileDiffer", 100,
 		"number of worker threads for file differ ")
@@ -99,15 +99,15 @@ func argParse() {
 		"number of buckets per vbucket")
 	flag.Uint64Var(&options.numberOfFileDesc, "numberOfFileDesc", 0,
 		"number of file descriptors")
-	flag.Uint64Var(&options.completeByDuration, "completeByDuration", 3,
+	flag.Uint64Var(&options.completeByDuration, "completeByDuration", 10,
 		"duration that the tool should run")
 	flag.BoolVar(&options.completeBySeqno, "completeBySeqno", false,
 		"whether tool should automatically complete (after processing all mutations at start time)")
 	flag.StringVar(&options.checkpointFileDir, "checkpointFileDir", "checkpoint",
 		"directory for checkpoint files")
-	flag.StringVar(&options.oldCheckpointFileName, "oldCheckpointFileName", "3",
+	flag.StringVar(&options.oldCheckpointFileName, "oldCheckpointFileName", "4",
 		"old checkpoint file to load from when tool starts")
-	flag.StringVar(&options.newCheckpointFileName, "newCheckpointFileName", "4",
+	flag.StringVar(&options.newCheckpointFileName, "newCheckpointFileName", "1",
 		"new checkpoint file to write to when tool shuts down")
 	flag.StringVar(&options.diffFileDir, "diffFileDir", "diff",
 		" directory for storing diffs")
@@ -205,6 +205,7 @@ func generateDataFiles() {
 		fileDescPool = fdp.NewFileDescriptorPool(int(options.numberOfFileDesc))
 	}
 
+	fmt.Printf("Starting source dcp clients\n")
 	sourceDcpDriver, err := startDcpDriver(base.SourceClusterName, options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients, options.numberOfWorkersPerDcpClient, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 	if err != nil {
 		fmt.Printf("Error starting source dcp client. err=%v\n", err)
@@ -212,8 +213,10 @@ func generateDataFiles() {
 		os.Exit(1)
 	}
 
+	fmt.Printf("Waiting for %v before starting target dcp clients\n", base.DelayBetweenSourceAndTarget)
 	time.Sleep(base.DelayBetweenSourceAndTarget)
 
+	fmt.Printf("Starting target dcp clients\n")
 	targetDcpDriver, err := startDcpDriver(base.TargetClusterName, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients, options.numberOfWorkersPerDcpClient, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 	if err != nil {
 		fmt.Printf("Error starting target dcp client. err=%v\n", err)

@@ -43,9 +43,9 @@ type MutationDiffer struct {
 	sourceBucket *gocb.Bucket
 	targetBucket *gocb.Bucket
 
-	missingFromSource map[string]*gocbcore.GetMetaResult
-	missingFromTarget map[string]*gocbcore.GetMetaResult
-	diff              map[string][]*gocbcore.GetMetaResult
+	missingFromSource map[string]*gocbcore.GetResult
+	missingFromTarget map[string]*gocbcore.GetResult
+	diff              map[string][]*gocbcore.GetResult
 	stateLock         *sync.RWMutex
 }
 
@@ -74,9 +74,9 @@ func NewMutationDiffer(sourceUrl string,
 		numberOfWorkers:   numberOfWorkers,
 		batchSize:         batchSize,
 		timeout:           timeout,
-		missingFromSource: make(map[string]*gocbcore.GetMetaResult),
-		missingFromTarget: make(map[string]*gocbcore.GetMetaResult),
-		diff:              make(map[string][]*gocbcore.GetMetaResult),
+		missingFromSource: make(map[string]*gocbcore.GetResult),
+		missingFromTarget: make(map[string]*gocbcore.GetResult),
+		diff:              make(map[string][]*gocbcore.GetResult),
 		stateLock:         &sync.RWMutex{},
 	}
 }
@@ -161,9 +161,9 @@ func (d *MutationDiffer) loadDiffKeys() ([]string, error) {
 	return diffKeys, nil
 }
 
-func (d *MutationDiffer) addDiff(missingFromSource map[string]*gocbcore.GetMetaResult,
-	missingFromTarget map[string]*gocbcore.GetMetaResult,
-	diff map[string][]*gocbcore.GetMetaResult) {
+func (d *MutationDiffer) addDiff(missingFromSource map[string]*gocbcore.GetResult,
+	missingFromTarget map[string]*gocbcore.GetResult,
+	diff map[string][]*gocbcore.GetResult) {
 	d.stateLock.Lock()
 	defer d.stateLock.Unlock()
 
@@ -247,9 +247,9 @@ func (dw *DifferWorker) mergeResults(b *batch) {
 }
 
 func (dw *DifferWorker) diff() {
-	missingFromSource := make(map[string]*gocbcore.GetMetaResult)
-	missingFromTarget := make(map[string]*gocbcore.GetMetaResult)
-	diff := make(map[string][]*gocbcore.GetMetaResult)
+	missingFromSource := make(map[string]*gocbcore.GetResult)
+	missingFromTarget := make(map[string]*gocbcore.GetResult)
+	diff := make(map[string][]*gocbcore.GetResult)
 
 	for key, sourceResult := range dw.sourceResults {
 		if sourceResult.Key == "" {
@@ -270,8 +270,8 @@ func (dw *DifferWorker) diff() {
 			missingFromTarget[key] = sourceResult.Result
 			continue
 		}
-		if !areGetMetaResultsTheSame(sourceResult.Result, targetResult.Result) {
-			diff[key] = []*gocbcore.GetMetaResult{sourceResult.Result, targetResult.Result}
+		if !areGetResultsTheSame(sourceResult.Result, targetResult.Result) {
+			diff[key] = []*gocbcore.GetResult{sourceResult.Result, targetResult.Result}
 		}
 	}
 
@@ -335,7 +335,7 @@ done:
 }
 
 func (b *batch) get(key string, isSource bool) {
-	getCallbackFunc := func(result *gocbcore.GetMetaResult, err error) {
+	getCallbackFunc := func(result *gocbcore.GetResult, err error) {
 		var resultsMap map[string]*GetResult
 		var newCount uint32
 		if isSource {
@@ -358,9 +358,9 @@ func (b *batch) get(key string, isSource bool) {
 	}
 
 	if isSource {
-		b.dw.sourceBucket.IoRouter().GetMetaEx(gocbcore.GetMetaOptions{Key: []byte(key)}, getCallbackFunc)
+		b.dw.sourceBucket.IoRouter().GetEx(gocbcore.GetOptions{Key: []byte(key)}, getCallbackFunc)
 	} else {
-		b.dw.targetBucket.IoRouter().GetMetaEx(gocbcore.GetMetaOptions{Key: []byte(key)}, getCallbackFunc)
+		b.dw.targetBucket.IoRouter().GetEx(gocbcore.GetOptions{Key: []byte(key)}, getCallbackFunc)
 	}
 }
 
@@ -368,7 +368,7 @@ func isKeyNotFoundError(err error) bool {
 	return err != nil && err.Error() == KeyNotFoundErrMsg
 }
 
-func areGetMetaResultsTheSame(result1, result2 *gocbcore.GetMetaResult) bool {
+func areGetResultsTheSame(result1, result2 *gocbcore.GetResult) bool {
 	if result1 == nil {
 		return result2 == nil
 	}
@@ -376,13 +376,12 @@ func areGetMetaResultsTheSame(result1, result2 *gocbcore.GetMetaResult) bool {
 		return false
 	}
 	return reflect.DeepEqual(result1.Value, result2.Value) && result1.Flags == result2.Flags &&
-		result1.Datatype == result2.Datatype && result1.Cas == result2.Cas && result1.Expiry == result2.Expiry &&
-		result1.SeqNo == result2.SeqNo && result1.Deleted == result2.Deleted
+		result1.Datatype == result2.Datatype && result1.Cas == result2.Cas
 }
 
 type GetResult struct {
 	Key    string
-	Result *gocbcore.GetMetaResult
+	Result *gocbcore.GetResult
 	Error  error
 	Lock   sync.RWMutex
 }

@@ -32,9 +32,15 @@ const TargetClusterName = "target"
 const DiffKeysFileName = "diffKeys"
 const DiffDetailsFileName = "diffDetails"
 const MutationDiffFileName = "mutationDiffDetails"
+const CheckpointManagerReportInterval = 5
+
+var GetStatsRetryInterval time.Duration = 1 * time.Second
+
+const MaxNumOfGetStatsRetry = 10
+const BackoffFactor = 1
 
 // time to wait to stop processing of target cluster after processing of source cluster is completed
-var DelayBetweenSourceAndTarget time.Duration = 1 * time.Second
+var DelayBetweenSourceAndTarget time.Duration = 2 * time.Second
 
 // length of mutation metadata + body, which consists of
 //  seqno   - 8 bytes
