@@ -167,7 +167,6 @@ func (dh *DifferHandler) run() {
 
 			diffKeys, diffDetails := filesDiffer.Diff()
 			if len(diffKeys) > 0 {
-				filesDiffer.PrettyPrintResult()
 				dh.driver.addDiff(diffKeys, diffDetails)
 			}
 		}

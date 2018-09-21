@@ -20,15 +20,15 @@ import (
 )
 
 type DcpClient struct {
-	Name              string
-	dcpDriver         *DcpDriver
-	vbList            []uint16
-	cluster           *gocb.Cluster
-	bucket            *gocb.StreamingBucket
-	waitGroup         *sync.WaitGroup
-	dcpHandlers       []*DcpHandler
-	vbHandlerMap      map[uint16]*DcpHandler
-	checkpointManager *CheckpointManager
+	Name               string
+	dcpDriver          *DcpDriver
+	vbList             []uint16
+	cluster            *gocb.Cluster
+	bucket             *gocb.StreamingBucket
+	waitGroup          *sync.WaitGroup
+	dcpHandlers        []*DcpHandler
+	vbHandlerMap       map[uint16]*DcpHandler
+	checkpointManager  *CheckpointManager
 	numberClosing      uint32
 	closeStreamsDoneCh chan bool
 }

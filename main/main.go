@@ -16,6 +16,7 @@ import (
 	"github.com/nelio2k/xdcrDiffer/dcp"
 	"github.com/nelio2k/xdcrDiffer/differ"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
+	"github.com/nelio2k/xdcrDiffer/utils"
 	"os"
 	"sync"
 	"time"
@@ -56,55 +57,68 @@ var options struct {
 	diffFileDir string
 	// whether to verify diff keys through aysnc Get on clusters
 	verifyDiffKeys bool
+	// size of batch used by mutation differ
+	mutationDifferBatchSize uint64
+	// timeout, in seconds, used by mutation differ
+	mutationDifferTimeout uint64
+	// just run mutation differ and nothing else
+	// this may be helpful when everything else succeeded and mutation differ ran into issues in last run
+	mutationDifferOnly bool
 }
 
 func argParse() {
-	flag.StringVar(&options.sourceUrl, "sourceUrl", "http://localhost:9000",
+	flag.StringVar(&options.sourceUrl, "sourceUrl", "http://172.23.97.38:8091",
 		"url for source cluster")
 	flag.StringVar(&options.sourceUsername, "sourceUsername", "Administrator",
 		"username for source cluster")
-	flag.StringVar(&options.sourcePassword, "sourcePassword", "welcome",
+	flag.StringVar(&options.sourcePassword, "sourcePassword", "password",
 		"password for source cluster")
-	flag.StringVar(&options.sourceBucketName, "sourceBucketName", "default",
+	flag.StringVar(&options.sourceBucketName, "sourceBucketName", "msm",
 		"bucket name for source cluster")
 	flag.StringVar(&options.sourceFileDir, "sourceFileDir", "source",
 		"directory to store mutations in source cluster")
-	flag.StringVar(&options.targetUrl, "targetUrl", "http://localhost:9000",
+	flag.StringVar(&options.targetUrl, "targetUrl", "http://172.23.97.38:8091",
 		"url for target cluster")
 	flag.StringVar(&options.targetUsername, "targetUsername", "Administrator",
 		"username for target cluster")
-	flag.StringVar(&options.targetPassword, "targetPassword", "welcome",
+	flag.StringVar(&options.targetPassword, "targetPassword", "password",
 		"password for target cluster")
-	flag.StringVar(&options.targetBucketName, "targetBucketName", "target",
+	flag.StringVar(&options.targetBucketName, "targetBucketName", "msm",
 		"bucket name for target cluster")
 	flag.StringVar(&options.targetFileDir, "targetFileDir", "target",
 		"directory to store mutations in target cluster")
-	flag.Uint64Var(&options.numberOfDcpClients, "numberOfDcpClients", 10,
+	flag.Uint64Var(&options.numberOfDcpClients, "numberOfDcpClients", 2,
 		"number of dcp clients")
 	flag.Uint64Var(&options.numberOfWorkersPerDcpClient, "numberOfWorkersPerDcpClient", 10,
 		"number of workers for each dcp client")
-	flag.Uint64Var(&options.numberOfWorkersForFileDiffer, "numberOfWorkersForFileDiffer", 10,
+	flag.Uint64Var(&options.numberOfWorkersForFileDiffer, "numberOfWorkersForFileDiffer", 100,
 		"number of worker threads for file differ ")
-	flag.Uint64Var(&options.numberOfWorkersForMutationDiffer, "numberOfWorkersForMutationDiffer", 10,
+	flag.Uint64Var(&options.numberOfWorkersForMutationDiffer, "numberOfWorkersForMutationDiffer", 20,
 		"number of worker threads for mutation differ ")
 	flag.Uint64Var(&options.numberOfBuckets, "numberOfBuckets", 1,
 		"number of buckets per vbucket")
 	flag.Uint64Var(&options.numberOfFileDesc, "numberOfFileDesc", 0,
 		"number of file descriptors")
-	flag.Uint64Var(&options.completeByDuration, "completeByDuration", 1,
+	flag.Uint64Var(&options.completeByDuration, "completeByDuration", 3,
 		"duration that the tool should run")
-	flag.BoolVar(&options.completeBySeqno, "completeBySeqno", true,
+	flag.BoolVar(&options.completeBySeqno, "completeBySeqno", false,
 		"whether tool should automatically complete (after processing all mutations at start time)")
 	flag.StringVar(&options.checkpointFileDir, "checkpointFileDir", "checkpoint",
 		"directory for checkpoint files")
-	flag.StringVar(&options.oldCheckpointFileName, "oldCheckpointFileName", "",
+	flag.StringVar(&options.oldCheckpointFileName, "oldCheckpointFileName", "3",
 		"old checkpoint file to load from when tool starts")
-	flag.StringVar(&options.newCheckpointFileName, "newCheckpointFileName", "",
+	flag.StringVar(&options.newCheckpointFileName, "newCheckpointFileName", "4",
 		"new checkpoint file to write to when tool shuts down")
 	flag.StringVar(&options.diffFileDir, "diffFileDir", "diff",
 		" directory for storing diffs")
 	flag.BoolVar(&options.verifyDiffKeys, "verifyDiffKeys", true,
 		" whether to verify diff keys through aysnc Get on clusters")
+	flag.Uint64Var(&options.mutationDifferBatchSize, "mutationDifferBatchSize", 500,
+		"size of batch used by mutation differ")
+	flag.Uint64Var(&options.mutationDifferTimeout, "mutationDifferTimeout", 10,
+		"timeout, in seconds, used by mutation differ")
+	flag.BoolVar(&options.mutationDifferOnly, "mutationDifferOnly", false,
+		"just run mutation differ and nothing else")
 
 	flag.Parse()
 }
@@ -117,26 +131,31 @@ func usage() {
 func main() {
 	argParse()
 
-	if options.completeByDuration == 0 && !options.completeBySeqno {
-		fmt.Printf("completeByDuration is required when completeBySeqno is false\n")
-		os.Exit(1)
-	}
-
-	fmt.Printf("Tool started\n")
-
-	if err := cleanUpAndSetup(); err != nil {
-		fmt.Printf("Unable to clean and set up directory structure: %v\n", err)
-		os.Exit(1)
-	}
-
-	generateDataFiles()
-
-	diffDataFiles()
-
-	if options.verifyDiffKeys {
+	if options.mutationDifferOnly {
 		verifyDiffKeysByGet()
 	} else {
-		fmt.Printf("Skipping mutation diff since it has been disabled\n")
+
+		if options.completeByDuration == 0 && !options.completeBySeqno {
+			fmt.Printf("completeByDuration is required when completeBySeqno is false\n")
+			os.Exit(1)
+		}
+
+		fmt.Printf("Tool started\n")
+
+		if err := cleanUpAndSetup(); err != nil {
+			fmt.Printf("Unable to clean and set up directory structure: %v\n", err)
+			os.Exit(1)
+		}
+
+		generateDataFiles()
+
+		diffDataFiles()
+
+		if options.verifyDiffKeys {
+			verifyDiffKeysByGet()
+		} else {
+			fmt.Printf("Skipping mutation diff since it has been disabled\n")
+		}
 	}
 }
 
@@ -225,7 +244,7 @@ func verifyDiffKeysByGet() {
 	fmt.Printf("VerifyDiffKeys routine started\n")
 	defer fmt.Printf("VerifyDiffKeys routine completed\n")
 
-	differ := differ.NewMutationDiffer(options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.diffFileDir, int(options.numberOfWorkersForMutationDiffer))
+	differ := differ.NewMutationDiffer(options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.diffFileDir, int(options.numberOfWorkersForMutationDiffer), int(options.mutationDifferBatchSize), int(options.mutationDifferTimeout))
 	err := differ.Run()
 	if err != nil {
 		fmt.Printf("Error from verifyDiffKeys = %v\n", err)
@@ -245,7 +264,7 @@ func startDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoi
 
 func waitForCompletion(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan chan error, waitGroup *sync.WaitGroup) {
 	doneChan := make(chan bool, 1)
-	go waitForWaitGroup(waitGroup, doneChan)
+	go utils.WaitForWaitGroup(waitGroup, doneChan)
 
 	select {
 	case err := <-errChan:
@@ -284,9 +303,4 @@ func waitForDuration(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan ch
 	if err != nil {
 		fmt.Printf("Error stopping target dcp client. err=%v\n", err)
 	}
-}
-
-func waitForWaitGroup(waitGroup *sync.WaitGroup, doneChan chan bool) {
-	waitGroup.Wait()
-	close(doneChan)
 }

@@ -12,10 +12,11 @@ package utils
 import (
 	"bytes"
 	"fmt"
+	"github.com/nelio2k/xdcrDiffer/base"
 	"hash/crc32"
 	"math"
 	"strconv"
-	"github.com/nelio2k/xdcrDiffer/base"
+	"sync"
 )
 
 func GetFileName(fileDir string, vbno uint16, bucketIndex int) string {
@@ -116,4 +117,9 @@ func ParseHighSeqnoStat(statsMap map[string]map[string]string, highSeqnoMap map[
 	}
 
 	return nil
+}
+
+func WaitForWaitGroup(waitGroup *sync.WaitGroup, doneChan chan bool) {
+	waitGroup.Wait()
+	close(doneChan)
 }

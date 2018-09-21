@@ -85,7 +85,7 @@ func (cm *CheckpointManager) Stop() error {
 }
 
 func (cm *CheckpointManager) reportStatus() {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -105,7 +105,7 @@ func (cm *CheckpointManager) reportStatusOnce() {
 	for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
 		sum += cm.seqnoMap[vbno].getSeqno()
 	}
-	fmt.Printf("%v processed %v mutations\n", cm.clusterName, sum)
+	fmt.Printf("%v %v processed %v mutations\n", time.Now(), cm.clusterName, sum)
 }
 
 func (cm *CheckpointManager) initialize() error {
@@ -225,9 +225,15 @@ func (cm *CheckpointManager) SaveCheckpoint() error {
 	}
 
 	var vbno uint16
+	var total uint64
+	var emptyVbs int
 	for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
 		vbuuid := cm.vbuuidMap[vbno]
 		seqno := cm.seqnoMap[vbno].getSeqno()
+		total += seqno
+		if seqno == 0 {
+			emptyVbs++
+		}
 		var snapshotStartSeqno uint64
 		var snapshotEndSeqno uint64
 
@@ -264,6 +270,9 @@ func (cm *CheckpointManager) SaveCheckpoint() error {
 	if numOfBytes != len(value) {
 		return fmt.Errorf("Incomplete write. expected=%v, actual=%v", len(value), numOfBytes)
 	}
+
+	fmt.Printf("----------------------------------------------------------------")
+	fmt.Printf("%v totalMutationsChecked=%v, emptyVbs=%v\n", cm.clusterName, total, emptyVbs)
 	return nil
 }
 

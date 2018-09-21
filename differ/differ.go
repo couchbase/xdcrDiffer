@@ -326,7 +326,7 @@ func (differ *FilesDiffer) diffSorted() []string {
 	for ; j < file2Len; j++ {
 		// This means that all the rest of the entries in file2 are missing from file1
 		differ.MissingFromFile1 = append(differ.MissingFromFile1, differ.file2.sortedEntries[j])
-		diffKeys = append(diffKeys, differ.file2.sortedEntries[i].Key)
+		diffKeys = append(diffKeys, differ.file2.sortedEntries[j].Key)
 	}
 
 	return diffKeys

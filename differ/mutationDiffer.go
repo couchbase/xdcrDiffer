@@ -37,6 +37,8 @@ type MutationDiffer struct {
 	targetPassword   string
 	diffFileDir      string
 	numberOfWorkers  int
+	batchSize        int
+	timeout          int
 
 	sourceBucket *gocb.Bucket
 	targetBucket *gocb.Bucket
@@ -45,17 +47,6 @@ type MutationDiffer struct {
 	missingFromTarget map[string]*gocbcore.GetMetaResult
 	diff              map[string][]*gocbcore.GetMetaResult
 	stateLock         *sync.RWMutex
-}
-
-type DifferWorker struct {
-	differ *MutationDiffer
-	// keys to do diff on
-	keys              []string
-	sourceBucket      *gocb.Bucket
-	targetBucket      *gocb.Bucket
-	waitGroup         *sync.WaitGroup
-	sourceResultCount uint32
-	targetResultCount uint32
 }
 
 func NewMutationDiffer(sourceUrl string,
@@ -67,7 +58,9 @@ func NewMutationDiffer(sourceUrl string,
 	targetUserName string,
 	targetPassword string,
 	diffFileDir string,
-	numberOfWorkers int) *MutationDiffer {
+	numberOfWorkers int,
+	batchSize int,
+	timeout int) *MutationDiffer {
 	return &MutationDiffer{
 		sourceUrl:         sourceUrl,
 		sourceBucketName:  sourceBucketName,
@@ -79,6 +72,8 @@ func NewMutationDiffer(sourceUrl string,
 		targetPassword:    targetPassword,
 		diffFileDir:       diffFileDir,
 		numberOfWorkers:   numberOfWorkers,
+		batchSize:         batchSize,
+		timeout:           timeout,
 		missingFromSource: make(map[string]*gocbcore.GetMetaResult),
 		missingFromTarget: make(map[string]*gocbcore.GetMetaResult),
 		diff:              make(map[string][]*gocbcore.GetMetaResult),
@@ -183,73 +178,90 @@ func (d *MutationDiffer) addDiff(missingFromSource map[string]*gocbcore.GetMetaR
 	}
 }
 
+type DifferWorker struct {
+	differ *MutationDiffer
+	// keys to do diff on
+	keys          []string
+	sourceBucket  *gocb.Bucket
+	targetBucket  *gocb.Bucket
+	waitGroup     *sync.WaitGroup
+	sourceResults map[string]*GetResult
+	targetResults map[string]*GetResult
+	resultsLock   sync.RWMutex
+}
+
 func NewDifferWorker(differ *MutationDiffer, sourceBucket, targetBucket *gocb.Bucket, keys []string, waitGroup *sync.WaitGroup) *DifferWorker {
 	return &DifferWorker{
-		differ:       differ,
-		sourceBucket: sourceBucket,
-		targetBucket: targetBucket,
-		keys:         keys,
-		waitGroup:    waitGroup,
+		differ:        differ,
+		sourceBucket:  sourceBucket,
+		targetBucket:  targetBucket,
+		keys:          keys,
+		waitGroup:     waitGroup,
+		sourceResults: make(map[string]*GetResult),
+		targetResults: make(map[string]*GetResult),
 	}
 }
 
 func (dw *DifferWorker) run() {
 	defer dw.waitGroup.Done()
-	sourceResults, targetResults := dw.getResults()
-	dw.diff(sourceResults, targetResults)
+	dw.getResults()
+	dw.diff()
 }
 
-func (dw *DifferWorker) getResults() (map[string]*GetResult, map[string]*GetResult) {
-
-	sourceResults := make(map[string]*GetResult)
-	targetResults := make(map[string]*GetResult)
-	for _, key := range dw.keys {
-		sourceResults[key] = &GetResult{}
-		targetResults[key] = &GetResult{}
-	}
-
-	for _, key := range dw.keys {
-		dw.get(key, sourceResults, true /*isSource*/)
-		dw.get(key, targetResults, false /*isSource*/)
-	}
-
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-	timer := time.NewTimer(20 * time.Second)
-	defer timer.Stop()
+func (dw *DifferWorker) getResults() {
+	index := 0
 	for {
-		select {
-		case <-ticker.C:
-			if atomic.LoadUint32(&dw.sourceResultCount) == uint32(len(dw.keys)) &&
-				atomic.LoadUint32(&dw.targetResultCount) == uint32(len(dw.keys)) {
-				goto done
-			}
-		case <-timer.C:
-			fmt.Printf("get timed out\n")
-			goto done
+		if index >= len(dw.keys) {
+			break
 		}
+
+		if index+dw.differ.batchSize < len(dw.keys) {
+			dw.sendBatch(index, index+dw.differ.batchSize)
+			index += dw.differ.batchSize
+			continue
+		}
+
+		dw.sendBatch(index, len(dw.keys))
+		break
 	}
-done:
-	return sourceResults, targetResults
+
 }
 
-func (dw *DifferWorker) diff(sourceResults, targetResults map[string]*GetResult) {
+func (dw *DifferWorker) sendBatch(startIndex, endIndex int) {
+	batch := NewBatch(dw, startIndex, endIndex)
+	batch.send()
+	dw.mergeResults(batch)
+}
+
+// merge results obtained by batch into dw
+// no need to lock results in dw since it is never accessed concurrently
+// need to lock results in batch since it could still be updated when mergeResults is called
+func (dw *DifferWorker) mergeResults(b *batch) {
+	for key, result := range b.sourceResults {
+		dw.sourceResults[key] = result.Clone()
+	}
+	for key, result := range b.targetResults {
+		dw.targetResults[key] = result.Clone()
+	}
+
+}
+
+func (dw *DifferWorker) diff() {
 	missingFromSource := make(map[string]*gocbcore.GetMetaResult)
 	missingFromTarget := make(map[string]*gocbcore.GetMetaResult)
 	diff := make(map[string][]*gocbcore.GetMetaResult)
 
-	for key, sourceResult := range sourceResults {
+	for key, sourceResult := range dw.sourceResults {
 		if sourceResult.Key == "" {
 			fmt.Printf("Skipping diff on %v since we did not get results from source\n", key)
 			continue
 		}
 
-		targetResult := targetResults[key]
+		targetResult := dw.targetResults[key]
 		if targetResult.Key == "" {
 			fmt.Printf("Skipping diff on %v since we did not get results from target\n", key)
 			continue
 		}
-
 		if isKeyNotFoundError(sourceResult.Error) && !isKeyNotFoundError(targetResult.Error) {
 			missingFromSource[key] = targetResult.Result
 			continue
@@ -264,6 +276,92 @@ func (dw *DifferWorker) diff(sourceResults, targetResults map[string]*GetResult)
 	}
 
 	dw.differ.addDiff(missingFromSource, missingFromTarget, diff)
+}
+
+type batch struct {
+	dw                *DifferWorker
+	keys              []string
+	waitGroup         sync.WaitGroup
+	sourceResultCount uint32
+	targetResultCount uint32
+	sourceResults     map[string]*GetResult
+	targetResults     map[string]*GetResult
+	resultsLock       sync.RWMutex
+}
+
+func NewBatch(dw *DifferWorker, startIndex, endIndex int) *batch {
+	b := &batch{
+		dw:            dw,
+		keys:          dw.keys[startIndex:endIndex],
+		sourceResults: make(map[string]*GetResult),
+		targetResults: make(map[string]*GetResult),
+	}
+
+	// initialize all entries in results map
+	// update to *GetResult in map will not be treated as concurrent update to map itself
+	for _, key := range b.keys {
+		b.sourceResults[key] = &GetResult{}
+		b.targetResults[key] = &GetResult{}
+	}
+
+	return b
+}
+
+func (b *batch) send() {
+	b.waitGroup.Add(2)
+	for _, key := range b.keys {
+		b.get(key, true /*isSource*/)
+		b.get(key, false /*isSource*/)
+	}
+
+	doneChan := make(chan bool, 1)
+	go utils.WaitForWaitGroup(&b.waitGroup, doneChan)
+
+	start := time.Now()
+
+	timer := time.NewTimer(time.Duration(b.dw.differ.timeout) * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case <-doneChan:
+			fmt.Printf("batch completed after %v\n", time.Since(start))
+			goto done
+		case <-timer.C:
+			fmt.Printf("batch timed out\n")
+			goto done
+		}
+	}
+done:
+}
+
+func (b *batch) get(key string, isSource bool) {
+	getCallbackFunc := func(result *gocbcore.GetMetaResult, err error) {
+		var resultsMap map[string]*GetResult
+		var newCount uint32
+		if isSource {
+			resultsMap = b.sourceResults
+			newCount = atomic.AddUint32(&b.sourceResultCount, 1)
+		} else {
+			resultsMap = b.targetResults
+			newCount = atomic.AddUint32(&b.targetResultCount, 1)
+		}
+		resultInMap := resultsMap[key]
+		resultInMap.Lock.Lock()
+		resultInMap.Key = string(key)
+		resultInMap.Result = result
+		resultInMap.Error = err
+		resultInMap.Lock.Unlock()
+
+		if newCount == uint32(len(b.keys)) {
+			b.waitGroup.Done()
+		}
+	}
+
+	if isSource {
+		b.dw.sourceBucket.IoRouter().GetMetaEx(gocbcore.GetMetaOptions{Key: []byte(key)}, getCallbackFunc)
+	} else {
+		b.dw.targetBucket.IoRouter().GetMetaEx(gocbcore.GetMetaOptions{Key: []byte(key)}, getCallbackFunc)
+	}
 }
 
 func isKeyNotFoundError(err error) bool {
@@ -282,36 +380,23 @@ func areGetMetaResultsTheSame(result1, result2 *gocbcore.GetMetaResult) bool {
 		result1.SeqNo == result2.SeqNo && result1.Deleted == result2.Deleted
 }
 
-func (dw *DifferWorker) get(key string, resultsMap map[string]*GetResult, isSource bool) {
-	getCallbackFunc := func(result *gocbcore.GetMetaResult, err error) {
-		resultsMap[key].Key = string(key)
-		resultsMap[key].Result = result
-		resultsMap[key].Error = err
-		if isSource {
-			atomic.AddUint32(&dw.sourceResultCount, 1)
-		} else {
-			atomic.AddUint32(&dw.targetResultCount, 1)
-		}
-	}
-
-	if isSource {
-		dw.sourceBucket.IoRouter().GetMetaEx(gocbcore.GetMetaOptions{Key: []byte(key)}, getCallbackFunc)
-	} else {
-		dw.targetBucket.IoRouter().GetMetaEx(gocbcore.GetMetaOptions{Key: []byte(key)}, getCallbackFunc)
-	}
-}
-
 type GetResult struct {
 	Key    string
 	Result *gocbcore.GetMetaResult
 	Error  error
+	Lock   sync.RWMutex
 }
 
-func (r *GetResult) String() string {
-	if r.Result == nil {
-		return fmt.Sprintf("nil result")
+func (r *GetResult) Clone() *GetResult {
+	r.Lock.RLock()
+	defer r.Lock.RUnlock()
+
+	// shallow copy is good enough to prevent race
+	return &GetResult{
+		Key:    r.Key,
+		Result: r.Result,
+		Error:  r.Error,
 	}
-	return fmt.Sprintf("Cas=%v Datatype=%v Flags=%v Value=%v", r.Result.Cas, r.Result.Datatype, r.Result.Flags, r.Result.Value)
 }
 
 func (d *MutationDiffer) initialize() error {
