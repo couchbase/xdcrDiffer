@@ -151,3 +151,12 @@ func ExponentialBackoffExecutor(name string, initialWait time.Duration, maxRetri
 	opErr = fmt.Errorf("Operation failed after max retries. Last error: %v", opErr.Error())
 	return opErr
 }
+
+// add to error chan without blocking
+func AddToErrorChan(errChan chan error, err error) {
+	select {
+	case errChan <- err:
+	default:
+		// some error already sent to errChan. no op
+	}
+}

@@ -206,24 +206,13 @@ func generateDataFiles() {
 	}
 
 	fmt.Printf("Starting source dcp clients\n")
-	sourceDcpDriver, err := startDcpDriver(base.SourceClusterName, options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients, options.numberOfWorkersPerDcpClient, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
-	if err != nil {
-		fmt.Printf("Error starting source dcp client. err=%v\n", err)
-		// TODO retry?
-		os.Exit(1)
-	}
+	sourceDcpDriver := startDcpDriver(base.SourceClusterName, options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients, options.numberOfWorkersPerDcpClient, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 
 	fmt.Printf("Waiting for %v before starting target dcp clients\n", base.DelayBetweenSourceAndTarget)
 	time.Sleep(base.DelayBetweenSourceAndTarget)
 
 	fmt.Printf("Starting target dcp clients\n")
-	targetDcpDriver, err := startDcpDriver(base.TargetClusterName, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients, options.numberOfWorkersPerDcpClient, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
-	if err != nil {
-		fmt.Printf("Error starting target dcp client. err=%v\n", err)
-		sourceDcpDriver.Stop()
-		// TODO retry?
-		os.Exit(1)
-	}
+	targetDcpDriver := startDcpDriver(base.TargetClusterName, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients, options.numberOfWorkersPerDcpClient, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 
 	if options.completeBySeqno {
 		waitForCompletion(sourceDcpDriver, targetDcpDriver, errChan, waitGroup)
@@ -254,14 +243,18 @@ func verifyDiffKeysByGet() {
 	}
 }
 
-func startDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBuckets uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface) (*dcp.DcpDriver, error) {
+func startDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBuckets uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface) *dcp.DcpDriver {
 	waitGroup.Add(1)
 	dcpDriver := dcp.NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBuckets), errChan, waitGroup, completeBySeqno, fdPool)
+	// dcp driver startup may take some time. Do it asynchronously
+	go startDcpDriverAysnc(dcpDriver, errChan)
+	return dcpDriver
+}
+
+func startDcpDriverAysnc(dcpDriver *dcp.DcpDriver, errChan chan error) {
 	err := dcpDriver.Start()
-	if err == nil {
-		return dcpDriver, nil
-	} else {
-		return nil, err
+	if err != nil {
+		utils.AddToErrorChan(errChan, err)
 	}
 }
 

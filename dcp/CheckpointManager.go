@@ -66,6 +66,8 @@ func (cm *CheckpointManager) Start() error {
 		return err
 	}
 
+	fmt.Printf("%v checkpoint manager initialized.\n", cm.clusterName)
+
 	go cm.reportStatus()
 
 	return nil
@@ -121,6 +123,8 @@ func (cm *CheckpointManager) initialize() error {
 	if err != nil {
 		return err
 	}
+
+	fmt.Printf("%v endSeqno map retrieved.\n", cm.clusterName)
 
 	return cm.setStartVBTS(endSeqnoMap)
 }

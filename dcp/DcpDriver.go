@@ -36,10 +36,21 @@ type DcpDriver struct {
 	fdPool            fdp.FdPoolIface
 	clients           []*DcpClient
 	// value = true if processing on the vb has been completed
-	vbState   map[uint16]bool
-	stopped   bool
+	vbState map[uint16]bool
+	// 0 - not started
+	// 1 - started
+	// 2 - stopped
+	state     DriverState
 	stateLock sync.RWMutex
 }
+
+type DriverState int
+
+const (
+	DriverStateNew     DriverState = iota
+	DriverStateStarted DriverState = iota
+	DriverStateStopped DriverState = iota
+)
 
 func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBuckets int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface) *DcpDriver {
 	return &DcpDriver{
@@ -57,6 +68,7 @@ func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoint
 		waitGroup:         waitGroup,
 		vbState:           make(map[uint16]bool),
 		fdPool:            fdPool,
+		state:             DriverStateNew,
 	}
 }
 
@@ -67,7 +79,16 @@ func (d *DcpDriver) Start() error {
 		return err
 	}
 
-	return d.initializeDcpClients()
+	fmt.Printf("%v started checkpoint manager.\n", d.Name)
+
+	err = d.initializeDcpClients()
+	if err != nil {
+		fmt.Printf("%v error initializing dcp clients. err=%v\n", d.Name, err)
+		return err
+	}
+
+	d.setState(DriverStateStarted)
+	return nil
 }
 
 func (d *DcpDriver) initializeAndStartCheckpointManager() error {
@@ -76,6 +97,9 @@ func (d *DcpDriver) initializeAndStartCheckpointManager() error {
 		fmt.Printf("%v error initializing cluster. err=%v\n", d.Name, err)
 		return err
 	}
+
+	fmt.Printf("%v initialized cluster for checkpoint manager.\n", d.Name)
+
 	d.checkpointManager.SetCluster(d.cluster)
 	return d.checkpointManager.Start()
 }
@@ -104,8 +128,8 @@ func (d *DcpDriver) Stop() error {
 	d.stateLock.Lock()
 	defer d.stateLock.Unlock()
 
-	if d.stopped {
-		fmt.Printf("Skipping stop() because dcp driver is already stopped\n")
+	if d.state != DriverStateStarted {
+		fmt.Printf("Skipping stop() because dcp driver is not started or is already stopped\n")
 		return nil
 	}
 
@@ -127,7 +151,7 @@ func (d *DcpDriver) Stop() error {
 		fmt.Printf("%v error stopping checkpoint manager. err=%v\n", d.Name, err)
 	}
 
-	d.stopped = true
+	d.state = DriverStateStopped
 
 	return nil
 }
@@ -153,27 +177,30 @@ func (d *DcpDriver) initializeDcpClients() error {
 			fmt.Printf("%v error starting dcp client. err=%v\n", d.Name, err)
 			return err
 		}
+		fmt.Printf("%v started dcp client %v\n", d.Name, i)
 	}
 	return nil
 }
 
-func (d *DcpDriver) hasStopped() bool {
+func (d *DcpDriver) getState() DriverState {
 	d.stateLock.RLock()
 	defer d.stateLock.RUnlock()
-	return d.stopped
+	return d.state
+}
+
+func (d *DcpDriver) setState(state DriverState) {
+	d.stateLock.Lock()
+	defer d.stateLock.Unlock()
+	d.state = state
 }
 
 func (d *DcpDriver) reportError(err error) {
 	// avoid printing spurious errors if we are stopping
-	if !d.hasStopped() {
+	if d.getState() != DriverStateStopped {
 		fmt.Printf("%s dcp driver encountered error=%v\n", d.Name, err)
 	}
 
-	select {
-	case d.errChan <- err:
-	default:
-		// some error already sent to errChan. no op
-	}
+	utils.AddToErrorChan(d.errChan, err)
 }
 
 func (d *DcpDriver) handleVbucketCompletion(vbno uint16, err error) {
