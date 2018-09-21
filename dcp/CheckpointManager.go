@@ -131,8 +131,9 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() (map[uint16]uint64, error
 		fmt.Printf("%v error opening bucket. err=%v\n", cm.clusterName, err)
 		return nil, err
 	}
-
 	defer statsBucket.Close()
+
+	statsBucket.SetOperationTimeout(base.BucketOpTimeout)
 
 	statsMap, err := cm.getStatsWithRetry(statsBucket)
 	if err != nil {

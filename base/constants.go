@@ -34,6 +34,7 @@ const DiffDetailsFileName = "diffDetails"
 const MutationDiffFileName = "mutationDiffDetails"
 const CheckpointManagerReportInterval = 5
 
+var BucketOpTimeout time.Duration = 10 * time.Second
 var GetStatsRetryInterval time.Duration = 1 * time.Second
 
 const MaxNumOfGetStatsRetry = 10
