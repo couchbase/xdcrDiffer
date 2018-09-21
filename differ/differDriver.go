@@ -29,7 +29,7 @@ type DifferDriver struct {
 	diffKeys        []string
 	diffDetails     []byte
 	stateLock       *sync.RWMutex
-	fileDescPool    fdp.FdPoolIface
+	fileDescPool    *fdp.FdPool
 }
 
 func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir string, numberOfWorkers, numberOfBuckets int, numberOfFds int) *DifferDriver {
@@ -130,10 +130,10 @@ type DifferHandler struct {
 	vbList          []uint16
 	numberOfBuckets int
 	waitGroup       *sync.WaitGroup
-	fileDescPool    fdp.FdPoolIface
+	fileDescPool    *fdp.FdPool
 }
 
-func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFileDir string, vbList []uint16, numberOfBuckets int, waitGroup *sync.WaitGroup, fdPool fdp.FdPoolIface) *DifferHandler {
+func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFileDir string, vbList []uint16, numberOfBuckets int, waitGroup *sync.WaitGroup, fdPool *fdp.FdPool) *DifferHandler {
 	return &DifferHandler{
 		driver:          driver,
 		index:           index,

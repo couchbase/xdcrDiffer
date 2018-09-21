@@ -40,7 +40,7 @@ type FilesDiffer struct {
 	MissingFromFile2     []*oneEntry
 	BothExistButMismatch []*entryPair
 
-	fdPool fdp.FdPoolIface
+	fdPool *fdp.FdPool
 }
 
 type FileAttributes struct {
@@ -120,7 +120,7 @@ func NewFilesDiffer(file1, file2 string) *FilesDiffer {
 	return differ
 }
 
-func NewFilesDifferWithFDPool(file1, file2 string, fdPool fdp.FdPoolIface) (*FilesDiffer, error) {
+func NewFilesDifferWithFDPool(file1, file2 string, fdPool *fdp.FdPool) (*FilesDiffer, error) {
 	var err error
 	differ := NewFilesDiffer(file1, file2)
 	if fdPool != nil {
