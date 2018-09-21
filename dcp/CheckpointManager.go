@@ -71,6 +71,9 @@ func (cm *CheckpointManager) Start() error {
 }
 
 func (cm *CheckpointManager) Stop() error {
+	fmt.Printf("CheckpointManager stopping\n")
+	defer fmt.Printf("CheckpointManager stopped\n")
+
 	err := cm.SaveCheckpoint()
 	if err != nil {
 		fmt.Printf("%v error saving checkpoint. err=%v\n", cm.clusterName, err)

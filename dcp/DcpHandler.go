@@ -102,7 +102,7 @@ func (dh *DcpHandler) cleanup() {
 				fmt.Printf("Cannot find bucket for vbno %v and index %v at cleanup\n", vbno, i)
 				continue
 			}
-			fmt.Printf("%v DcpHandler closing bucket %v\n", dh.dcpClient.Name, i)
+			//fmt.Printf("%v DcpHandler closing bucket %v\n", dh.dcpClient.Name, i)
 			bucket.close()
 		}
 	}
@@ -164,7 +164,7 @@ func (dh *DcpHandler) Expiration(seqno, revId, cas uint64, vbno uint16, key []by
 }
 
 func (dh *DcpHandler) End(vbno uint16, err error) {
-	dh.dcpClient.handleVbucketCompletion(vbno, err)
+	dh.dcpClient.dcpDriver.handleVbucketCompletion(vbno, err)
 }
 
 type Bucket struct {

@@ -34,7 +34,8 @@ var options struct {
 	targetPassword                   string
 	targetBucketName                 string
 	targetFileDir                    string
-	numberOfWorkersForDcp            uint64
+	numberOfDcpClients               uint64
+	numberOfWorkersPerDcpClient      uint64
 	numberOfWorkersForFileDiffer     uint64
 	numberOfWorkersForMutationDiffer uint64
 	numberOfBuckets                  uint64
@@ -78,13 +79,15 @@ func argParse() {
 		"bucket name for target cluster")
 	flag.StringVar(&options.targetFileDir, "targetFileDir", "target",
 		"directory to store mutations in target cluster")
-	flag.Uint64Var(&options.numberOfWorkersForDcp, "numberOfWorkersForDcp", 10,
-		"number of worker threads for dcp")
+	flag.Uint64Var(&options.numberOfDcpClients, "numberOfDcpClients", 10,
+		"number of dcp clients")
+	flag.Uint64Var(&options.numberOfWorkersPerDcpClient, "numberOfWorkersPerDcpClient", 10,
+		"number of workers for each dcp client")
 	flag.Uint64Var(&options.numberOfWorkersForFileDiffer, "numberOfWorkersForFileDiffer", 10,
 		"number of worker threads for file differ ")
 	flag.Uint64Var(&options.numberOfWorkersForMutationDiffer, "numberOfWorkersForMutationDiffer", 10,
 		"number of worker threads for mutation differ ")
-	flag.Uint64Var(&options.numberOfBuckets, "numberOfBuckets", 10,
+	flag.Uint64Var(&options.numberOfBuckets, "numberOfBuckets", 1,
 		"number of buckets per vbucket")
 	flag.Uint64Var(&options.numberOfFileDesc, "numberOfFileDesc", 0,
 		"number of file descriptors")
@@ -150,23 +153,22 @@ func cleanUpAndSetup() error {
 	}
 	err = os.RemoveAll(options.diffFileDir)
 	if err != nil {
-		fmt.Errorf("Error removing targetFileDir: %v\n", err)
+		fmt.Errorf("Error removing diffFileDir: %v\n", err)
 		return err
 	}
-
 	err = os.MkdirAll(options.sourceFileDir, 0777)
 	if err != nil {
-		fmt.Errorf("Error removing targetFileDir: %v\n", err)
+		fmt.Errorf("Error mkdir targetFileDir: %v\n", err)
 		return err
 	}
 	err = os.MkdirAll(options.targetFileDir, 0777)
 	if err != nil {
-		fmt.Errorf("Error removing targetFileDir: %v\n", err)
+		fmt.Errorf("Error mkdir targetFileDir: %v\n", err)
 		return err
 	}
 	err = os.MkdirAll(options.diffFileDir, 0777)
 	if err != nil {
-		fmt.Errorf("Error removing targetFileDir: %v\n", err)
+		fmt.Errorf("Error mkdir diffFileDir: %v\n", err)
 		return err
 	}
 	return nil
@@ -184,7 +186,7 @@ func generateDataFiles() {
 		fileDescPool = fdp.NewFileDescriptorPool(int(options.numberOfFileDesc))
 	}
 
-	sourceDcpClient, err := startDcpClient(base.SourceClusterName, options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfWorkersForDcp, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
+	sourceDcpDriver, err := startDcpDriver(base.SourceClusterName, options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients, options.numberOfWorkersPerDcpClient, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 	if err != nil {
 		fmt.Printf("Error starting source dcp client. err=%v\n", err)
 		// TODO retry?
@@ -193,18 +195,18 @@ func generateDataFiles() {
 
 	time.Sleep(base.DelayBetweenSourceAndTarget)
 
-	targetDcpClient, err := startDcpClient(base.TargetClusterName, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfWorkersForDcp, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
+	targetDcpDriver, err := startDcpDriver(base.TargetClusterName, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients, options.numberOfWorkersPerDcpClient, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 	if err != nil {
 		fmt.Printf("Error starting target dcp client. err=%v\n", err)
-		sourceDcpClient.Stop()
+		sourceDcpDriver.Stop()
 		// TODO retry?
 		os.Exit(1)
 	}
 
 	if options.completeBySeqno {
-		waitForCompletion(sourceDcpClient, targetDcpClient, errChan, waitGroup)
+		waitForCompletion(sourceDcpDriver, targetDcpDriver, errChan, waitGroup)
 	} else {
-		waitForDuration(sourceDcpClient, targetDcpClient, errChan, options.completeByDuration)
+		waitForDuration(sourceDcpDriver, targetDcpDriver, errChan, options.completeByDuration)
 	}
 }
 
@@ -230,29 +232,29 @@ func verifyDiffKeysByGet() {
 	}
 }
 
-func startDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfWorkers, numberOfBuckets uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface) (*dcp.DcpClient, error) {
+func startDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBuckets uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface) (*dcp.DcpDriver, error) {
 	waitGroup.Add(1)
-	dcpClient := dcp.NewDcpClient(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, int(numberOfWorkers), int(numberOfBuckets), errChan, waitGroup, completeBySeqno, fdPool)
-	err := dcpClient.Start()
+	dcpDriver := dcp.NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBuckets), errChan, waitGroup, completeBySeqno, fdPool)
+	err := dcpDriver.Start()
 	if err == nil {
-		return dcpClient, nil
+		return dcpDriver, nil
 	} else {
 		return nil, err
 	}
 }
 
-func waitForCompletion(sourceDcpClient, targetDcpClient *dcp.DcpClient, errChan chan error, waitGroup *sync.WaitGroup) {
+func waitForCompletion(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan chan error, waitGroup *sync.WaitGroup) {
 	doneChan := make(chan bool, 1)
 	go waitForWaitGroup(waitGroup, doneChan)
 
 	select {
 	case err := <-errChan:
 		fmt.Printf("Exiting tool due to error from dcp client %v\n", err)
-		err = sourceDcpClient.Stop()
+		err = sourceDcpDriver.Stop()
 		if err != nil {
 			fmt.Printf("Error stopping source dcp client. err=%v\n", err)
 		}
-		err = targetDcpClient.Stop()
+		err = targetDcpDriver.Stop()
 		if err != nil {
 			fmt.Printf("Error stopping target dcp client. err=%v\n", err)
 		}
@@ -261,7 +263,7 @@ func waitForCompletion(sourceDcpClient, targetDcpClient *dcp.DcpClient, errChan 
 	}
 }
 
-func waitForDuration(sourceDcpClient, targetDcpClient *dcp.DcpClient, errChan chan error, duration uint64) {
+func waitForDuration(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan chan error, duration uint64) {
 	timer := time.NewTimer(time.Duration(duration) * time.Minute)
 
 	select {
@@ -271,14 +273,14 @@ func waitForDuration(sourceDcpClient, targetDcpClient *dcp.DcpClient, errChan ch
 		fmt.Printf("Exiting tool after specified processing duration\n")
 	}
 
-	err := sourceDcpClient.Stop()
+	err := sourceDcpDriver.Stop()
 	if err != nil {
 		fmt.Printf("Error stopping source dcp client. err=%v\n", err)
 	}
 
 	time.Sleep(base.DelayBetweenSourceAndTarget)
 
-	err = targetDcpClient.Stop()
+	err = targetDcpDriver.Stop()
 	if err != nil {
 		fmt.Printf("Error stopping target dcp client. err=%v\n", err)
 	}
