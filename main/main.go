@@ -148,12 +148,23 @@ func cleanUpAndSetup() error {
 		fmt.Errorf("Error removing targetFileDir: %v\n", err)
 		return err
 	}
+	err = os.RemoveAll(options.diffFileDir)
+	if err != nil {
+		fmt.Errorf("Error removing targetFileDir: %v\n", err)
+		return err
+	}
+
 	err = os.MkdirAll(options.sourceFileDir, 0777)
 	if err != nil {
 		fmt.Errorf("Error removing targetFileDir: %v\n", err)
 		return err
 	}
 	err = os.MkdirAll(options.targetFileDir, 0777)
+	if err != nil {
+		fmt.Errorf("Error removing targetFileDir: %v\n", err)
+		return err
+	}
+	err = os.MkdirAll(options.diffFileDir, 0777)
 	if err != nil {
 		fmt.Errorf("Error removing targetFileDir: %v\n", err)
 		return err

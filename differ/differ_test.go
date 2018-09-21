@@ -225,7 +225,7 @@ func TestLoadSameFile(t *testing.T) {
 
 	result, _ := differ.Diff()
 
-	assert.True(result)
+	assert.True(len(result) == 0)
 	differ.PrettyPrintResult()
 	fmt.Println("============== Test case end: TestLoadSameFile =================")
 }
@@ -250,7 +250,7 @@ func TestLoadMismatchedFiles(t *testing.T) {
 
 	result, _ := differ.Diff()
 
-	assert.False(result)
+	assert.False(len(result) == 0)
 
 	assert.Equal(numMismatch, len(differ.BothExistButMismatch))
 	assert.True(verifyMisMatch(keys, differ))
@@ -291,7 +291,7 @@ func TestLoadMismatchedFilesAndUneven(t *testing.T) {
 
 	result, _ := differ.Diff()
 
-	assert.False(result)
+	assert.False(len(result) == 0)
 
 	assert.Equal(numMismatch, len(differ.BothExistButMismatch))
 	assert.True(verifyMisMatch(keys, differ))
@@ -299,7 +299,6 @@ func TestLoadMismatchedFilesAndUneven(t *testing.T) {
 	assert.Equal(0, len(differ.MissingFromFile1))
 	assert.Equal(extraEntries, len(differ.MissingFromFile2))
 	differ.PrettyPrintResult()
-	differ.OutputToJsonFile("/tmp/testJson.json")
 	fmt.Println("============== Test case start: TestLoadMismatchedFilesAndUneven =================")
 }
 
@@ -325,6 +324,14 @@ func TestLoadSameFileWPool(t *testing.T) {
 
 	result, _ := differ.Diff()
 
-	assert.True(result)
+	assert.True(len(result) == 0)
 	fmt.Println("============== Test case end: TestLoadSameFileWPool =================")
+}
+
+func TestNoFilePool(t *testing.T) {
+	assert := assert.New(t)
+
+	differDriver := NewDifferDriver("", "", "", 2, 2, 0)
+	assert.NotNil(differDriver)
+	assert.Nil(differDriver.fileDescPool)
 }
