@@ -32,13 +32,16 @@ const TargetClusterName = "target"
 const DiffKeysFileName = "diffKeys"
 const DiffDetailsFileName = "diffDetails"
 const MutationDiffFileName = "mutationDiffDetails"
-const CheckpointManagerReportInterval = 5
+const DiffErrorKeysFileName = "diffKeysWithError"
+const StatsReportInterval = 5
 
 var BucketOpTimeout time.Duration = 10 * time.Second
 var GetStatsRetryInterval time.Duration = 1 * time.Second
+var SendBatchRetryInterval time.Duration = 500 * time.Millisecond
 
-const MaxNumOfGetStatsRetry = 10
-const BackoffFactor = 1
+const MaxNumOfRetry = 10
+const GetStatsBackoffFactor = 1
+const SendBatchBackoffFactor = 2
 
 // time to wait to stop processing of target cluster after processing of source cluster is completed
 var DelayBetweenSourceAndTarget time.Duration = 2 * time.Second

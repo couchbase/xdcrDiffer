@@ -55,6 +55,10 @@ var options struct {
 	newCheckpointFileName string
 	// directory for storing diffs
 	diffFileDir string
+	// name of file storing keys to be diffed
+	diffKeysFileName string
+	// name of file storing keys that encountered errors when being diffed
+	diffErrorKeysFileName string
 	// whether to verify diff keys through aysnc Get on clusters
 	verifyDiffKeys bool
 	// size of batch used by mutation differ
@@ -67,55 +71,59 @@ var options struct {
 }
 
 func argParse() {
-	flag.StringVar(&options.sourceUrl, "sourceUrl", "http://172.23.97.38:8091",
+	flag.StringVar(&options.sourceUrl, "sourceUrl", "http://localhost:9000",
 		"url for source cluster")
 	flag.StringVar(&options.sourceUsername, "sourceUsername", "Administrator",
 		"username for source cluster")
-	flag.StringVar(&options.sourcePassword, "sourcePassword", "password",
+	flag.StringVar(&options.sourcePassword, "sourcePassword", "welcome",
 		"password for source cluster")
-	flag.StringVar(&options.sourceBucketName, "sourceBucketName", "msm",
+	flag.StringVar(&options.sourceBucketName, "sourceBucketName", "default",
 		"bucket name for source cluster")
 	flag.StringVar(&options.sourceFileDir, "sourceFileDir", "source",
 		"directory to store mutations in source cluster")
-	flag.StringVar(&options.targetUrl, "targetUrl", "http://172.23.97.38:8091",
+	flag.StringVar(&options.targetUrl, "targetUrl", "http://localhost:9000",
 		"url for target cluster")
 	flag.StringVar(&options.targetUsername, "targetUsername", "Administrator",
 		"username for target cluster")
-	flag.StringVar(&options.targetPassword, "targetPassword", "password",
+	flag.StringVar(&options.targetPassword, "targetPassword", "welcome",
 		"password for target cluster")
-	flag.StringVar(&options.targetBucketName, "targetBucketName", "msm",
+	flag.StringVar(&options.targetBucketName, "targetBucketName", "target",
 		"bucket name for target cluster")
 	flag.StringVar(&options.targetFileDir, "targetFileDir", "target",
 		"directory to store mutations in target cluster")
-	flag.Uint64Var(&options.numberOfDcpClients, "numberOfDcpClients", 5,
+	flag.Uint64Var(&options.numberOfDcpClients, "numberOfDcpClients", 2,
 		"number of dcp clients")
 	flag.Uint64Var(&options.numberOfWorkersPerDcpClient, "numberOfWorkersPerDcpClient", 20,
 		"number of workers for each dcp client")
 	flag.Uint64Var(&options.numberOfWorkersForFileDiffer, "numberOfWorkersForFileDiffer", 100,
 		"number of worker threads for file differ ")
-	flag.Uint64Var(&options.numberOfWorkersForMutationDiffer, "numberOfWorkersForMutationDiffer", 20,
+	flag.Uint64Var(&options.numberOfWorkersForMutationDiffer, "numberOfWorkersForMutationDiffer", 10,
 		"number of worker threads for mutation differ ")
-	flag.Uint64Var(&options.numberOfBuckets, "numberOfBuckets", 1,
+	flag.Uint64Var(&options.numberOfBuckets, "numberOfBuckets", 10,
 		"number of buckets per vbucket")
 	flag.Uint64Var(&options.numberOfFileDesc, "numberOfFileDesc", 0,
 		"number of file descriptors")
-	flag.Uint64Var(&options.completeByDuration, "completeByDuration", 10,
+	flag.Uint64Var(&options.completeByDuration, "completeByDuration", 4,
 		"duration that the tool should run")
 	flag.BoolVar(&options.completeBySeqno, "completeBySeqno", false,
 		"whether tool should automatically complete (after processing all mutations at start time)")
 	flag.StringVar(&options.checkpointFileDir, "checkpointFileDir", "checkpoint",
 		"directory for checkpoint files")
-	flag.StringVar(&options.oldCheckpointFileName, "oldCheckpointFileName", "4",
+	flag.StringVar(&options.oldCheckpointFileName, "oldCheckpointFileName", "",
 		"old checkpoint file to load from when tool starts")
-	flag.StringVar(&options.newCheckpointFileName, "newCheckpointFileName", "1",
+	flag.StringVar(&options.newCheckpointFileName, "newCheckpointFileName", "",
 		"new checkpoint file to write to when tool shuts down")
 	flag.StringVar(&options.diffFileDir, "diffFileDir", "diff",
 		" directory for storing diffs")
+	flag.StringVar(&options.diffKeysFileName, "diffKeysFileName", base.DiffKeysFileName,
+		" name of file for storing keys to be diffed")
+	flag.StringVar(&options.diffErrorKeysFileName, "diffErrorKeysFileName", base.DiffErrorKeysFileName,
+		" name of file for storing keys to be diffed")
 	flag.BoolVar(&options.verifyDiffKeys, "verifyDiffKeys", true,
 		" whether to verify diff keys through aysnc Get on clusters")
-	flag.Uint64Var(&options.mutationDifferBatchSize, "mutationDifferBatchSize", 500,
+	flag.Uint64Var(&options.mutationDifferBatchSize, "mutationDifferBatchSize", 100,
 		"size of batch used by mutation differ")
-	flag.Uint64Var(&options.mutationDifferTimeout, "mutationDifferTimeout", 10,
+	flag.Uint64Var(&options.mutationDifferTimeout, "mutationDifferTimeout", 30,
 		"timeout, in seconds, used by mutation differ")
 	flag.BoolVar(&options.mutationDifferOnly, "mutationDifferOnly", false,
 		"just run mutation differ and nothing else")
@@ -147,7 +155,11 @@ func main() {
 			os.Exit(1)
 		}
 
-		generateDataFiles()
+		err := generateDataFiles()
+		if err != nil {
+			fmt.Printf("Error generating diff files. err=%v\n", err)
+			os.Exit(1)
+		}
 
 		diffDataFiles()
 
@@ -193,7 +205,7 @@ func cleanUpAndSetup() error {
 	return nil
 }
 
-func generateDataFiles() {
+func generateDataFiles() error {
 	fmt.Printf("GenerateDataFiles routine started\n")
 	defer fmt.Printf("GenerateDataFiles routine completed\n")
 
@@ -214,18 +226,21 @@ func generateDataFiles() {
 	fmt.Printf("Starting target dcp clients\n")
 	targetDcpDriver := startDcpDriver(base.TargetClusterName, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients, options.numberOfWorkersPerDcpClient, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 
+	var err error
 	if options.completeBySeqno {
-		waitForCompletion(sourceDcpDriver, targetDcpDriver, errChan, waitGroup)
+		err = waitForCompletion(sourceDcpDriver, targetDcpDriver, errChan, waitGroup)
 	} else {
-		waitForDuration(sourceDcpDriver, targetDcpDriver, errChan, options.completeByDuration)
+		err = waitForDuration(sourceDcpDriver, targetDcpDriver, errChan, options.completeByDuration)
 	}
+
+	return err
 }
 
 func diffDataFiles() {
 	fmt.Printf("DiffDataFiles routine started\n")
 	defer fmt.Printf("DiffDataFiles routine completed\n")
 
-	differDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.diffFileDir, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBuckets), int(options.numberOfFileDesc))
+	differDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.diffFileDir, options.diffKeysFileName, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBuckets), int(options.numberOfFileDesc))
 	err := differDriver.Run()
 	if err != nil {
 		fmt.Printf("Error from diffDataFiles = %v\n", err)
@@ -236,7 +251,7 @@ func verifyDiffKeysByGet() {
 	fmt.Printf("VerifyDiffKeys routine started\n")
 	defer fmt.Printf("VerifyDiffKeys routine completed\n")
 
-	differ := differ.NewMutationDiffer(options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.diffFileDir, int(options.numberOfWorkersForMutationDiffer), int(options.mutationDifferBatchSize), int(options.mutationDifferTimeout))
+	differ := differ.NewMutationDiffer(options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.diffFileDir, options.diffKeysFileName, options.diffErrorKeysFileName, int(options.numberOfWorkersForMutationDiffer), int(options.mutationDifferBatchSize), int(options.mutationDifferTimeout))
 	err := differ.Run()
 	if err != nil {
 		fmt.Printf("Error from verifyDiffKeys = %v\n", err)
@@ -258,45 +273,51 @@ func startDcpDriverAysnc(dcpDriver *dcp.DcpDriver, errChan chan error) {
 	}
 }
 
-func waitForCompletion(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan chan error, waitGroup *sync.WaitGroup) {
+func waitForCompletion(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan chan error, waitGroup *sync.WaitGroup) error {
 	doneChan := make(chan bool, 1)
 	go utils.WaitForWaitGroup(waitGroup, doneChan)
 
 	select {
 	case err := <-errChan:
-		fmt.Printf("Exiting tool due to error from dcp client %v\n", err)
-		err = sourceDcpDriver.Stop()
-		if err != nil {
-			fmt.Printf("Error stopping source dcp client. err=%v\n", err)
+		fmt.Printf("Stop diff generation due to error from dcp client %v\n", err)
+		err1 := sourceDcpDriver.Stop()
+		if err1 != nil {
+			fmt.Printf("Error stopping source dcp client. err=%v\n", err1)
 		}
-		err = targetDcpDriver.Stop()
-		if err != nil {
-			fmt.Printf("Error stopping target dcp client. err=%v\n", err)
+		err1 = targetDcpDriver.Stop()
+		if err1 != nil {
+			fmt.Printf("Error stopping target dcp client. err=%v\n", err1)
 		}
+		return err
 	case <-doneChan:
 		fmt.Printf("Source cluster and target cluster have completed\n")
+		return nil
 	}
+
+	return nil
 }
 
-func waitForDuration(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan chan error, duration uint64) {
-	timer := time.NewTimer(time.Duration(duration) * time.Minute)
+func waitForDuration(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan chan error, duration uint64) (err error) {
+	timer := time.NewTimer(time.Duration(duration) * time.Second)
 
 	select {
 	case err := <-errChan:
-		fmt.Printf("Exiting tool due to error from dcp client %v\n", err)
+		fmt.Printf("Stop diff generation due to error from dcp client %v\n", err)
 	case <-timer.C:
-		fmt.Printf("Exiting tool after specified processing duration\n")
+		fmt.Printf("Stop diff generation after specified processing duration\n")
 	}
 
-	err := sourceDcpDriver.Stop()
-	if err != nil {
-		fmt.Printf("Error stopping source dcp client. err=%v\n", err)
+	err1 := sourceDcpDriver.Stop()
+	if err1 != nil {
+		fmt.Printf("Error stopping source dcp client. err=%v\n", err1)
 	}
 
 	time.Sleep(base.DelayBetweenSourceAndTarget)
 
-	err = targetDcpDriver.Stop()
-	if err != nil {
-		fmt.Printf("Error stopping target dcp client. err=%v\n", err)
+	err1 = targetDcpDriver.Stop()
+	if err1 != nil {
+		fmt.Printf("Error stopping target dcp client. err=%v\n", err1)
 	}
+
+	return err
 }

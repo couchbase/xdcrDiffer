@@ -88,7 +88,7 @@ func (cm *CheckpointManager) Stop() error {
 }
 
 func (cm *CheckpointManager) reportStatus() {
-	ticker := time.NewTicker(time.Duration(base.CheckpointManagerReportInterval) * time.Second)
+	ticker := time.NewTicker(time.Duration(base.StatsReportInterval) * time.Second)
 	defer ticker.Stop()
 
 	var prevSum uint64 = math.MaxUint64
@@ -98,7 +98,6 @@ func (cm *CheckpointManager) reportStatus() {
 		case <-ticker.C:
 			prevSum = cm.reportStatusOnce(prevSum)
 		case <-cm.finChan:
-			fmt.Printf("%v exiting reporting since tool is stopping\n", cm.clusterName)
 			return
 		}
 	}
@@ -111,7 +110,7 @@ func (cm *CheckpointManager) reportStatusOnce(prevSum uint64) uint64 {
 		sum += cm.seqnoMap[vbno].getSeqno()
 	}
 	if prevSum != math.MaxUint64 {
-		fmt.Printf("%v %v processed %v mutations. processing rate=%v mutation/second\n", time.Now(), cm.clusterName, sum, (sum-prevSum)/base.CheckpointManagerReportInterval)
+		fmt.Printf("%v %v processed %v mutations. processing rate=%v mutation/second\n", time.Now(), cm.clusterName, sum, (sum-prevSum)/base.StatsReportInterval)
 	} else {
 		fmt.Printf("%v %v processed %v mutations.\n", time.Now(), cm.clusterName, sum)
 	}
@@ -173,8 +172,8 @@ func (cm *CheckpointManager) getStatsWithRetry(statsBucket *gocb.Bucket) (map[st
 		return err
 	}
 
-	opErr := utils.ExponentialBackoffExecutor("getStatsWithRetry", base.GetStatsRetryInterval, base.MaxNumOfGetStatsRetry,
-		base.BackoffFactor, getStatsFunc)
+	opErr := utils.ExponentialBackoffExecutor("getStatsWithRetry", base.GetStatsRetryInterval, base.MaxNumOfRetry,
+		base.GetStatsBackoffFactor, getStatsFunc)
 	if opErr != nil {
 		return nil, opErr
 	} else {

@@ -27,18 +27,20 @@ import (
 const KeyNotFoundErrMsg = "key not found"
 
 type MutationDiffer struct {
-	sourceUrl        string
-	sourceBucketName string
-	sourceUserName   string
-	sourcePassword   string
-	targetUrl        string
-	targetBucketName string
-	targetUserName   string
-	targetPassword   string
-	diffFileDir      string
-	numberOfWorkers  int
-	batchSize        int
-	timeout          int
+	sourceUrl             string
+	sourceBucketName      string
+	sourceUserName        string
+	sourcePassword        string
+	targetUrl             string
+	targetBucketName      string
+	targetUserName        string
+	targetPassword        string
+	diffFileDir           string
+	diffKeysFileName      string
+	diffErrorKeysFileName string
+	numberOfWorkers       int
+	batchSize             int
+	timeout               int
 
 	sourceBucket *gocb.Bucket
 	targetBucket *gocb.Bucket
@@ -46,7 +48,12 @@ type MutationDiffer struct {
 	missingFromSource map[string]*gocbcore.GetResult
 	missingFromTarget map[string]*gocbcore.GetResult
 	diff              map[string][]*gocbcore.GetResult
+	keysWithError     []string
 	stateLock         *sync.RWMutex
+
+	numKeysProcessed  uint32
+	numKeysWithErrors uint32
+	finChan           chan bool
 }
 
 func NewMutationDiffer(sourceUrl string,
@@ -58,26 +65,32 @@ func NewMutationDiffer(sourceUrl string,
 	targetUserName string,
 	targetPassword string,
 	diffFileDir string,
+	diffKeysFileName string,
+	diffErrorKeysFileName string,
 	numberOfWorkers int,
 	batchSize int,
 	timeout int) *MutationDiffer {
 	return &MutationDiffer{
-		sourceUrl:         sourceUrl,
-		sourceBucketName:  sourceBucketName,
-		sourceUserName:    sourceUserName,
-		sourcePassword:    sourcePassword,
-		targetUrl:         targetUrl,
-		targetBucketName:  targetBucketName,
-		targetUserName:    targetUserName,
-		targetPassword:    targetPassword,
-		diffFileDir:       diffFileDir,
-		numberOfWorkers:   numberOfWorkers,
-		batchSize:         batchSize,
-		timeout:           timeout,
-		missingFromSource: make(map[string]*gocbcore.GetResult),
-		missingFromTarget: make(map[string]*gocbcore.GetResult),
-		diff:              make(map[string][]*gocbcore.GetResult),
-		stateLock:         &sync.RWMutex{},
+		sourceUrl:             sourceUrl,
+		sourceBucketName:      sourceBucketName,
+		sourceUserName:        sourceUserName,
+		sourcePassword:        sourcePassword,
+		targetUrl:             targetUrl,
+		targetBucketName:      targetBucketName,
+		targetUserName:        targetUserName,
+		targetPassword:        targetPassword,
+		diffFileDir:           diffFileDir,
+		diffKeysFileName:      diffKeysFileName,
+		diffErrorKeysFileName: diffErrorKeysFileName,
+		numberOfWorkers:       numberOfWorkers,
+		batchSize:             batchSize,
+		timeout:               timeout,
+		missingFromSource:     make(map[string]*gocbcore.GetResult),
+		missingFromTarget:     make(map[string]*gocbcore.GetResult),
+		diff:                  make(map[string][]*gocbcore.GetResult),
+		keysWithError:         make([]string, 0),
+		stateLock:             &sync.RWMutex{},
+		finChan:               make(chan bool),
 	}
 }
 
@@ -87,10 +100,14 @@ func (d *MutationDiffer) Run() error {
 		return err
 	}
 
+	fmt.Printf("Mutation diff to work on %v keys with diffs.\n", len(diffKeys))
+
 	err = d.initialize()
 	if err != nil {
 		return err
 	}
+
+	go d.reportStatus(len(diffKeys))
 
 	loadDistribution := utils.BalanceLoad(d.numberOfWorkers, len(diffKeys))
 	waitGroup := &sync.WaitGroup{}
@@ -108,18 +125,66 @@ func (d *MutationDiffer) Run() error {
 
 	waitGroup.Wait()
 
+	close(d.finChan)
+
 	d.writeDiff()
 
 	return nil
 }
 
+func (d *MutationDiffer) reportStatus(totalKeys int) {
+	ticker := time.NewTicker(time.Duration(base.StatsReportInterval) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			numKeysProcessed := atomic.LoadUint32(&d.numKeysProcessed)
+			numKeysWithErrors := atomic.LoadUint32(&d.numKeysWithErrors)
+			fmt.Printf("Mutation differ processed %v keys out of %v keys. skipped %v keys because of error\n", numKeysProcessed, totalKeys, numKeysWithErrors)
+			if numKeysProcessed == uint32(totalKeys) {
+				return
+			}
+		case <-d.finChan:
+			return
+		}
+	}
+}
+
 func (d *MutationDiffer) writeDiff() error {
+	err := d.writeKeysWithDiff()
+	if err != nil {
+		fmt.Printf("Error writing keys with diff. err=%v\n", err)
+	}
+
+	return d.writeKeysWithError()
+}
+
+func (d *MutationDiffer) writeKeysWithDiff() error {
 	diffBytes, err := d.getDiffBytes()
 	if err != nil {
 		return err
 	}
 
 	return d.writeDiffBytesToFile(diffBytes)
+}
+
+func (d *MutationDiffer) writeKeysWithError() error {
+	keysWithErrorBytes, err := json.Marshal(d.keysWithError)
+	if err != nil {
+		return err
+	}
+
+	keysWithErrorFileName := d.diffFileDir + base.FileDirDelimiter + d.diffErrorKeysFileName
+	keysWithErrorFile, err := os.OpenFile(keysWithErrorFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
+	if err != nil {
+		return err
+	}
+
+	defer keysWithErrorFile.Close()
+
+	_, err = keysWithErrorFile.Write(keysWithErrorBytes)
+	return err
 }
 
 func (d *MutationDiffer) getDiffBytes() ([]byte, error) {
@@ -147,7 +212,7 @@ func (d *MutationDiffer) writeDiffBytesToFile(diffBytes []byte) error {
 }
 
 func (d *MutationDiffer) loadDiffKeys() ([]string, error) {
-	diffKeysFileName := d.diffFileDir + base.FileDirDelimiter + base.DiffKeysFileName
+	diffKeysFileName := d.diffFileDir + base.FileDirDelimiter + d.diffKeysFileName
 	diffKeysBytes, err := ioutil.ReadFile(diffKeysFileName)
 	if err != nil {
 		return nil, err
@@ -176,6 +241,13 @@ func (d *MutationDiffer) addDiff(missingFromSource map[string]*gocbcore.GetResul
 	for key, results := range diff {
 		d.diff[key] = results
 	}
+}
+
+func (d *MutationDiffer) addKeysWithError(keysWithError []string) {
+	d.stateLock.Lock()
+	defer d.stateLock.Unlock()
+	d.keysWithError = append(d.keysWithError, keysWithError...)
+	atomic.AddUint32(&d.numKeysWithErrors, uint32(len(keysWithError)))
 }
 
 type DifferWorker struct {
@@ -216,21 +288,36 @@ func (dw *DifferWorker) getResults() {
 		}
 
 		if index+dw.differ.batchSize < len(dw.keys) {
-			dw.sendBatch(index, index+dw.differ.batchSize)
+			dw.sendBatchWithRetry(index, index+dw.differ.batchSize)
 			index += dw.differ.batchSize
 			continue
 		}
 
-		dw.sendBatch(index, len(dw.keys))
+		dw.sendBatchWithRetry(index, len(dw.keys))
 		break
 	}
 
 }
 
-func (dw *DifferWorker) sendBatch(startIndex, endIndex int) {
-	batch := NewBatch(dw, startIndex, endIndex)
-	batch.send()
-	dw.mergeResults(batch)
+func (dw *DifferWorker) sendBatchWithRetry(startIndex, endIndex int) {
+	sendBatchFunc := func() error {
+		batch := NewBatch(dw, startIndex, endIndex)
+		err := batch.send()
+		if err != nil {
+			return err
+		}
+		dw.mergeResults(batch)
+		return nil
+	}
+
+	opErr := utils.ExponentialBackoffExecutor("sendBatchWithRetry", base.SendBatchRetryInterval, base.MaxNumOfRetry,
+		base.SendBatchBackoffFactor, sendBatchFunc)
+	if opErr != nil {
+		fmt.Printf("Skipped check on %v keys because of err=%v.\n", endIndex-startIndex, opErr)
+		dw.differ.addKeysWithError(dw.keys[startIndex:endIndex])
+	}
+	// keys with error are also counted toward keysProcessed
+	atomic.AddUint32(&dw.differ.numKeysProcessed, uint32(endIndex-startIndex))
 }
 
 // merge results obtained by batch into dw
@@ -253,13 +340,13 @@ func (dw *DifferWorker) diff() {
 
 	for key, sourceResult := range dw.sourceResults {
 		if sourceResult.Key == "" {
-			fmt.Printf("Skipping diff on %v since we did not get results from source\n", key)
+			//fmt.Printf("Skipping diff on %v since we did not get results from source\n", key)
 			continue
 		}
 
 		targetResult := dw.targetResults[key]
 		if targetResult.Key == "" {
-			fmt.Printf("Skipping diff on %v since we did not get results from target\n", key)
+			//fmt.Printf("Skipping diff on %v since we did not get results from target\n", key)
 			continue
 		}
 		if isKeyNotFoundError(sourceResult.Error) && !isKeyNotFoundError(targetResult.Error) {
@@ -307,7 +394,7 @@ func NewBatch(dw *DifferWorker, startIndex, endIndex int) *batch {
 	return b
 }
 
-func (b *batch) send() {
+func (b *batch) send() error {
 	b.waitGroup.Add(2)
 	for _, key := range b.keys {
 		b.get(key, true /*isSource*/)
@@ -317,21 +404,18 @@ func (b *batch) send() {
 	doneChan := make(chan bool, 1)
 	go utils.WaitForWaitGroup(&b.waitGroup, doneChan)
 
-	start := time.Now()
-
 	timer := time.NewTimer(time.Duration(b.dw.differ.timeout) * time.Second)
 	defer timer.Stop()
 	for {
 		select {
 		case <-doneChan:
-			fmt.Printf("batch completed after %v\n", time.Since(start))
-			goto done
+			return nil
 		case <-timer.C:
-			fmt.Printf("batch timed out\n")
-			goto done
+			return fmt.Errorf("batch timed eut")
 		}
 	}
-done:
+
+	return nil
 }
 
 func (b *batch) get(key string, isSource bool) {
