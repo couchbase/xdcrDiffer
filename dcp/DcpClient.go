@@ -201,7 +201,10 @@ func (c *DcpClient) initializeDcpHandlers() error {
 }
 
 func (c *DcpClient) openStreams() error {
-	for _, vbno := range c.vbList {
+	//randomize to evenly distribute [initial] load to handlers
+	vbListCopy := utils.DeepCopyUint16Array(c.vbList)
+	utils.ShuffleVbList(vbListCopy)
+	for _, vbno := range vbListCopy {
 		vbts := c.dcpDriver.checkpointManager.GetStartVBTS(vbno)
 
 		openStreamFunc := func(f []gocbcore.FailoverEntry, err error) {

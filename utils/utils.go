@@ -15,6 +15,7 @@ import (
 	"github.com/nelio2k/xdcrDiffer/base"
 	"hash/crc32"
 	"math"
+	mrand "math/rand"
 	"strconv"
 	"sync"
 	"time"
@@ -159,5 +160,27 @@ func AddToErrorChan(errChan chan error, err error) {
 	case errChan <- err:
 	default:
 		// some error already sent to errChan. no op
+	}
+}
+
+func DeepCopyUint16Array(in []uint16) []uint16 {
+	if in == nil {
+		return nil
+	}
+
+	out := make([]uint16, len(in))
+	copy(out, in)
+	return out
+}
+
+func ShuffleVbList(list []uint16) {
+	r := mrand.New(mrand.NewSource(time.Now().Unix()))
+	// Start at the end of the slice, go backwards and scramble
+	for i := len(list); i > 1; i-- {
+		randIndex := r.Intn(i)
+		// Swap values and continue until we're done
+		if (i - 1) != randIndex {
+			list[i-1], list[randIndex] = list[randIndex], list[i-1]
+		}
 	}
 }
