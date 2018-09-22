@@ -134,7 +134,7 @@ type ExponentialOpFunc func() error
  * initialWait == Initial time with which to start
  * Factor == exponential backoff factor based off of initialWait
  */
-func ExponentialBackoffExecutor(name string, initialWait time.Duration, maxRetries int, factor int, op ExponentialOpFunc) error {
+func ExponentialBackoffExecutor(name string, initialWait time.Duration, maxRetries int, factor int, maxBackoff time.Duration, op ExponentialOpFunc) error {
 	waitTime := initialWait
 	var opErr error
 	for i := 0; i <= maxRetries; i++ {
@@ -146,6 +146,9 @@ func ExponentialBackoffExecutor(name string, initialWait time.Duration, maxRetri
 				name, opErr.Error(), waitTime)
 			time.Sleep(waitTime)
 			waitTime *= time.Duration(factor)
+			if waitTime > maxBackoff {
+				waitTime = maxBackoff
+			}
 		}
 	}
 	opErr = fmt.Errorf("Operation failed after max retries. Last error: %v", opErr.Error())

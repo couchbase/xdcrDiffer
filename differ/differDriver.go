@@ -17,25 +17,30 @@ import (
 	"github.com/nelio2k/xdcrDiffer/utils"
 	"os"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 type DifferDriver struct {
-	sourceFileDir   string
-	targetFileDir   string
-	diffFileDir     string
-	numberOfWorkers int
-	numberOfBuckets int
-	waitGroup       *sync.WaitGroup
-	diffKeys        []string
-	stateLock       *sync.RWMutex
-	fileDescPool    *fdp.FdPool
+	sourceFileDir    string
+	targetFileDir    string
+	diffFileDir      string
+	diffKeysFileName string
+	numberOfWorkers  int
+	numberOfBuckets  int
+	waitGroup        *sync.WaitGroup
+	diffKeys         []string
+	stateLock        *sync.RWMutex
+	fileDescPool     *fdp.FdPool
 	// Diff results
 	missingFromSource    []*oneEntry
 	missingFromTarget    []*oneEntry
 	bothExistButMismatch []*entryPair
+	vbCompleted          uint32
+	finChan              chan bool
 }
 
-func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir string, numberOfWorkers, numberOfBuckets int, numberOfFds int) *DifferDriver {
+func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBuckets int, numberOfFds int) *DifferDriver {
 	var fdPool *fdp.FdPool
 	if numberOfFds > 0 {
 		fdPool = fdp.NewFileDescriptorPool(numberOfFds)
@@ -45,6 +50,7 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir string, numberOfW
 		sourceFileDir:        sourceFileDir,
 		targetFileDir:        targetFileDir,
 		diffFileDir:          diffFileDir,
+		diffKeysFileName:     diffKeysFileName,
 		numberOfWorkers:      numberOfWorkers,
 		numberOfBuckets:      numberOfBuckets,
 		waitGroup:            &sync.WaitGroup{},
@@ -54,11 +60,15 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir string, numberOfW
 		missingFromSource:    make([]*oneEntry, 0),
 		missingFromTarget:    make([]*oneEntry, 0),
 		bothExistButMismatch: make([]*entryPair, 0),
+		finChan:              make(chan bool),
 	}
 }
 
 func (dr *DifferDriver) Run() error {
 	loadDistribution := utils.BalanceLoad(dr.numberOfWorkers, base.NumberOfVbuckets)
+
+	go dr.reportStatus()
+
 	for i := 0; i < dr.numberOfWorkers; i++ {
 		lowIndex := loadDistribution[i][0]
 		highIndex := loadDistribution[i][1]
@@ -74,7 +84,27 @@ func (dr *DifferDriver) Run() error {
 
 	dr.waitGroup.Wait()
 
+	close(dr.finChan)
+
 	return dr.writeDiff()
+}
+
+func (dr *DifferDriver) reportStatus() {
+	ticker := time.NewTicker(time.Duration(base.StatsReportInterval) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			vbCompleted := atomic.LoadUint32(&dr.vbCompleted)
+			fmt.Printf("File differ processed %v vbuckets\n", vbCompleted)
+			if vbCompleted == base.NumberOfVbuckets {
+				return
+			}
+		case <-dr.finChan:
+			return
+		}
+	}
 }
 
 func (dr *DifferDriver) addDiff(diffKeys []string, bothExistButMismatch []*entryPair,
@@ -107,7 +137,7 @@ func (dr *DifferDriver) writeDiffKeys() error {
 		return err
 	}
 
-	diffKeysFileName := dr.diffFileDir + base.FileDirDelimiter + base.DiffKeysFileName
+	diffKeysFileName := dr.diffFileDir + base.FileDirDelimiter + dr.diffKeysFileName
 	diffKeysFile, err := os.OpenFile(diffKeysFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
 	if err != nil {
 		return err
@@ -174,8 +204,8 @@ func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFile
 }
 
 func (dh *DifferHandler) run() {
-	fmt.Printf("DiffHandler %v starting\n", dh.index)
-	defer fmt.Printf("DiffHandler %v stopping\n", dh.index)
+	//fmt.Printf("DiffHandler %v starting\n", dh.index)
+	//defer fmt.Printf("DiffHandler %v stopping\n", dh.index)
 	defer dh.waitGroup.Done()
 
 	var vbno uint16
@@ -197,5 +227,6 @@ func (dh *DifferHandler) run() {
 				dh.driver.addDiff(diffKeys, bothExistButMismatch, missingFromSource, missingFromTarget)
 			}
 		}
+		atomic.AddUint32(&dh.driver.vbCompleted, 1)
 	}
 }

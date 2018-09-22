@@ -311,7 +311,7 @@ func (dw *DifferWorker) sendBatchWithRetry(startIndex, endIndex int) {
 	}
 
 	opErr := utils.ExponentialBackoffExecutor("sendBatchWithRetry", base.SendBatchRetryInterval, base.MaxNumOfRetry,
-		base.SendBatchBackoffFactor, sendBatchFunc)
+		base.BackoffFactor, base.SendBatchMaxBackoff, sendBatchFunc)
 	if opErr != nil {
 		fmt.Printf("Skipped check on %v keys because of err=%v.\n", endIndex-startIndex, opErr)
 		dw.differ.addKeysWithError(dw.keys[startIndex:endIndex])

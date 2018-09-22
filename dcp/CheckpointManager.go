@@ -173,7 +173,7 @@ func (cm *CheckpointManager) getStatsWithRetry(statsBucket *gocb.Bucket) (map[st
 	}
 
 	opErr := utils.ExponentialBackoffExecutor("getStatsWithRetry", base.GetStatsRetryInterval, base.MaxNumOfRetry,
-		base.GetStatsBackoffFactor, getStatsFunc)
+		base.BackoffFactor, base.GetStatsMaxBackoff, getStatsFunc)
 	if opErr != nil {
 		return nil, opErr
 	} else {

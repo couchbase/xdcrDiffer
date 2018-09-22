@@ -37,11 +37,12 @@ const StatsReportInterval = 5
 
 var BucketOpTimeout time.Duration = 10 * time.Second
 var GetStatsRetryInterval time.Duration = 1 * time.Second
+var GetStatsMaxBackoff time.Duration = 6 * time.Second
 var SendBatchRetryInterval time.Duration = 500 * time.Millisecond
+var SendBatchMaxBackoff time.Duration = 3 * time.Second
 
 const MaxNumOfRetry = 10
-const GetStatsBackoffFactor = 1
-const SendBatchBackoffFactor = 2
+const BackoffFactor = 2
 
 // time to wait to stop processing of target cluster after processing of source cluster is completed
 var DelayBetweenSourceAndTarget time.Duration = 2 * time.Second

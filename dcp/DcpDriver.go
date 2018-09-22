@@ -134,7 +134,7 @@ func (d *DcpDriver) Stop() error {
 	}
 
 	fmt.Printf("Dcp driver %v stopping\n", d.Name)
-	defer fmt.Printf("Dcp drive %v stopped\n", d.Name)
+	defer fmt.Printf("Dcp driver %v stopped\n", d.Name)
 	defer d.waitGroup.Done()
 
 	for i, dcpClient := range d.clients {

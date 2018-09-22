@@ -301,7 +301,7 @@ func waitForDuration(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan ch
 	timer := time.NewTimer(time.Duration(duration) * time.Second)
 
 	select {
-	case err := <-errChan:
+	case err = <-errChan:
 		fmt.Printf("Stop diff generation due to error from dcp client %v\n", err)
 	case <-timer.C:
 		fmt.Printf("Stop diff generation after specified processing duration\n")
