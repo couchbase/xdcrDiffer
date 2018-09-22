@@ -411,7 +411,7 @@ func (b *batch) send() error {
 		case <-doneChan:
 			return nil
 		case <-timer.C:
-			return fmt.Errorf("batch timed eut")
+			return fmt.Errorf("mutation differ batch timed out")
 		}
 	}
 

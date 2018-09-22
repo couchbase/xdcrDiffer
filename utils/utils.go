@@ -142,8 +142,6 @@ func ExponentialBackoffExecutor(name string, initialWait time.Duration, maxRetri
 		if opErr == nil {
 			return nil
 		} else if i != maxRetries {
-			fmt.Printf("ExponentialBackoffExecutor for %v encountered error (%v). Sleeping %v\n",
-				name, opErr.Error(), waitTime)
 			time.Sleep(waitTime)
 			waitTime *= time.Duration(factor)
 			if waitTime > maxBackoff {
