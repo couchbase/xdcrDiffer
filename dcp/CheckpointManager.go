@@ -25,17 +25,27 @@ type CheckpointManager struct {
 	seqnoMap              map[uint16]*SeqnoWithLock
 	snapshots             map[uint16]*Snapshot
 	finChan               chan bool
+	bucketOpTimeout       time.Duration
+	maxNumOfGetStatsRetry int
+	getStatsRetryInterval time.Duration
+	getStatsMaxBackoff    time.Duration
 }
 
-func NewCheckpointManager(checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, clusterName, bucketName string, completeBySeqno bool) *CheckpointManager {
+func NewCheckpointManager(checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, clusterName,
+	bucketName string, completeBySeqno bool, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int,
+	getStatsRetryInterval, getStatsMaxBackoff time.Duration) *CheckpointManager {
 	cm := &CheckpointManager{
-		clusterName:     clusterName,
-		bucketName:      bucketName,
-		completeBySeqno: completeBySeqno,
-		startVBTS:       make(map[uint16]*VBTS),
-		seqnoMap:        make(map[uint16]*SeqnoWithLock),
-		snapshots:       make(map[uint16]*Snapshot),
-		finChan:         make(chan bool),
+		clusterName:           clusterName,
+		bucketName:            bucketName,
+		completeBySeqno:       completeBySeqno,
+		startVBTS:             make(map[uint16]*VBTS),
+		seqnoMap:              make(map[uint16]*SeqnoWithLock),
+		snapshots:             make(map[uint16]*Snapshot),
+		finChan:               make(chan bool),
+		bucketOpTimeout:       bucketOpTimeout,
+		maxNumOfGetStatsRetry: maxNumOfGetStatsRetry,
+		getStatsRetryInterval: getStatsRetryInterval,
+		getStatsMaxBackoff:    getStatsMaxBackoff,
 	}
 
 	if checkpointFileDir != "" {
@@ -137,7 +147,7 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() (map[uint16]uint64, error
 	}
 	defer statsBucket.Close()
 
-	statsBucket.SetOperationTimeout(base.BucketOpTimeout)
+	statsBucket.SetOperationTimeout(cm.bucketOpTimeout)
 
 	statsMap, err := cm.getStatsWithRetry(statsBucket)
 	if err != nil {
@@ -173,8 +183,8 @@ func (cm *CheckpointManager) getStatsWithRetry(statsBucket *gocb.Bucket) (map[st
 		return err
 	}
 
-	opErr := utils.ExponentialBackoffExecutor("getStatsWithRetry", base.GetStatsRetryInterval, base.MaxNumOfRetry,
-		base.BackoffFactor, base.GetStatsMaxBackoff, getStatsFunc)
+	opErr := utils.ExponentialBackoffExecutor("getStatsWithRetry", cm.getStatsRetryInterval, cm.maxNumOfGetStatsRetry,
+		base.GetStatsBackoffFactor, cm.getStatsMaxBackoff, getStatsFunc)
 	if opErr != nil {
 		return nil, opErr
 	} else {

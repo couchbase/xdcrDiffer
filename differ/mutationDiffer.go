@@ -54,6 +54,10 @@ type MutationDiffer struct {
 	numKeysProcessed  uint32
 	numKeysWithErrors uint32
 	finChan           chan bool
+
+	maxNumOfSendBatchRetry int
+	sendBatchRetryInterval time.Duration
+	sendBatchMaxBackoff    time.Duration
 }
 
 func NewMutationDiffer(sourceUrl string,
@@ -69,28 +73,34 @@ func NewMutationDiffer(sourceUrl string,
 	diffErrorKeysFileName string,
 	numberOfWorkers int,
 	batchSize int,
-	timeout int) *MutationDiffer {
+	timeout int,
+	maxNumOfSendBatchRetry int,
+	sendBatchRetryInterval time.Duration,
+	sendBatchMaxBackoff time.Duration) *MutationDiffer {
 	return &MutationDiffer{
-		sourceUrl:             sourceUrl,
-		sourceBucketName:      sourceBucketName,
-		sourceUserName:        sourceUserName,
-		sourcePassword:        sourcePassword,
-		targetUrl:             targetUrl,
-		targetBucketName:      targetBucketName,
-		targetUserName:        targetUserName,
-		targetPassword:        targetPassword,
-		diffFileDir:           diffFileDir,
-		diffKeysFileName:      diffKeysFileName,
-		diffErrorKeysFileName: diffErrorKeysFileName,
-		numberOfWorkers:       numberOfWorkers,
-		batchSize:             batchSize,
-		timeout:               timeout,
-		missingFromSource:     make(map[string]*gocbcore.GetResult),
-		missingFromTarget:     make(map[string]*gocbcore.GetResult),
-		diff:                  make(map[string][]*gocbcore.GetResult),
-		keysWithError:         make([]string, 0),
-		stateLock:             &sync.RWMutex{},
-		finChan:               make(chan bool),
+		sourceUrl:              sourceUrl,
+		sourceBucketName:       sourceBucketName,
+		sourceUserName:         sourceUserName,
+		sourcePassword:         sourcePassword,
+		targetUrl:              targetUrl,
+		targetBucketName:       targetBucketName,
+		targetUserName:         targetUserName,
+		targetPassword:         targetPassword,
+		diffFileDir:            diffFileDir,
+		diffKeysFileName:       diffKeysFileName,
+		diffErrorKeysFileName:  diffErrorKeysFileName,
+		numberOfWorkers:        numberOfWorkers,
+		batchSize:              batchSize,
+		timeout:                timeout,
+		missingFromSource:      make(map[string]*gocbcore.GetResult),
+		missingFromTarget:      make(map[string]*gocbcore.GetResult),
+		diff:                   make(map[string][]*gocbcore.GetResult),
+		keysWithError:          make([]string, 0),
+		stateLock:              &sync.RWMutex{},
+		finChan:                make(chan bool),
+		maxNumOfSendBatchRetry: maxNumOfSendBatchRetry,
+		sendBatchRetryInterval: sendBatchRetryInterval,
+		sendBatchMaxBackoff:    sendBatchMaxBackoff,
 	}
 }
 
@@ -310,8 +320,8 @@ func (dw *DifferWorker) sendBatchWithRetry(startIndex, endIndex int) {
 		return nil
 	}
 
-	opErr := utils.ExponentialBackoffExecutor("sendBatchWithRetry", base.SendBatchRetryInterval, base.MaxNumOfRetry,
-		base.BackoffFactor, base.SendBatchMaxBackoff, sendBatchFunc)
+	opErr := utils.ExponentialBackoffExecutor("sendBatchWithRetry", dw.differ.sendBatchRetryInterval, dw.differ.maxNumOfSendBatchRetry,
+		base.SendBatchBackoffFactor, dw.differ.sendBatchMaxBackoff, sendBatchFunc)
 	if opErr != nil {
 		fmt.Printf("Skipped check on %v keys because of err=%v.\n", endIndex-startIndex, opErr)
 		dw.differ.addKeysWithError(dw.keys[startIndex:endIndex])

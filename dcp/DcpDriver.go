@@ -16,6 +16,7 @@ import (
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"github.com/nelio2k/xdcrDiffer/utils"
 	"sync"
+	"time"
 )
 
 type DcpDriver struct {
@@ -53,9 +54,13 @@ const (
 	DriverStateStopped DriverState = iota
 )
 
-func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBuckets, dcpHandlerChanSize int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface) *DcpDriver {
+func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
+	newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBuckets, dcpHandlerChanSize int,
+	bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration,
+	errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface) *DcpDriver {
 	return &DcpDriver{
-		checkpointManager:  NewCheckpointManager(checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, name, bucketName, completeBySeqno),
+		checkpointManager: NewCheckpointManager(checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, name,
+			bucketName, completeBySeqno, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff),
 		Name:               name,
 		url:                url,
 		bucketName:         bucketName,

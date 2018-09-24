@@ -34,14 +34,16 @@ const MutationDiffFileName = "mutationDiffDetails"
 const DiffErrorKeysFileName = "diffKeysWithError"
 const StatsReportInterval = 5
 
-var BucketOpTimeout time.Duration = 10 * time.Second
-var GetStatsRetryInterval time.Duration = 1 * time.Second
-var GetStatsMaxBackoff time.Duration = 6 * time.Second
+var BucketOpTimeout time.Duration = 20 * time.Second
+var GetStatsRetryInterval time.Duration = 2 * time.Second
+var GetStatsMaxBackoff time.Duration = 10 * time.Second
 var SendBatchRetryInterval time.Duration = 500 * time.Millisecond
-var SendBatchMaxBackoff time.Duration = 3 * time.Second
+var SendBatchMaxBackoff time.Duration = 5 * time.Second
 
-const MaxNumOfRetry = 10
-const BackoffFactor = 2
+const GetStatsBackoffFactor = 2
+const SendBatchBackoffFactor = 2
+const MaxNumOfGetStatsRetry = 10
+const MaxNumOfSendBatchRetry = 10
 
 // time to wait to stop processing of target cluster after processing of source cluster is completed
 var DelayBetweenSourceAndTarget time.Duration = 2 * time.Second

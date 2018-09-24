@@ -68,7 +68,22 @@ var options struct {
 	// just run mutation differ and nothing else
 	// this may be helpful when everything else succeeded and mutation differ ran into issues in last run
 	mutationDifferOnly bool
+	// size of dcp handler channel
 	dcpHandlerChanSize uint64
+	// timeout for bucket for stats collection, in seconds
+	bucketOpTimeout uint64
+	// max number of retry for get stats
+	maxNumOfGetStatsRetry uint64
+	// max number of retry for send batch
+	maxNumOfSendBatchRetry uint64
+	// retry interval for get stats, in seconds
+	getStatsRetryInterval uint64
+	// retry interval for send batch, in milliseconds
+	sendBatchRetryInterval uint64
+	// max backoff for get stats, in seconds
+	getStatsMaxBackoff uint64
+	// max backoff for send batch, in seconds
+	sendBatchMaxBackoff uint64
 }
 
 func argParse() {
@@ -130,6 +145,20 @@ func argParse() {
 		"just run mutation differ and nothing else")
 	flag.Uint64Var(&options.dcpHandlerChanSize, "dcpHandlerChanSize", base.DcpHandlerChanSize,
 		"size of dcp handler channel")
+	flag.Uint64Var(&options.bucketOpTimeout, "bucketOpTimeout", 20,
+		" timeout for bucket for stats collection, in seconds")
+	flag.Uint64Var(&options.maxNumOfGetStatsRetry, "maxNumOfGetStatsRetry", base.MaxNumOfGetStatsRetry,
+		"max number of retry for get stats")
+	flag.Uint64Var(&options.maxNumOfSendBatchRetry, "maxNumOfSendBatchRetry", base.MaxNumOfSendBatchRetry,
+		"max number of retry for send batch")
+	flag.Uint64Var(&options.getStatsRetryInterval, "getStatsRetryInterval", 2,
+		" retry interval for get stats, in seconds")
+	flag.Uint64Var(&options.sendBatchRetryInterval, "sendBatchRetryInterval", 500,
+		"retry interval for send batch, in milliseconds")
+	flag.Uint64Var(&options.getStatsMaxBackoff, "getStatsMaxBackoff", 10,
+		"max backoff for get stats, in seconds")
+	flag.Uint64Var(&options.sendBatchMaxBackoff, "sendBatchMaxBackoff", 5,
+		"max backoff for send batch, in seconds")
 
 	flag.Parse()
 }
@@ -221,13 +250,23 @@ func generateDataFiles() error {
 	}
 
 	fmt.Printf("Starting source dcp clients\n")
-	sourceDcpDriver := startDcpDriver(base.SourceClusterName, options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients, options.numberOfWorkersPerDcpClient, options.numberOfBuckets, options.dcpHandlerChanSize, errChan, waitGroup, options.completeBySeqno, fileDescPool)
+	sourceDcpDriver := startDcpDriver(base.SourceClusterName, options.sourceUrl, options.sourceBucketName,
+		options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir,
+		options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients,
+		options.numberOfWorkersPerDcpClient, options.numberOfBuckets, options.dcpHandlerChanSize,
+		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
+		options.getStatsMaxBackoff, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 
 	fmt.Printf("Waiting for %v before starting target dcp clients\n", base.DelayBetweenSourceAndTarget)
 	time.Sleep(base.DelayBetweenSourceAndTarget)
 
 	fmt.Printf("Starting target dcp clients\n")
-	targetDcpDriver := startDcpDriver(base.TargetClusterName, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients, options.numberOfWorkersPerDcpClient, options.numberOfBuckets, options.dcpHandlerChanSize, errChan, waitGroup, options.completeBySeqno, fileDescPool)
+	targetDcpDriver := startDcpDriver(base.TargetClusterName, options.targetUrl, options.targetBucketName,
+		options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir,
+		options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients,
+		options.numberOfWorkersPerDcpClient, options.numberOfBuckets, options.dcpHandlerChanSize,
+		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
+		options.getStatsMaxBackoff, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 
 	var err error
 	if options.completeBySeqno {
@@ -254,16 +293,28 @@ func verifyDiffKeysByGet() {
 	fmt.Printf("VerifyDiffKeys routine started\n")
 	defer fmt.Printf("VerifyDiffKeys routine completed\n")
 
-	differ := differ.NewMutationDiffer(options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.diffFileDir, options.diffKeysFileName, options.diffErrorKeysFileName, int(options.numberOfWorkersForMutationDiffer), int(options.mutationDifferBatchSize), int(options.mutationDifferTimeout))
+	differ := differ.NewMutationDiffer(options.sourceUrl, options.sourceBucketName, options.sourceUsername,
+		options.sourcePassword, options.targetUrl, options.targetBucketName, options.targetUsername,
+		options.targetPassword, options.diffFileDir, options.diffKeysFileName, options.diffErrorKeysFileName,
+		int(options.numberOfWorkersForMutationDiffer), int(options.mutationDifferBatchSize), int(options.mutationDifferTimeout),
+		int(options.maxNumOfSendBatchRetry), time.Duration(options.sendBatchRetryInterval)*time.Millisecond,
+		time.Duration(options.sendBatchMaxBackoff)*time.Second)
 	err := differ.Run()
 	if err != nil {
 		fmt.Printf("Error from verifyDiffKeys = %v\n", err)
 	}
 }
 
-func startDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBuckets, dcpHandlerChanSize uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface) *dcp.DcpDriver {
+func startDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
+	newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBuckets,
+	dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff uint64,
+	errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface) *dcp.DcpDriver {
 	waitGroup.Add(1)
-	dcpDriver := dcp.NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBuckets), int(dcpHandlerChanSize), errChan, waitGroup, completeBySeqno, fdPool)
+	dcpDriver := dcp.NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
+		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBuckets),
+		int(dcpHandlerChanSize), time.Duration(bucketOpTimeout)*time.Second, int(maxNumOfGetStatsRetry),
+		time.Duration(getStatsRetryInterval)*time.Second, time.Duration(getStatsMaxBackoff)*time.Second,
+		errChan, waitGroup, completeBySeqno, fdPool)
 	// dcp driver startup may take some time. Do it asynchronously
 	go startDcpDriverAysnc(dcpDriver, errChan)
 	return dcpDriver
