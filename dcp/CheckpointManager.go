@@ -6,6 +6,7 @@ import (
 	"github.com/couchbase/gocb"
 	"github.com/nelio2k/xdcrDiffer/base"
 	"github.com/nelio2k/xdcrDiffer/utils"
+	"io/ioutil"
 	"math"
 	"os"
 	"sync"
@@ -214,21 +215,14 @@ func (cm *CheckpointManager) GetStartVBTS(vbno uint16) *VBTS {
 }
 
 func (cm *CheckpointManager) loadCheckpoints() (*CheckpointDoc, error) {
-	checkpointFile, err := os.Open(cm.oldCheckpointFileName)
+	checkpointFileBytes, err := ioutil.ReadFile(cm.oldCheckpointFileName)
 	if err != nil {
 		fmt.Printf("Error opening checkpoint file. err=%v\n", err)
 		return nil, err
 	}
 
-	buffer := make([]byte, base.CheckpointFileBufferSize)
-	bufferBytes, err := checkpointFile.Read(buffer)
-	if err != nil {
-		fmt.Printf("Error reading checkpoint file. err=%v\n", err)
-		return nil, err
-	}
-
 	checkpointDoc := &CheckpointDoc{}
-	err = json.Unmarshal(buffer[:bufferBytes], checkpointDoc)
+	err = json.Unmarshal(checkpointFileBytes, checkpointDoc)
 	if err != nil {
 		fmt.Printf("Error unmarshalling checkpoint file. err=%v\n", err)
 		return nil, err

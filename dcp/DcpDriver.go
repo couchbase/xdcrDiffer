@@ -19,22 +19,23 @@ import (
 )
 
 type DcpDriver struct {
-	Name              string
-	url               string
-	bucketName        string
-	userName          string
-	password          string
-	fileDir           string
-	errChan           chan error
-	waitGroup         *sync.WaitGroup
-	childWaitGroup    *sync.WaitGroup
-	numberOfClients   int
-	numberOfWorkers   int
-	numberOfBuckets   int
-	cluster           *gocb.Cluster
-	checkpointManager *CheckpointManager
-	fdPool            fdp.FdPoolIface
-	clients           []*DcpClient
+	Name               string
+	url                string
+	bucketName         string
+	userName           string
+	password           string
+	fileDir            string
+	errChan            chan error
+	waitGroup          *sync.WaitGroup
+	childWaitGroup     *sync.WaitGroup
+	numberOfClients    int
+	numberOfWorkers    int
+	numberOfBuckets    int
+	dcpHandlerChanSize int
+	cluster            *gocb.Cluster
+	checkpointManager  *CheckpointManager
+	fdPool             fdp.FdPoolIface
+	clients            []*DcpClient
 	// value = true if processing on the vb has been completed
 	vbState map[uint16]bool
 	// 0 - not started
@@ -52,23 +53,24 @@ const (
 	DriverStateStopped DriverState = iota
 )
 
-func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBuckets int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface) *DcpDriver {
+func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBuckets, dcpHandlerChanSize int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface) *DcpDriver {
 	return &DcpDriver{
-		checkpointManager: NewCheckpointManager(checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, name, bucketName, completeBySeqno),
-		Name:              name,
-		url:               url,
-		bucketName:        bucketName,
-		userName:          userName,
-		password:          password,
-		fileDir:           fileDir,
-		numberOfClients:   numberOfClients,
-		numberOfWorkers:   numberOfWorkers,
-		numberOfBuckets:   numberOfBuckets,
-		errChan:           errChan,
-		waitGroup:         waitGroup,
-		vbState:           make(map[uint16]bool),
-		fdPool:            fdPool,
-		state:             DriverStateNew,
+		checkpointManager:  NewCheckpointManager(checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, name, bucketName, completeBySeqno),
+		Name:               name,
+		url:                url,
+		bucketName:         bucketName,
+		userName:           userName,
+		password:           password,
+		fileDir:            fileDir,
+		numberOfClients:    numberOfClients,
+		numberOfWorkers:    numberOfWorkers,
+		numberOfBuckets:    numberOfBuckets,
+		dcpHandlerChanSize: dcpHandlerChanSize,
+		errChan:            errChan,
+		waitGroup:          waitGroup,
+		vbState:            make(map[uint16]bool),
+		fdPool:             fdPool,
+		state:              DriverStateNew,
 	}
 }
 

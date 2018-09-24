@@ -68,6 +68,7 @@ var options struct {
 	// just run mutation differ and nothing else
 	// this may be helpful when everything else succeeded and mutation differ ran into issues in last run
 	mutationDifferOnly bool
+	dcpHandlerChanSize uint64
 }
 
 func argParse() {
@@ -127,6 +128,8 @@ func argParse() {
 		"timeout, in seconds, used by mutation differ")
 	flag.BoolVar(&options.mutationDifferOnly, "mutationDifferOnly", false,
 		"just run mutation differ and nothing else")
+	flag.Uint64Var(&options.dcpHandlerChanSize, "dcpHandlerChanSize", base.DcpHandlerChanSize,
+		"size of dcp handler channel")
 
 	flag.Parse()
 }
@@ -218,13 +221,13 @@ func generateDataFiles() error {
 	}
 
 	fmt.Printf("Starting source dcp clients\n")
-	sourceDcpDriver := startDcpDriver(base.SourceClusterName, options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients, options.numberOfWorkersPerDcpClient, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
+	sourceDcpDriver := startDcpDriver(base.SourceClusterName, options.sourceUrl, options.sourceBucketName, options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients, options.numberOfWorkersPerDcpClient, options.numberOfBuckets, options.dcpHandlerChanSize, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 
 	fmt.Printf("Waiting for %v before starting target dcp clients\n", base.DelayBetweenSourceAndTarget)
 	time.Sleep(base.DelayBetweenSourceAndTarget)
 
 	fmt.Printf("Starting target dcp clients\n")
-	targetDcpDriver := startDcpDriver(base.TargetClusterName, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients, options.numberOfWorkersPerDcpClient, options.numberOfBuckets, errChan, waitGroup, options.completeBySeqno, fileDescPool)
+	targetDcpDriver := startDcpDriver(base.TargetClusterName, options.targetUrl, options.targetBucketName, options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients, options.numberOfWorkersPerDcpClient, options.numberOfBuckets, options.dcpHandlerChanSize, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 
 	var err error
 	if options.completeBySeqno {
@@ -258,9 +261,9 @@ func verifyDiffKeysByGet() {
 	}
 }
 
-func startDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBuckets uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface) *dcp.DcpDriver {
+func startDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBuckets, dcpHandlerChanSize uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface) *dcp.DcpDriver {
 	waitGroup.Add(1)
-	dcpDriver := dcp.NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBuckets), errChan, waitGroup, completeBySeqno, fdPool)
+	dcpDriver := dcp.NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBuckets), int(dcpHandlerChanSize), errChan, waitGroup, completeBySeqno, fdPool)
 	// dcp driver startup may take some time. Do it asynchronously
 	go startDcpDriverAysnc(dcpDriver, errChan)
 	return dcpDriver

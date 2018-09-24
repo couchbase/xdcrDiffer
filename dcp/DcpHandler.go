@@ -36,7 +36,7 @@ type DcpHandler struct {
 	fdPool            fdp.FdPoolIface
 }
 
-func NewDcpHandler(dcpClient *DcpClient, checkpointManager *CheckpointManager, fileDir string, index int, vbList []uint16, numberOfBuckets int, fdPool fdp.FdPoolIface) (*DcpHandler, error) {
+func NewDcpHandler(dcpClient *DcpClient, checkpointManager *CheckpointManager, fileDir string, index int, vbList []uint16, numberOfBuckets, dataChanSize int, fdPool fdp.FdPoolIface) (*DcpHandler, error) {
 	if len(vbList) == 0 {
 		return nil, fmt.Errorf("vbList is empty for handler %v", index)
 	}
@@ -47,7 +47,7 @@ func NewDcpHandler(dcpClient *DcpClient, checkpointManager *CheckpointManager, f
 		index:             index,
 		vbList:            vbList,
 		numberOfBuckets:   numberOfBuckets,
-		dataChan:          make(chan *Mutation, base.DcpHandlerChanSize),
+		dataChan:          make(chan *Mutation, dataChanSize),
 		finChan:           make(chan bool),
 		bucketMap:         make(map[uint16]map[int]*Bucket),
 		fdPool:            fdPool,

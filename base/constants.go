@@ -26,7 +26,6 @@ const VbucketHighSeqnoStatsKey = "vb_%v:high_seqno"
 const VbucketUuidStatsKey = "vb_%v:uuid"
 const SourceCheckpointFileName = "SourceCheckpoint"
 const TargetCheckpointFileName = "TargetCheckpoint"
-const CheckpointFileBufferSize = 200000
 const SourceClusterName = "source"
 const TargetClusterName = "target"
 const DiffKeysFileName = "diffKeys"
