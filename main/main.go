@@ -97,7 +97,7 @@ func argParse() {
 		"password for source cluster")
 	flag.StringVar(&options.sourceBucketName, "sourceBucketName", "default",
 		"bucket name for source cluster")
-	flag.StringVar(&options.sourceFileDir, "sourceFileDir", "source",
+	flag.StringVar(&options.sourceFileDir, "sourceFileDir", base.SourceFileDir,
 		"directory to store mutations in source cluster")
 	flag.StringVar(&options.targetUrl, "targetUrl", "http://localhost:9000",
 		"url for target cluster")
@@ -107,7 +107,7 @@ func argParse() {
 		"password for target cluster")
 	flag.StringVar(&options.targetBucketName, "targetBucketName", "target",
 		"bucket name for target cluster")
-	flag.StringVar(&options.targetFileDir, "targetFileDir", "target",
+	flag.StringVar(&options.targetFileDir, "targetFileDir", base.TargetFileDir,
 		"directory to store mutations in target cluster")
 	flag.Uint64Var(&options.numberOfDcpClients, "numberOfDcpClients", 2,
 		"number of dcp clients")
@@ -125,13 +125,13 @@ func argParse() {
 		"duration that the tool should run")
 	flag.BoolVar(&options.completeBySeqno, "completeBySeqno", false,
 		"whether tool should automatically complete (after processing all mutations at start time)")
-	flag.StringVar(&options.checkpointFileDir, "checkpointFileDir", "checkpoint",
+	flag.StringVar(&options.checkpointFileDir, "checkpointFileDir", base.CheckpointFileDir,
 		"directory for checkpoint files")
 	flag.StringVar(&options.oldCheckpointFileName, "oldCheckpointFileName", "",
 		"old checkpoint file to load from when tool starts")
 	flag.StringVar(&options.newCheckpointFileName, "newCheckpointFileName", "",
 		"new checkpoint file to write to when tool shuts down")
-	flag.StringVar(&options.diffFileDir, "diffFileDir", "diff",
+	flag.StringVar(&options.diffFileDir, "diffFileDir", base.DiffFileDir,
 		" directory for storing diffs")
 	flag.StringVar(&options.diffKeysFileName, "diffKeysFileName", base.DiffKeysFileName,
 		" name of file for storing keys to be diffed")

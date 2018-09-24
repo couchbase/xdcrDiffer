@@ -22,15 +22,17 @@ const StreamingBucketName = "xdcrDiffTool"
 const VbucketSeqnoStatName = "vbucket-seqno"
 const VbucketHighSeqnoStatsKey = "vb_%v:high_seqno"
 const VbucketUuidStatsKey = "vb_%v:uuid"
-const SourceCheckpointFileName = "SourceCheckpoint"
-const TargetCheckpointFileName = "TargetCheckpoint"
-const SourceClusterName = "source"
-const TargetClusterName = "target"
+const SourceFileDir = "source"
+const TargetFileDir = "target"
+const CheckpointFileDir = "checkpoint"
+const DiffFileDir = "diff"
 const DiffKeysFileName = "diffKeys"
 const DiffDetailsFileName = "diffDetails"
 const MutationDiffFileName = "mutationDiffDetails"
 const DiffErrorKeysFileName = "diffKeysWithError"
 const StatsReportInterval = 5
+const SourceClusterName = "source"
+const TargetClusterName = "target"
 
 // default values for configurable parameters if not specified by user
 const BucketOpTimeout uint64 = 20
