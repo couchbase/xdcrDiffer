@@ -9,9 +9,7 @@
 
 package base
 
-import (
-	"time"
-)
+import ()
 
 const NumberOfVbuckets = 1024
 const DcpHandlerChanSize = 100000
@@ -34,19 +32,17 @@ const MutationDiffFileName = "mutationDiffDetails"
 const DiffErrorKeysFileName = "diffKeysWithError"
 const StatsReportInterval = 5
 
-var BucketOpTimeout time.Duration = 20 * time.Second
-var GetStatsRetryInterval time.Duration = 2 * time.Second
-var GetStatsMaxBackoff time.Duration = 10 * time.Second
-var SendBatchRetryInterval time.Duration = 500 * time.Millisecond
-var SendBatchMaxBackoff time.Duration = 5 * time.Second
-
+// default values for configurable parameters if not specified by user
+const BucketOpTimeout uint64 = 20
+const GetStatsRetryInterval uint64 = 2
+const GetStatsMaxBackoff uint64 = 10
+const SendBatchRetryInterval uint64 = 500
+const SendBatchMaxBackoff uint64 = 5
 const GetStatsBackoffFactor = 2
 const SendBatchBackoffFactor = 2
 const MaxNumOfGetStatsRetry = 10
 const MaxNumOfSendBatchRetry = 10
-
-// time to wait to stop processing of target cluster after processing of source cluster is completed
-var DelayBetweenSourceAndTarget time.Duration = 2 * time.Second
+const DelayBetweenSourceAndTarget uint64 = 2
 
 // length of mutation metadata + body, which consists of
 //  seqno   - 8 bytes

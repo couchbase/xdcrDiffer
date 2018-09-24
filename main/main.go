@@ -84,6 +84,8 @@ var options struct {
 	getStatsMaxBackoff uint64
 	// max backoff for send batch, in seconds
 	sendBatchMaxBackoff uint64
+	// delay between source cluster start up and target cluster start up, in seconds
+	delayBetweenSourceAndTarget uint64
 }
 
 func argParse() {
@@ -145,20 +147,22 @@ func argParse() {
 		"just run mutation differ and nothing else")
 	flag.Uint64Var(&options.dcpHandlerChanSize, "dcpHandlerChanSize", base.DcpHandlerChanSize,
 		"size of dcp handler channel")
-	flag.Uint64Var(&options.bucketOpTimeout, "bucketOpTimeout", 20,
+	flag.Uint64Var(&options.bucketOpTimeout, "bucketOpTimeout", base.BucketOpTimeout,
 		" timeout for bucket for stats collection, in seconds")
 	flag.Uint64Var(&options.maxNumOfGetStatsRetry, "maxNumOfGetStatsRetry", base.MaxNumOfGetStatsRetry,
 		"max number of retry for get stats")
 	flag.Uint64Var(&options.maxNumOfSendBatchRetry, "maxNumOfSendBatchRetry", base.MaxNumOfSendBatchRetry,
 		"max number of retry for send batch")
-	flag.Uint64Var(&options.getStatsRetryInterval, "getStatsRetryInterval", 2,
+	flag.Uint64Var(&options.getStatsRetryInterval, "getStatsRetryInterval", base.GetStatsRetryInterval,
 		" retry interval for get stats, in seconds")
-	flag.Uint64Var(&options.sendBatchRetryInterval, "sendBatchRetryInterval", 500,
+	flag.Uint64Var(&options.sendBatchRetryInterval, "sendBatchRetryInterval", base.SendBatchRetryInterval,
 		"retry interval for send batch, in milliseconds")
-	flag.Uint64Var(&options.getStatsMaxBackoff, "getStatsMaxBackoff", 10,
+	flag.Uint64Var(&options.getStatsMaxBackoff, "getStatsMaxBackoff", base.GetStatsMaxBackoff,
 		"max backoff for get stats, in seconds")
-	flag.Uint64Var(&options.sendBatchMaxBackoff, "sendBatchMaxBackoff", 5,
+	flag.Uint64Var(&options.sendBatchMaxBackoff, "sendBatchMaxBackoff", base.SendBatchMaxBackoff,
 		"max backoff for send batch, in seconds")
+	flag.Uint64Var(&options.delayBetweenSourceAndTarget, "delayBetweenSourceAndTarget", base.DelayBetweenSourceAndTarget,
+		"delay between source cluster start up and target cluster start up, in seconds")
 
 	flag.Parse()
 }
@@ -257,8 +261,9 @@ func generateDataFiles() error {
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 
-	fmt.Printf("Waiting for %v before starting target dcp clients\n", base.DelayBetweenSourceAndTarget)
-	time.Sleep(base.DelayBetweenSourceAndTarget)
+	delayDurationBetweenSourceAndTarget := time.Duration(options.delayBetweenSourceAndTarget) * time.Second
+	fmt.Printf("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
+	time.Sleep(delayDurationBetweenSourceAndTarget)
 
 	fmt.Printf("Starting target dcp clients\n")
 	targetDcpDriver := startDcpDriver(base.TargetClusterName, options.targetUrl, options.targetBucketName,
@@ -272,7 +277,7 @@ func generateDataFiles() error {
 	if options.completeBySeqno {
 		err = waitForCompletion(sourceDcpDriver, targetDcpDriver, errChan, waitGroup)
 	} else {
-		err = waitForDuration(sourceDcpDriver, targetDcpDriver, errChan, options.completeByDuration)
+		err = waitForDuration(sourceDcpDriver, targetDcpDriver, errChan, options.completeByDuration, delayDurationBetweenSourceAndTarget)
 	}
 
 	return err
@@ -351,7 +356,7 @@ func waitForCompletion(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan 
 	return nil
 }
 
-func waitForDuration(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan chan error, duration uint64) (err error) {
+func waitForDuration(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan chan error, duration uint64, delayDurationBetweenSourceAndTarget time.Duration) (err error) {
 	timer := time.NewTimer(time.Duration(duration) * time.Second)
 
 	select {
@@ -366,7 +371,7 @@ func waitForDuration(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan ch
 		fmt.Printf("Error stopping source dcp client. err=%v\n", err1)
 	}
 
-	time.Sleep(base.DelayBetweenSourceAndTarget)
+	time.Sleep(delayDurationBetweenSourceAndTarget)
 
 	err1 = targetDcpDriver.Stop()
 	if err1 != nil {
