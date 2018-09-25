@@ -144,14 +144,17 @@ func (c *DcpClient) initializeCluster() (err error) {
 		fmt.Printf("Error connecting to cluster %v. err=%v\n", c.dcpDriver.url, err)
 		return
 	}
-	err = cluster.Authenticate(gocb.PasswordAuthenticator{
-		Username: c.dcpDriver.userName,
-		Password: c.dcpDriver.password,
-	})
 
-	if err != nil {
-		fmt.Printf(err.Error())
-		return
+	if c.dcpDriver.Name == base.TargetClusterName {
+		err = cluster.Authenticate(gocb.PasswordAuthenticator{
+			Username: c.dcpDriver.userName,
+			Password: c.dcpDriver.password,
+		})
+
+		if err != nil {
+			fmt.Printf(err.Error())
+			return
+		}
 	}
 
 	c.cluster = cluster
@@ -159,7 +162,7 @@ func (c *DcpClient) initializeCluster() (err error) {
 }
 
 func (c *DcpClient) initializeBucket() (err error) {
-	bucket, err := c.cluster.OpenStreamingBucket(fmt.Sprintf("%v_%v", base.StreamingBucketName, c.Name), c.dcpDriver.bucketName, "")
+	bucket, err := c.cluster.OpenStreamingBucket(fmt.Sprintf("%v_%v", base.StreamingBucketName, c.Name), c.dcpDriver.bucketName, c.dcpDriver.bucketPassword)
 	if err != nil {
 		fmt.Printf("Error opening streaming bucket. bucket=%v, err=%v\n", c.dcpDriver.bucketName, err)
 	}

@@ -89,11 +89,11 @@ var options struct {
 }
 
 func argParse() {
-	flag.StringVar(&options.sourceUrl, "sourceUrl", "http://localhost:9000",
+	flag.StringVar(&options.sourceUrl, "sourceUrl", "http://35.173.205.165:8091",
 		"url for source cluster")
 	flag.StringVar(&options.sourceUsername, "sourceUsername", "Administrator",
 		"username for source cluster")
-	flag.StringVar(&options.sourcePassword, "sourcePassword", "welcome",
+	flag.StringVar(&options.sourcePassword, "sourcePassword", "password",
 		"password for source cluster")
 	flag.StringVar(&options.sourceBucketName, "sourceBucketName", "default",
 		"bucket name for source cluster")
@@ -121,7 +121,7 @@ func argParse() {
 		"number of buckets per vbucket")
 	flag.Uint64Var(&options.numberOfFileDesc, "numberOfFileDesc", 0,
 		"number of file descriptors")
-	flag.Uint64Var(&options.completeByDuration, "completeByDuration", 4,
+	flag.Uint64Var(&options.completeByDuration, "completeByDuration", 60,
 		"duration that the tool should run")
 	flag.BoolVar(&options.completeBySeqno, "completeBySeqno", false,
 		"whether tool should automatically complete (after processing all mutations at start time)")

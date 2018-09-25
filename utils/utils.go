@@ -11,11 +11,15 @@ package utils
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"github.com/nelio2k/xdcrDiffer/base"
 	"hash/crc32"
+	"io"
+	"io/ioutil"
 	"math"
 	mrand "math/rand"
+	"net/http"
 	"strconv"
 	"sync"
 	"time"
@@ -143,6 +147,7 @@ func ExponentialBackoffExecutor(name string, initialWait time.Duration, maxRetri
 		if opErr == nil {
 			return nil
 		} else if i != maxRetries {
+			fmt.Printf("executor failed with %v. retry=%v\n", opErr, i)
 			time.Sleep(waitTime)
 			waitTime *= time.Duration(factor)
 			if waitTime > maxBackoff {
@@ -183,4 +188,62 @@ func ShuffleVbList(list []uint16) {
 			list[i-1], list[randIndex] = list[randIndex], list[i-1]
 		}
 	}
+}
+
+func GetBucketPassword(remoteConnectStr, bucketName, remoteUsername, remotePassword string) (string, error) {
+	bucketInfo := make(map[string]interface{})
+
+	req, err := http.NewRequest(base.HttpGet, remoteConnectStr + base.PoolsDefaultBucketPath+bucketName, nil)
+	if err != nil {
+		return "", nil
+	}
+
+	req.SetBasicAuth(remoteUsername, remotePassword)
+
+	client := &http.Client{}
+
+	res, err := client.Do(req)
+	if err == nil && res != nil {
+		err = ParseResponseBody(res, &bucketInfo)
+		if err != nil {
+			return "", err
+		}
+		return GetBucketPasswordFromBucketInfo(bucketName, bucketInfo)
+	}
+
+	return "", err
+}
+
+func ParseResponseBody(res *http.Response,
+	out interface{}) error {
+	if res != nil && res.Body != nil {
+		defer res.Body.Close()
+		bod, err := ioutil.ReadAll(io.LimitReader(res.Body, res.ContentLength))
+		if err != nil {
+			fmt.Printf("Failed to read response body, err=%v\n res=%v\n", err, res)
+			return err
+		}
+		if out != nil {
+			err_marshal := json.Unmarshal(bod, out)
+			if err_marshal != nil {
+				fmt.Printf("Failed to unmarshal the response as json, err=%v, bod=%v\n res=%v\n", err_marshal, bod, res)
+				out = bod
+			}
+		}
+	}
+	return nil
+}
+
+func GetBucketPasswordFromBucketInfo(bucketName string, bucketInfo map[string]interface{}) (string, error) {
+	bucketPassword := ""
+	bucketPasswordObj, ok := bucketInfo[base.SASLPasswordKey]
+	if !ok {
+		return "", fmt.Errorf("Error looking up password of bucket %v", bucketName)
+	} else {
+		bucketPassword, ok = bucketPasswordObj.(string)
+		if !ok {
+			return "", fmt.Errorf("Password of bucket %v is of wrong type", bucketName)
+		}
+	}
+	return bucketPassword, nil
 }

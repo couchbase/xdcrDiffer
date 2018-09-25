@@ -125,6 +125,9 @@ done:
 }
 
 func (dh *DcpHandler) processMutation(mut *Mutation) {
+	if dh.dcpClient.dcpDriver.Name == base.SourceClusterName {
+		fmt.Printf("Source sees mut=%v\n", mut)
+	}
 	vbno := mut.vbno
 	index := utils.GetBucketIndexFromKey(mut.key, dh.numberOfBuckets)
 	innerMap := dh.bucketMap[vbno]

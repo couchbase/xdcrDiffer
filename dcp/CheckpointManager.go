@@ -14,6 +14,7 @@ import (
 )
 
 type CheckpointManager struct {
+	dcpDriver             *DcpDriver
 	clusterName           string
 	oldCheckpointFileName string
 	newCheckpointFileName string
@@ -31,10 +32,11 @@ type CheckpointManager struct {
 	getStatsMaxBackoff    time.Duration
 }
 
-func NewCheckpointManager(checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, clusterName,
+func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, clusterName,
 	bucketName string, completeBySeqno bool, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int,
 	getStatsRetryInterval, getStatsMaxBackoff time.Duration) *CheckpointManager {
 	cm := &CheckpointManager{
+		dcpDriver:             dcpDriver,
 		clusterName:           clusterName,
 		bucketName:            bucketName,
 		completeBySeqno:       completeBySeqno,
@@ -67,17 +69,7 @@ func NewCheckpointManager(checkpointFileDir, oldCheckpointFileName, newCheckpoin
 	return cm
 }
 
-func (cm *CheckpointManager) SetCluster(cluster *gocb.Cluster) {
-	cm.cluster = cluster
-}
-
 func (cm *CheckpointManager) Start() error {
-	err := cm.initialize()
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("%v checkpoint manager initialized.\n", cm.clusterName)
 
 	go cm.reportStatus()
 
@@ -129,6 +121,11 @@ func (cm *CheckpointManager) reportStatusOnce(prevSum uint64) uint64 {
 }
 
 func (cm *CheckpointManager) initialize() error {
+	err := cm.initializeCluster()
+	if err != nil {
+		return err
+	}
+
 	endSeqnoMap, err := cm.getVbuuidsAndHighSeqnos()
 	if err != nil {
 		return err
@@ -139,8 +136,33 @@ func (cm *CheckpointManager) initialize() error {
 	return cm.setStartVBTS(endSeqnoMap)
 }
 
+func (cm *CheckpointManager) initializeCluster() error {
+	cluster, err := gocb.Connect(cm.dcpDriver.url)
+	if err != nil {
+		fmt.Printf("%v error connecting to cluster %v. err=%v\n", cm.clusterName, cm.dcpDriver.url, err)
+		return err
+	}
+
+	if cm.clusterName == base.TargetClusterName {
+		// target is 5.0 and is RBAC enabled
+		err = cluster.Authenticate(gocb.PasswordAuthenticator{
+			Username: cm.dcpDriver.userName,
+			Password: cm.dcpDriver.password,
+		})
+
+		if err != nil {
+			fmt.Printf("%v error authenticating cluster. err=%v\n", cm.clusterName, err)
+			return err
+		}
+	}
+
+	cm.cluster = cluster
+
+	return nil
+}
+
 func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() (map[uint16]uint64, error) {
-	statsBucket, err := cm.cluster.OpenBucket(cm.bucketName, "" /*password*/)
+	/*statsBucket, err := cm.cluster.OpenBucket(cm.bucketName, cm.dcpDriver.bucketPassword)
 	if err != nil {
 		fmt.Printf("%v error opening bucket. err=%v\n", cm.clusterName, err)
 		return nil, err
@@ -162,7 +184,8 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() (map[uint16]uint64, error
 	}
 
 	cm.vbuuidMap = vbuuidMap
-
+	*/
+	endSeqnoMap := make(map[uint16]uint64)
 	if !cm.completeBySeqno {
 		// set endSeqno to maxInt
 		var vbno uint16

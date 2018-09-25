@@ -11,7 +11,6 @@ package dcp
 
 import (
 	"fmt"
-	"github.com/couchbase/gocb"
 	"github.com/nelio2k/xdcrDiffer/base"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"github.com/nelio2k/xdcrDiffer/utils"
@@ -25,6 +24,7 @@ type DcpDriver struct {
 	bucketName         string
 	userName           string
 	password           string
+	bucketPassword     string
 	fileDir            string
 	errChan            chan error
 	waitGroup          *sync.WaitGroup
@@ -33,7 +33,6 @@ type DcpDriver struct {
 	numberOfWorkers    int
 	numberOfBuckets    int
 	dcpHandlerChanSize int
-	cluster            *gocb.Cluster
 	checkpointManager  *CheckpointManager
 	fdPool             fdp.FdPoolIface
 	clients            []*DcpClient
@@ -58,9 +57,7 @@ func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoint
 	newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBuckets, dcpHandlerChanSize int,
 	bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration,
 	errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface) *DcpDriver {
-	return &DcpDriver{
-		checkpointManager: NewCheckpointManager(checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, name,
-			bucketName, completeBySeqno, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff),
+	dcpDriver := &DcpDriver{
 		Name:               name,
 		url:                url,
 		bucketName:         bucketName,
@@ -77,10 +74,22 @@ func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoint
 		fdPool:             fdPool,
 		state:              DriverStateNew,
 	}
+
+	dcpDriver.checkpointManager = NewCheckpointManager(dcpDriver, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, name,
+		bucketName, completeBySeqno, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff)
+
+	return dcpDriver
+
 }
 
 func (d *DcpDriver) Start() error {
-	err := d.initializeAndStartCheckpointManager()
+	err := d.getBucketPasswordIfNeeded()
+	if err != nil {
+		fmt.Printf("%v error getting bucket password. err=%v\n", d.Name, err)
+		return err
+	}
+
+	err = d.initializeAndStartCheckpointManager()
 	if err != nil {
 		fmt.Printf("%v error starting checkpoint manager. err=%v\n", d.Name, err)
 		return err
@@ -98,37 +107,25 @@ func (d *DcpDriver) Start() error {
 	return nil
 }
 
-func (d *DcpDriver) initializeAndStartCheckpointManager() error {
-	err := d.initializeCluster()
-	if err != nil {
-		fmt.Printf("%v error initializing cluster. err=%v\n", d.Name, err)
-		return err
+func (d *DcpDriver) getBucketPasswordIfNeeded() error {
+	var err error
+	if d.Name == base.SourceClusterName {
+		// source is 4.5, need to retrieve bucket password
+		d.bucketPassword, err = utils.GetBucketPassword(d.url, d.bucketName, d.userName, d.password)
+		if err != nil {
+			return err
+		}
 	}
-
-	fmt.Printf("%v initialized cluster for checkpoint manager.\n", d.Name)
-
-	d.checkpointManager.SetCluster(d.cluster)
-	return d.checkpointManager.Start()
+	return nil
 }
 
-func (d *DcpDriver) initializeCluster() (err error) {
-	cluster, err := gocb.Connect(d.url)
-	if err != nil {
-		fmt.Printf("%v error connecting to cluster %v. err=%v\n", d.Name, d.url, err)
-		return
-	}
-	err = cluster.Authenticate(gocb.PasswordAuthenticator{
-		Username: d.userName,
-		Password: d.password,
-	})
+func (d *DcpDriver) initializeAndStartCheckpointManager() error {
 
+	err := d.checkpointManager.initialize()
 	if err != nil {
-		fmt.Printf("%v error authenticating cluster. err=%v\n", d.Name, err)
-		return
+		return err
 	}
-
-	d.cluster = cluster
-	return nil
+	return d.checkpointManager.Start()
 }
 
 func (d *DcpDriver) Stop() error {

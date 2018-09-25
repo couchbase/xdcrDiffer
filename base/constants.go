@@ -34,6 +34,10 @@ const StatsReportInterval = 5
 const SourceClusterName = "source"
 const TargetClusterName = "target"
 
+const PoolsDefaultBucketPath = "/pools/default/buckets/"
+const SASLPasswordKey = "saslPassword"
+const HttpGet = "GET"
+
 // default values for configurable parameters if not specified by user
 const BucketOpTimeout uint64 = 20
 const GetStatsRetryInterval uint64 = 2
