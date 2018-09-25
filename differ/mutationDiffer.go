@@ -17,6 +17,7 @@ import (
 	"github.com/nelio2k/xdcrDiffer/utils"
 	gocbcore "gopkg.in/couchbase/gocbcore.v7"
 	"io/ioutil"
+	"math"
 	"os"
 	"reflect"
 	"sync"
@@ -146,15 +147,26 @@ func (d *MutationDiffer) reportStatus(totalKeys int) {
 	ticker := time.NewTicker(time.Duration(base.StatsReportInterval) * time.Second)
 	defer ticker.Stop()
 
+	var prevNumKeysProcessed uint32 = math.MaxUint32
+
 	for {
 		select {
 		case <-ticker.C:
 			numKeysProcessed := atomic.LoadUint32(&d.numKeysProcessed)
 			numKeysWithErrors := atomic.LoadUint32(&d.numKeysWithErrors)
-			fmt.Printf("Mutation differ processed %v keys out of %v keys. skipped %v keys because of error\n", numKeysProcessed, totalKeys, numKeysWithErrors)
+			if prevNumKeysProcessed != math.MaxUint32 {
+				fmt.Printf("%v Mutation differ processed %v keys out of %v keys. processing rate=%v key/sec\n", time.Now(), numKeysProcessed, totalKeys, (numKeysProcessed-prevNumKeysProcessed)/base.StatsReportInterval)
+			} else {
+				fmt.Printf("%v Mutation differ processed %v keys out of %v keys.\n", time.Now(), numKeysProcessed, totalKeys)
+
+			}
+			if numKeysWithErrors > 0 {
+				fmt.Printf("%v skipped %v keys because of errors\n", time.Now(), numKeysWithErrors)
+			}
 			if numKeysProcessed == uint32(totalKeys) {
 				return
 			}
+			prevNumKeysProcessed = numKeysProcessed
 		case <-d.finChan:
 			return
 		}

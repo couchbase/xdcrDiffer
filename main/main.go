@@ -111,11 +111,11 @@ func argParse() {
 		"directory to store mutations in target cluster")
 	flag.Uint64Var(&options.numberOfDcpClients, "numberOfDcpClients", 4,
 		"number of dcp clients")
-	flag.Uint64Var(&options.numberOfWorkersPerDcpClient, "numberOfWorkersPerDcpClient", 20,
+	flag.Uint64Var(&options.numberOfWorkersPerDcpClient, "numberOfWorkersPerDcpClient", 256,
 		"number of workers for each dcp client")
-	flag.Uint64Var(&options.numberOfWorkersForFileDiffer, "numberOfWorkersForFileDiffer", 100,
+	flag.Uint64Var(&options.numberOfWorkersForFileDiffer, "numberOfWorkersForFileDiffer", 10,
 		"number of worker threads for file differ ")
-	flag.Uint64Var(&options.numberOfWorkersForMutationDiffer, "numberOfWorkersForMutationDiffer", 20,
+	flag.Uint64Var(&options.numberOfWorkersForMutationDiffer, "numberOfWorkersForMutationDiffer", 30,
 		"number of worker threads for mutation differ ")
 	flag.Uint64Var(&options.numberOfBuckets, "numberOfBuckets", 10,
 		"number of buckets per vbucket")
@@ -210,33 +210,32 @@ func main() {
 func cleanUpAndSetup() error {
 	err := os.RemoveAll(options.sourceFileDir)
 	if err != nil {
-		fmt.Errorf("Error removing sourceFileDir: %v\n", err)
-		return err
+		return fmt.Errorf("Error removing sourceFileDir: %v\n", err)
 	}
 	err = os.RemoveAll(options.targetFileDir)
 	if err != nil {
-		fmt.Errorf("Error removing targetFileDir: %v\n", err)
-		return err
+		return fmt.Errorf("Error removing targetFileDir: %v\n", err)
 	}
 	err = os.RemoveAll(options.diffFileDir)
 	if err != nil {
-		fmt.Errorf("Error removing diffFileDir: %v\n", err)
-		return err
+		return fmt.Errorf("Error removing diffFileDir: %v\n", err)
 	}
 	err = os.MkdirAll(options.sourceFileDir, 0777)
 	if err != nil {
-		fmt.Errorf("Error mkdir targetFileDir: %v\n", err)
-		return err
+		return fmt.Errorf("Error mkdir targetFileDir: %v\n", err)
 	}
 	err = os.MkdirAll(options.targetFileDir, 0777)
 	if err != nil {
-		fmt.Errorf("Error mkdir targetFileDir: %v\n", err)
-		return err
+		return fmt.Errorf("Error mkdir targetFileDir: %v\n", err)
 	}
 	err = os.MkdirAll(options.diffFileDir, 0777)
 	if err != nil {
-		fmt.Errorf("Error mkdir diffFileDir: %v\n", err)
-		return err
+		return fmt.Errorf("Error mkdir diffFileDir: %v\n", err)
+	}
+	err = os.MkdirAll(options.checkpointFileDir, 0777)
+	if err != nil {
+		// it is ok for checkpoint dir to be existing, since we do not clean it up
+		fmt.Printf("Error mkdir checkpointFileDir: %v\n", err)
 	}
 	return nil
 }
@@ -328,6 +327,7 @@ func startDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoi
 func startDcpDriverAysnc(dcpDriver *dcp.DcpDriver, errChan chan error) {
 	err := dcpDriver.Start()
 	if err != nil {
+		fmt.Printf("Error starting dcp driver %v. err=%v\n", dcpDriver.Name, err)
 		utils.AddToErrorChan(errChan, err)
 	}
 }

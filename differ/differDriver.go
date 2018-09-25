@@ -97,7 +97,7 @@ func (dr *DifferDriver) reportStatus() {
 		select {
 		case <-ticker.C:
 			vbCompleted := atomic.LoadUint32(&dr.vbCompleted)
-			fmt.Printf("File differ processed %v vbuckets\n", vbCompleted)
+			fmt.Printf("%v File differ processed %v vbuckets\n", time.Now(), vbCompleted)
 			if vbCompleted == base.NumberOfVbuckets {
 				return
 			}
