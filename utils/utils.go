@@ -12,6 +12,7 @@ package utils
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/nelio2k/xdcrDiffer/base"
 	"hash/crc32"
@@ -20,6 +21,7 @@ import (
 	"math"
 	mrand "math/rand"
 	"net/http"
+	"reflect"
 	"strconv"
 	"sync"
 	"time"
@@ -190,12 +192,36 @@ func ShuffleVbList(list []uint16) {
 	}
 }
 
-func GetBucketPassword(remoteConnectStr, bucketName, remoteUsername, remotePassword string) (string, error) {
+func GetRBACSupportedAndBucketPassword(remoteConnectStr, bucketName, remoteUsername, remotePassword string) (bool, string, error) {
+	bucketInfo, err := GetBucketInfo(remoteConnectStr, bucketName, remoteUsername, remotePassword)
+	if err != nil || bucketInfo == nil {
+		return false, "", fmt.Errorf("Error retrieveing bucket info for %v. err=%v\n", remoteConnectStr, err)
+	}
+
+	clusterCompatibility, err := GetClusterCompatibilityFromBucketInfo(bucketInfo)
+	if err != nil {
+		return false, "", err
+	}
+
+	rbacSupported := IsClusterCompatible(clusterCompatibility, base.VersionForRBACSupport)
+	bucketPassword := ""
+	if !rbacSupported {
+		// bucket password is needed when rbac is not supported
+		bucketPassword, err = GetBucketPasswordFromBucketInfo(bucketName, bucketInfo)
+		if err != nil {
+			return false, "", err
+		}
+	}
+
+	return rbacSupported, bucketPassword, nil
+}
+
+func GetBucketInfo(remoteConnectStr, bucketName, remoteUsername, remotePassword string) (map[string]interface{}, error) {
 	bucketInfo := make(map[string]interface{})
 
-	req, err := http.NewRequest(base.HttpGet, remoteConnectStr + base.PoolsDefaultBucketPath+bucketName, nil)
+	req, err := http.NewRequest(base.HttpGet, remoteConnectStr+base.PoolsDefaultBucketPath+bucketName, nil)
 	if err != nil {
-		return "", nil
+		return nil, nil
 	}
 
 	req.SetBasicAuth(remoteUsername, remotePassword)
@@ -206,12 +232,12 @@ func GetBucketPassword(remoteConnectStr, bucketName, remoteUsername, remotePassw
 	if err == nil && res != nil {
 		err = ParseResponseBody(res, &bucketInfo)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		return GetBucketPasswordFromBucketInfo(bucketName, bucketInfo)
+		return bucketInfo, nil
 	}
 
-	return "", err
+	return bucketInfo, err
 }
 
 func ParseResponseBody(res *http.Response,
@@ -234,6 +260,85 @@ func ParseResponseBody(res *http.Response,
 	return nil
 }
 
+func GetClusterCompatibilityFromBucketInfo(bucketInfo map[string]interface{}) (int, error) {
+	nodeList, err := GetNodeListFromInfoMap(bucketInfo)
+	if err != nil {
+		return 0, err
+	}
+
+	clusterCompatibility, err := GetClusterCompatibilityFromNodeList(nodeList)
+	if err != nil {
+		return 0, err
+	}
+
+	return clusterCompatibility, nil
+}
+
+func GetClusterCompatibilityFromNodeList(nodeList []interface{}) (int, error) {
+	if len(nodeList) > 0 {
+		firstNode, ok := nodeList[0].(map[string]interface{})
+		if !ok {
+			return 0, fmt.Errorf("node info is of wrong type. node info=%v", nodeList[0])
+		}
+		clusterCompatibility, ok := firstNode[base.ClusterCompatibilityKey]
+		if !ok {
+			return 0, fmt.Errorf("Can't get cluster compatibility info. node info=%v\n If replicating to ElasticSearch node, use XDCR v1.", nodeList[0])
+		}
+		clusterCompatibilityFloat, ok := clusterCompatibility.(float64)
+		if !ok {
+			return 0, fmt.Errorf("cluster compatibility is not of int type. type=%v", reflect.TypeOf(clusterCompatibility))
+		}
+		return int(clusterCompatibilityFloat), nil
+	}
+
+	return 0, fmt.Errorf("node list is empty")
+}
+
+func GetNodeListFromInfoMap(infoMap map[string]interface{}) ([]interface{}, error) {
+	// get node list from the map
+	nodes, ok := infoMap[base.NodesKey]
+	if !ok {
+		errMsg := fmt.Sprintf("info map contains no nodes. info map=%v", infoMap)
+		return nil, errors.New(errMsg)
+	}
+
+	nodeList, ok := nodes.([]interface{})
+	if !ok {
+		errMsg := fmt.Sprintf("nodes is not of list type. type of nodes=%v", reflect.TypeOf(nodes))
+		return nil, errors.New(errMsg)
+	}
+
+	// only return the nodes that are active
+	activeNodeList := make([]interface{}, 0)
+	for _, node := range nodeList {
+		nodeInfoMap, ok := node.(map[string]interface{})
+		if !ok {
+			errMsg := fmt.Sprintf("node info is not of map type. type=%v", reflect.TypeOf(node))
+			return nil, errors.New(errMsg)
+		}
+		clusterMembershipObj, ok := nodeInfoMap[base.ClusterMembershipKey]
+		if !ok {
+			// this could happen when target is elastic search cluster (or maybe very old couchbase cluster?)
+			// consider the node to be "active" to be safe
+			fmt.Printf("node info map does not contain cluster membership. node info map=%v ", nodeInfoMap)
+			activeNodeList = append(activeNodeList, node)
+			continue
+		}
+		clusterMembership, ok := clusterMembershipObj.(string)
+		if !ok {
+			// play safe and return the node as active
+			fmt.Printf("cluster membership is not string type. type=%v ", reflect.TypeOf(clusterMembershipObj))
+			activeNodeList = append(activeNodeList, node)
+			continue
+		}
+		if clusterMembership == "" || clusterMembership == base.ClusterMembership_Active {
+			activeNodeList = append(activeNodeList, node)
+		}
+	}
+
+	return activeNodeList, nil
+}
+
 func GetBucketPasswordFromBucketInfo(bucketName string, bucketInfo map[string]interface{}) (string, error) {
 	bucketPassword := ""
 	bucketPasswordObj, ok := bucketInfo[base.SASLPasswordKey]
@@ -246,4 +351,24 @@ func GetBucketPasswordFromBucketInfo(bucketName string, bucketInfo map[string]in
 		}
 	}
 	return bucketPassword, nil
+}
+
+// check if a cluster (with specified clusterCompatibility) is compatible with version
+func IsClusterCompatible(clusterCompatibility int, version []int) bool {
+	return clusterCompatibility >= EncodeVersionToEffectiveVersion(version)
+}
+
+// encode version into an integer
+func EncodeVersionToEffectiveVersion(version []int) int {
+	majorVersion := 0
+	minorVersion := 0
+	if len(version) > 0 {
+		majorVersion = version[0]
+	}
+	if len(version) > 1 {
+		minorVersion = version[1]
+	}
+
+	effectiveVersion := majorVersion*0x10000 + minorVersion
+	return effectiveVersion
 }

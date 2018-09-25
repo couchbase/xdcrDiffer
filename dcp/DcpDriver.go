@@ -24,6 +24,7 @@ type DcpDriver struct {
 	bucketName         string
 	userName           string
 	password           string
+	rbacSupported      bool
 	bucketPassword     string
 	fileDir            string
 	errChan            chan error
@@ -83,9 +84,9 @@ func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoint
 }
 
 func (d *DcpDriver) Start() error {
-	err := d.getBucketPasswordIfNeeded()
+	err := d.populateCredentials()
 	if err != nil {
-		fmt.Printf("%v error getting bucket password. err=%v\n", d.Name, err)
+		fmt.Printf("%v error populating credentials. err=%v\n", d.Name, err)
 		return err
 	}
 
@@ -107,16 +108,11 @@ func (d *DcpDriver) Start() error {
 	return nil
 }
 
-func (d *DcpDriver) getBucketPasswordIfNeeded() error {
+func (d *DcpDriver) populateCredentials() error {
 	var err error
-	if d.Name == base.SourceClusterName {
-		// source is 4.5, need to retrieve bucket password
-		d.bucketPassword, err = utils.GetBucketPassword(d.url, d.bucketName, d.userName, d.password)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
+	d.rbacSupported, d.bucketPassword, err = utils.GetRBACSupportedAndBucketPassword(d.url, d.bucketName, d.userName, d.password)
+	fmt.Printf("%v rbacSupported=%v\n", d.Name, d.rbacSupported)
+	return err
 }
 
 func (d *DcpDriver) initializeAndStartCheckpointManager() error {

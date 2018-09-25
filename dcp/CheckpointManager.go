@@ -143,8 +143,7 @@ func (cm *CheckpointManager) initializeCluster() error {
 		return err
 	}
 
-	if cm.clusterName == base.TargetClusterName {
-		// target is 5.0 and is RBAC enabled
+	if cm.dcpDriver.rbacSupported {
 		err = cluster.Authenticate(gocb.PasswordAuthenticator{
 			Username: cm.dcpDriver.userName,
 			Password: cm.dcpDriver.password,
@@ -162,14 +161,15 @@ func (cm *CheckpointManager) initializeCluster() error {
 }
 
 func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() (map[uint16]uint64, error) {
-	/*statsBucket, err := cm.cluster.OpenBucket(cm.bucketName, cm.dcpDriver.bucketPassword)
+	statsBucket, err := cm.cluster.OpenBucket(cm.bucketName, cm.dcpDriver.bucketPassword)
 	if err != nil {
 		fmt.Printf("%v error opening bucket. err=%v\n", cm.clusterName, err)
 		return nil, err
 	}
 	defer statsBucket.Close()
 
-	statsBucket.SetOperationTimeout(cm.bucketOpTimeout)
+	statsBucket.SetOperationTimeout(120 * time.Second)
+	statsBucket.SetBulkOperationTimeout(120 * time.Second)
 
 	statsMap, err := cm.getStatsWithRetry(statsBucket)
 	if err != nil {
@@ -184,8 +184,8 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() (map[uint16]uint64, error
 	}
 
 	cm.vbuuidMap = vbuuidMap
-	*/
-	endSeqnoMap := make(map[uint16]uint64)
+	//fmt.Printf("%v vbuuidMap=%v\n", cm.clusterName, vbuuidMap)
+
 	if !cm.completeBySeqno {
 		// set endSeqno to maxInt
 		var vbno uint16

@@ -34,12 +34,13 @@ const StatsReportInterval = 5
 const SourceClusterName = "source"
 const TargetClusterName = "target"
 
+const NodesKey = "nodes"
 const PoolsDefaultBucketPath = "/pools/default/buckets/"
 const SASLPasswordKey = "saslPassword"
 const HttpGet = "GET"
 
 // default values for configurable parameters if not specified by user
-const BucketOpTimeout uint64 = 20
+const BucketOpTimeout uint64 = 180
 const GetStatsRetryInterval uint64 = 2
 const GetStatsMaxBackoff uint64 = 10
 const SendBatchRetryInterval uint64 = 500
@@ -58,3 +59,9 @@ const DelayBetweenSourceAndTarget uint64 = 2
 //  expiry  - 4 bytes
 //  hash    - 64 bytes
 const BodyLength = 96
+
+var VersionForRBACSupport = []int{5, 0}
+
+var ClusterCompatibilityKey = "clusterCompatibility"
+var ClusterMembershipKey = "clusterMembership"
+var ClusterMembership_Active = "active"

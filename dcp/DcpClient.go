@@ -145,7 +145,7 @@ func (c *DcpClient) initializeCluster() (err error) {
 		return
 	}
 
-	if c.dcpDriver.Name == base.TargetClusterName {
+	if c.dcpDriver.rbacSupported {
 		err = cluster.Authenticate(gocb.PasswordAuthenticator{
 			Username: c.dcpDriver.userName,
 			Password: c.dcpDriver.password,

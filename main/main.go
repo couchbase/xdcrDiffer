@@ -109,7 +109,7 @@ func argParse() {
 		"bucket name for target cluster")
 	flag.StringVar(&options.targetFileDir, "targetFileDir", base.TargetFileDir,
 		"directory to store mutations in target cluster")
-	flag.Uint64Var(&options.numberOfDcpClients, "numberOfDcpClients", 2,
+	flag.Uint64Var(&options.numberOfDcpClients, "numberOfDcpClients", 1,
 		"number of dcp clients")
 	flag.Uint64Var(&options.numberOfWorkersPerDcpClient, "numberOfWorkersPerDcpClient", 20,
 		"number of workers for each dcp client")
