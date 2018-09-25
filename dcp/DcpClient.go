@@ -29,7 +29,6 @@ type DcpClient struct {
 	waitGroup          *sync.WaitGroup
 	dcpHandlers        []*DcpHandler
 	vbHandlerMap       map[uint16]*DcpHandler
-	checkpointManager  *CheckpointManager
 	numberClosing      uint32
 	closeStreamsDoneCh chan bool
 	activeStreams      uint32
@@ -173,16 +172,16 @@ func (c *DcpClient) initializeBucket() (err error) {
 }
 
 func (c *DcpClient) initializeDcpHandlers() error {
-	loadDistribution := utils.BalanceLoad(c.dcpDriver.numberOfWorkers, base.NumberOfVbuckets)
+	loadDistribution := utils.BalanceLoad(c.dcpDriver.numberOfWorkers, len(c.vbList))
 	for i := 0; i < c.dcpDriver.numberOfWorkers; i++ {
 		lowIndex := loadDistribution[i][0]
 		highIndex := loadDistribution[i][1]
 		vbList := make([]uint16, highIndex-lowIndex)
 		for j := lowIndex; j < highIndex; j++ {
-			vbList[j-lowIndex] = uint16(j)
+			vbList[j-lowIndex] = c.vbList[j]
 		}
 
-		dcpHandler, err := NewDcpHandler(c, c.dcpDriver.checkpointManager, c.dcpDriver.fileDir, i, vbList, c.dcpDriver.numberOfBuckets, c.dcpDriver.dcpHandlerChanSize, c.dcpDriver.fdPool)
+		dcpHandler, err := NewDcpHandler(c, c.dcpDriver.fileDir, i, vbList, c.dcpDriver.numberOfBuckets, c.dcpDriver.dcpHandlerChanSize, c.dcpDriver.fdPool)
 		if err != nil {
 			fmt.Printf("Error constructing dcp handler. err=%v\n", err)
 			return err
@@ -197,7 +196,7 @@ func (c *DcpClient) initializeDcpHandlers() error {
 		c.dcpHandlers[i] = dcpHandler
 
 		for j := lowIndex; j < highIndex; j++ {
-			c.vbHandlerMap[uint16(j)] = dcpHandler
+			c.vbHandlerMap[c.vbList[j]] = dcpHandler
 		}
 	}
 	return nil

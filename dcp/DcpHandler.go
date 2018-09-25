@@ -23,34 +23,32 @@ import (
 
 // implements StreamObserver
 type DcpHandler struct {
-	dcpClient         *DcpClient
-	checkpointManager *CheckpointManager
-	fileDir           string
-	index             int
-	vbList            []uint16
-	numberOfBuckets   int
-	dataChan          chan *Mutation
-	waitGrp           sync.WaitGroup
-	finChan           chan bool
-	bucketMap         map[uint16]map[int]*Bucket
-	fdPool            fdp.FdPoolIface
+	dcpClient       *DcpClient
+	fileDir         string
+	index           int
+	vbList          []uint16
+	numberOfBuckets int
+	dataChan        chan *Mutation
+	waitGrp         sync.WaitGroup
+	finChan         chan bool
+	bucketMap       map[uint16]map[int]*Bucket
+	fdPool          fdp.FdPoolIface
 }
 
-func NewDcpHandler(dcpClient *DcpClient, checkpointManager *CheckpointManager, fileDir string, index int, vbList []uint16, numberOfBuckets, dataChanSize int, fdPool fdp.FdPoolIface) (*DcpHandler, error) {
+func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBuckets, dataChanSize int, fdPool fdp.FdPoolIface) (*DcpHandler, error) {
 	if len(vbList) == 0 {
 		return nil, fmt.Errorf("vbList is empty for handler %v", index)
 	}
 	return &DcpHandler{
-		dcpClient:         dcpClient,
-		checkpointManager: checkpointManager,
-		fileDir:           fileDir,
-		index:             index,
-		vbList:            vbList,
-		numberOfBuckets:   numberOfBuckets,
-		dataChan:          make(chan *Mutation, dataChanSize),
-		finChan:           make(chan bool),
-		bucketMap:         make(map[uint16]map[int]*Bucket),
-		fdPool:            fdPool,
+		dcpClient:       dcpClient,
+		fileDir:         fileDir,
+		index:           index,
+		vbList:          vbList,
+		numberOfBuckets: numberOfBuckets,
+		dataChan:        make(chan *Mutation, dataChanSize),
+		finChan:         make(chan bool),
+		bucketMap:       make(map[uint16]map[int]*Bucket),
+		fdPool:          fdPool,
 	}, nil
 }
 
@@ -125,9 +123,6 @@ done:
 }
 
 func (dh *DcpHandler) processMutation(mut *Mutation) {
-	if dh.dcpClient.dcpDriver.Name == base.SourceClusterName {
-		fmt.Printf("Source sees mut=%v\n", mut)
-	}
 	vbno := mut.vbno
 	index := utils.GetBucketIndexFromKey(mut.key, dh.numberOfBuckets)
 	innerMap := dh.bucketMap[vbno]
@@ -139,7 +134,7 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 		panic(fmt.Sprintf("cannot find bucket for index %v", index))
 	}
 	bucket.write(serializeMutation(mut))
-	dh.checkpointManager.HandleMutationProcessedEvent(mut)
+	dh.dcpClient.dcpDriver.checkpointManager.HandleMutationProcessedEvent(mut)
 }
 
 func (dh *DcpHandler) writeToDataChan(mut *Mutation) {
@@ -151,7 +146,7 @@ func (dh *DcpHandler) writeToDataChan(mut *Mutation) {
 }
 
 func (dh *DcpHandler) SnapshotMarker(startSeqno, endSeqno uint64, vbno uint16, snapshotType gocbcore.SnapshotState) {
-	dh.checkpointManager.updateSnapshot(vbno, startSeqno, endSeqno)
+	dh.dcpClient.dcpDriver.checkpointManager.updateSnapshot(vbno, startSeqno, endSeqno)
 }
 
 func (dh *DcpHandler) Mutation(seqno, revId uint64, flags, expiry, lockTime uint32, cas uint64, datatype uint8, vbno uint16, key, value []byte) {

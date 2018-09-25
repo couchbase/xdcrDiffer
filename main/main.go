@@ -89,7 +89,7 @@ var options struct {
 }
 
 func argParse() {
-	flag.StringVar(&options.sourceUrl, "sourceUrl", "http://35.173.205.165:8091",
+	flag.StringVar(&options.sourceUrl, "sourceUrl", "http://54.90.174.157:8091",
 		"url for source cluster")
 	flag.StringVar(&options.sourceUsername, "sourceUsername", "Administrator",
 		"username for source cluster")
@@ -99,23 +99,23 @@ func argParse() {
 		"bucket name for source cluster")
 	flag.StringVar(&options.sourceFileDir, "sourceFileDir", base.SourceFileDir,
 		"directory to store mutations in source cluster")
-	flag.StringVar(&options.targetUrl, "targetUrl", "http://localhost:9000",
+	flag.StringVar(&options.targetUrl, "targetUrl", "http://13.56.246.168:8091",
 		"url for target cluster")
 	flag.StringVar(&options.targetUsername, "targetUsername", "Administrator",
 		"username for target cluster")
-	flag.StringVar(&options.targetPassword, "targetPassword", "welcome",
+	flag.StringVar(&options.targetPassword, "targetPassword", "password",
 		"password for target cluster")
 	flag.StringVar(&options.targetBucketName, "targetBucketName", "target",
 		"bucket name for target cluster")
 	flag.StringVar(&options.targetFileDir, "targetFileDir", base.TargetFileDir,
 		"directory to store mutations in target cluster")
-	flag.Uint64Var(&options.numberOfDcpClients, "numberOfDcpClients", 1,
+	flag.Uint64Var(&options.numberOfDcpClients, "numberOfDcpClients", 4,
 		"number of dcp clients")
 	flag.Uint64Var(&options.numberOfWorkersPerDcpClient, "numberOfWorkersPerDcpClient", 20,
 		"number of workers for each dcp client")
 	flag.Uint64Var(&options.numberOfWorkersForFileDiffer, "numberOfWorkersForFileDiffer", 100,
 		"number of worker threads for file differ ")
-	flag.Uint64Var(&options.numberOfWorkersForMutationDiffer, "numberOfWorkersForMutationDiffer", 10,
+	flag.Uint64Var(&options.numberOfWorkersForMutationDiffer, "numberOfWorkersForMutationDiffer", 20,
 		"number of worker threads for mutation differ ")
 	flag.Uint64Var(&options.numberOfBuckets, "numberOfBuckets", 10,
 		"number of buckets per vbucket")

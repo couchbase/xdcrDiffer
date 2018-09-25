@@ -506,21 +506,29 @@ func (d *MutationDiffer) initialize() error {
 }
 
 func (d *MutationDiffer) openBucket(url, bucketName, username, password string) (*gocb.Bucket, error) {
+	rbacSupported, bucketPassword, err := utils.GetRBACSupportedAndBucketPassword(url, bucketName, username, password)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Printf("%v rbacSupported=%v\n", url, rbacSupported)
+
 	cluster, err := gocb.Connect(url)
 	if err != nil {
 		fmt.Printf("Error connecting to cluster %v. err=%v\n", url, err)
 		return nil, err
 	}
 
-	err = cluster.Authenticate(gocb.PasswordAuthenticator{
-		Username: username,
-		Password: password,
-	})
+	if rbacSupported {
+		err = cluster.Authenticate(gocb.PasswordAuthenticator{
+			Username: username,
+			Password: password,
+		})
 
-	if err != nil {
-		fmt.Printf(err.Error())
-		return nil, err
+		if err != nil {
+			fmt.Printf(err.Error())
+			return nil, err
+		}
 	}
 
-	return cluster.OpenBucket(bucketName, "")
+	return cluster.OpenBucket(bucketName, bucketPassword)
 }
