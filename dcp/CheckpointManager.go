@@ -177,10 +177,16 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() error {
 
 	vbuuidMap := make(map[uint16]uint64)
 	endSeqnoMap := make(map[uint16]uint64)
-	err = utils.ParseHighSeqnoStat(statsMap, endSeqnoMap, vbuuidMap, cm.completeBySeqno)
+	err = utils.ParseHighSeqnoStat(statsMap, endSeqnoMap, vbuuidMap, true)
 	if err != nil {
 		return err
 	}
+
+	var sum uint64
+	for _, seqno := range endSeqnoMap {
+		sum += seqno
+	}
+	fmt.Printf("%v total docs=%v\n", cm.clusterName, sum)
 
 	cm.vbuuidMap = vbuuidMap
 

@@ -32,12 +32,9 @@ type DifferDriver struct {
 	diffKeys         []string
 	stateLock        *sync.RWMutex
 	fileDescPool     *fdp.FdPool
-	// Diff results
-	missingFromSource    []*oneEntry
-	missingFromTarget    []*oneEntry
-	bothExistButMismatch []*entryPair
-	vbCompleted          uint32
-	finChan              chan bool
+	diffDetailsFile  *os.File
+	vbCompleted      uint32
+	finChan          chan bool
 }
 
 func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBuckets int, numberOfFds int) *DifferDriver {
@@ -47,24 +44,25 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName
 	}
 
 	return &DifferDriver{
-		sourceFileDir:        sourceFileDir,
-		targetFileDir:        targetFileDir,
-		diffFileDir:          diffFileDir,
-		diffKeysFileName:     diffKeysFileName,
-		numberOfWorkers:      numberOfWorkers,
-		numberOfBuckets:      numberOfBuckets,
-		waitGroup:            &sync.WaitGroup{},
-		stateLock:            &sync.RWMutex{},
-		fileDescPool:         fdPool,
-		diffKeys:             make([]string, 0),
-		missingFromSource:    make([]*oneEntry, 0),
-		missingFromTarget:    make([]*oneEntry, 0),
-		bothExistButMismatch: make([]*entryPair, 0),
-		finChan:              make(chan bool),
+		sourceFileDir:    sourceFileDir,
+		targetFileDir:    targetFileDir,
+		diffFileDir:      diffFileDir,
+		diffKeysFileName: diffKeysFileName,
+		numberOfWorkers:  numberOfWorkers,
+		numberOfBuckets:  numberOfBuckets,
+		waitGroup:        &sync.WaitGroup{},
+		stateLock:        &sync.RWMutex{},
+		fileDescPool:     fdPool,
+		finChan:          make(chan bool),
 	}
 }
 
 func (dr *DifferDriver) Run() error {
+	err := dr.initialize()
+	if err != nil {
+		return err
+	}
+
 	loadDistribution := utils.BalanceLoad(dr.numberOfWorkers, base.NumberOfVbuckets)
 
 	go dr.reportStatus()
@@ -84,9 +82,28 @@ func (dr *DifferDriver) Run() error {
 
 	dr.waitGroup.Wait()
 
-	close(dr.finChan)
+	dr.cleanup()
 
-	return dr.writeDiff()
+	return nil
+}
+
+func (dr *DifferDriver) cleanup() {
+	close(dr.finChan)
+	err := dr.writeDiffKeys()
+	if err != nil {
+		fmt.Printf("Error writing diff keys. err=%v\n", err)
+	}
+	dr.diffDetailsFile.Close()
+}
+
+func (dr *DifferDriver) initialize() error {
+	diffDetailsFileName := dr.diffFileDir + base.FileDirDelimiter + base.DiffDetailsFileName
+	diffDetailsFile, err := os.OpenFile(diffDetailsFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
+	if err != nil {
+		return err
+	}
+	dr.diffDetailsFile = diffDetailsFile
+	return nil
 }
 
 func (dr *DifferDriver) reportStatus() {
@@ -107,31 +124,22 @@ func (dr *DifferDriver) reportStatus() {
 	}
 }
 
-func (dr *DifferDriver) addDiff(diffKeys []string, bothExistButMismatch []*entryPair,
-	missingFromSource []*oneEntry,
-	missingFromTarget []*oneEntry) {
+func (dr *DifferDriver) addDiff(diffKeys []string, diffBytes []byte) {
+	dr.addDiffKeys(diffKeys)
+
+	dr.writeDiffBytes(diffBytes)
+}
+
+func (dr *DifferDriver) addDiffKeys(diffKeys []string) {
 	dr.stateLock.Lock()
 	defer dr.stateLock.Unlock()
 	dr.diffKeys = append(dr.diffKeys, diffKeys...)
-	dr.bothExistButMismatch = append(dr.bothExistButMismatch, bothExistButMismatch...)
-	dr.missingFromSource = append(dr.missingFromSource, missingFromSource...)
-	dr.missingFromTarget = append(dr.missingFromTarget, missingFromTarget...)
-
-}
-
-func (dr *DifferDriver) writeDiff() error {
-	dr.stateLock.RLock()
-	defer dr.stateLock.RUnlock()
-
-	err := dr.writeDiffKeys()
-	if err != nil {
-		fmt.Printf("Error writing diff keys. err=%v\n", err)
-	}
-
-	return dr.writeDiffDetails()
 }
 
 func (dr *DifferDriver) writeDiffKeys() error {
+	dr.stateLock.RLock()
+	defer dr.stateLock.RUnlock()
+
 	diffKeysBytes, err := json.Marshal(dr.diffKeys)
 	if err != nil {
 		return err
@@ -149,34 +157,9 @@ func (dr *DifferDriver) writeDiffKeys() error {
 	return err
 }
 
-func (dr *DifferDriver) writeDiffDetails() error {
-	diffDetails, err := dr.diffToJson()
-	if err != nil {
-		return err
-	}
-
-	diffDetailsFileName := dr.diffFileDir + base.FileDirDelimiter + base.DiffDetailsFileName
-	diffDetailsFile, err := os.OpenFile(diffDetailsFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
-	if err != nil {
-		return err
-	}
-
-	defer diffDetailsFile.Close()
-
-	_, err = diffDetailsFile.Write(diffDetails)
+func (dr *DifferDriver) writeDiffBytes(diffBytes []byte) error {
+	_, err := dr.diffDetailsFile.Write(diffBytes)
 	return err
-}
-
-func (dr *DifferDriver) diffToJson() ([]byte, error) {
-	outputMap := map[string]interface{}{
-		"Mismatch":          dr.bothExistButMismatch,
-		"MissingFromSource": dr.missingFromSource,
-		"MissingFromTarget": dr.missingFromTarget,
-	}
-
-	ret, err := json.Marshal(outputMap)
-
-	return ret, err
 }
 
 type DifferHandler struct {
@@ -222,9 +205,13 @@ func (dh *DifferHandler) run() {
 				return
 			}
 
-			diffKeys, bothExistButMismatch, missingFromSource, missingFromTarget := filesDiffer.Diff()
+			diffKeys, diffBytes, err := filesDiffer.Diff()
+			if err != nil {
+				fmt.Printf("error getting diff from file differ. err=%v\n", err)
+				continue
+			}
 			if len(diffKeys) > 0 {
-				dh.driver.addDiff(diffKeys, bothExistButMismatch, missingFromSource, missingFromTarget)
+				dh.driver.addDiff(diffKeys, diffBytes)
 			}
 		}
 		atomic.AddUint32(&dh.driver.vbCompleted, 1)
