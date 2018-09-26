@@ -34,6 +34,7 @@ type DcpDriver struct {
 	numberOfWorkers    int
 	numberOfBuckets    int
 	dcpHandlerChanSize int
+	completeBySeqno    bool
 	checkpointManager  *CheckpointManager
 	fdPool             fdp.FdPoolIface
 	clients            []*DcpClient
@@ -69,6 +70,7 @@ func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoint
 		numberOfWorkers:    numberOfWorkers,
 		numberOfBuckets:    numberOfBuckets,
 		dcpHandlerChanSize: dcpHandlerChanSize,
+		completeBySeqno:    completeBySeqno,
 		errChan:            errChan,
 		waitGroup:          waitGroup,
 		vbState:            make(map[uint16]bool),
@@ -77,7 +79,7 @@ func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoint
 	}
 
 	dcpDriver.checkpointManager = NewCheckpointManager(dcpDriver, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, name,
-		bucketName, completeBySeqno, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff)
+		bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff)
 
 	return dcpDriver
 
@@ -212,11 +214,12 @@ func (d *DcpDriver) handleVbucketCompletion(vbno uint16, err error) {
 		numOfCompletedVb := len(d.vbState)
 		d.stateLock.Unlock()
 
-		fmt.Printf("%v numOfCompletedVb=%v\n", d.Name, numOfCompletedVb)
-
-		if numOfCompletedVb == base.NumberOfVbuckets {
-			fmt.Printf("all vbuckets have completed for dcp driver %v\n", d.Name)
-			d.Stop()
+		if d.completeBySeqno {
+			fmt.Printf("%v numOfCompletedVb=%v\n", d.Name, numOfCompletedVb)
+			if numOfCompletedVb == base.NumberOfVbuckets {
+				fmt.Printf("all vbuckets have completed for dcp driver %v\n", d.Name)
+				d.Stop()
+			}
 		}
 	}
 }

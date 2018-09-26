@@ -18,8 +18,6 @@ type CheckpointManager struct {
 	clusterName           string
 	oldCheckpointFileName string
 	newCheckpointFileName string
-	bucketName            string
-	completeBySeqno       bool
 	cluster               *gocb.Cluster
 	startVBTS             map[uint16]*VBTS
 	vbuuidMap             map[uint16]uint64
@@ -33,14 +31,12 @@ type CheckpointManager struct {
 	getStatsMaxBackoff    time.Duration
 }
 
-func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, clusterName,
-	bucketName string, completeBySeqno bool, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int,
+func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, clusterName string,
+	bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int,
 	getStatsRetryInterval, getStatsMaxBackoff time.Duration) *CheckpointManager {
 	cm := &CheckpointManager{
 		dcpDriver:             dcpDriver,
 		clusterName:           clusterName,
-		bucketName:            bucketName,
-		completeBySeqno:       completeBySeqno,
 		startVBTS:             make(map[uint16]*VBTS),
 		seqnoMap:              make(map[uint16]*SeqnoWithLock),
 		snapshots:             make(map[uint16]*Snapshot),
@@ -163,7 +159,7 @@ func (cm *CheckpointManager) initializeCluster() error {
 }
 
 func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() error {
-	statsBucket, err := cm.cluster.OpenBucket(cm.bucketName, cm.dcpDriver.bucketPassword)
+	statsBucket, err := cm.cluster.OpenBucket(cm.dcpDriver.bucketName, cm.dcpDriver.bucketPassword)
 	if err != nil {
 		fmt.Printf("%v error opening bucket. err=%v\n", cm.clusterName, err)
 		return err
@@ -190,7 +186,7 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() error {
 
 	cm.vbuuidMap = vbuuidMap
 
-	if cm.completeBySeqno {
+	if cm.dcpDriver.completeBySeqno {
 		cm.endSeqnoMap = endSeqnoMap
 	} else {
 		cm.endSeqnoMap = make(map[uint16]uint64)
@@ -235,6 +231,10 @@ func (cm *CheckpointManager) setStartVBTS() error {
 			}
 			// update start seqno as that in checkpoint doc
 			cm.seqnoMap[vbno].setSeqno(checkpoint.Seqno)
+
+			if cm.dcpDriver.completeBySeqno && checkpoint.Seqno >= cm.endSeqnoMap[vbno] {
+				cm.dcpDriver.handleVbucketCompletion(vbno, nil)
+			}
 		}
 	} else {
 		var vbno uint16
@@ -347,6 +347,9 @@ func (cm *CheckpointManager) SaveCheckpoint() error {
 //    This is done after all DcpHandlers are stopped and MutationProcessedEvent cease to happen
 func (cm *CheckpointManager) HandleMutationProcessedEvent(mut *Mutation) {
 	cm.seqnoMap[mut.vbno].setSeqno(mut.seqno)
+	if cm.dcpDriver.completeBySeqno && mut.seqno >= cm.endSeqnoMap[mut.vbno] {
+		cm.dcpDriver.handleVbucketCompletion(mut.vbno, nil)
+	}
 }
 
 func (cm *CheckpointManager) updateSnapshot(vbno uint16, startSeqno, endSeqno uint64) {
