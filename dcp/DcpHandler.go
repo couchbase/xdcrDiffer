@@ -163,7 +163,7 @@ func (dh *DcpHandler) Expiration(seqno, revId, cas uint64, vbno uint16, key []by
 }
 
 func (dh *DcpHandler) End(vbno uint16, err error) {
-	dh.dcpClient.dcpDriver.handleVbucketCompletion(vbno, err)
+	dh.dcpClient.dcpDriver.handleVbucketCompletion(vbno, err, "dcp stream ended")
 }
 
 type Bucket struct {

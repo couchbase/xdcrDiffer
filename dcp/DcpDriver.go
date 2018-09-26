@@ -73,6 +73,8 @@ func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoint
 		completeBySeqno:    completeBySeqno,
 		errChan:            errChan,
 		waitGroup:          waitGroup,
+		clients:            make([]*DcpClient, numberOfClients),
+		childWaitGroup:     &sync.WaitGroup{},
 		vbState:            make(map[uint16]bool),
 		fdPool:             fdPool,
 		state:              DriverStateNew,
@@ -92,7 +94,7 @@ func (d *DcpDriver) Start() error {
 		return err
 	}
 
-	err = d.initializeAndStartCheckpointManager()
+	err = d.checkpointManager.Start()
 	if err != nil {
 		fmt.Printf("%v error starting checkpoint manager. err=%v\n", d.Name, err)
 		return err
@@ -100,13 +102,16 @@ func (d *DcpDriver) Start() error {
 
 	fmt.Printf("%v started checkpoint manager.\n", d.Name)
 
-	err = d.initializeDcpClients()
+	d.initializeDcpClients()
+
+	err = d.startDcpClients()
 	if err != nil {
-		fmt.Printf("%v error initializing dcp clients. err=%v\n", d.Name, err)
+		fmt.Printf("%v error starting dcp clients. err=%v\n", d.Name, err)
 		return err
 	}
 
 	d.setState(DriverStateStarted)
+
 	return nil
 }
 
@@ -117,21 +122,9 @@ func (d *DcpDriver) populateCredentials() error {
 	return err
 }
 
-func (d *DcpDriver) initializeAndStartCheckpointManager() error {
-
-	err := d.checkpointManager.initialize()
-	if err != nil {
-		return err
-	}
-	return d.checkpointManager.Start()
-}
-
 func (d *DcpDriver) Stop() error {
-	d.stateLock.Lock()
-	defer d.stateLock.Unlock()
-
-	if d.state != DriverStateStarted {
-		fmt.Printf("Skipping stop() because dcp driver is not started or is already stopped\n")
+	if d.getState() == DriverStateStopped {
+		fmt.Printf("Skipping stop() because dcp driver is already stopped\n")
 		return nil
 	}
 
@@ -139,10 +132,12 @@ func (d *DcpDriver) Stop() error {
 	defer fmt.Printf("Dcp driver %v stopped\n", d.Name)
 	defer d.waitGroup.Done()
 
-	for i, dcpClient := range d.clients {
-		err := dcpClient.Stop()
-		if err != nil {
-			fmt.Printf("Error stopping %vth dcp client. err=%v\n", i, err)
+	for i, dcpClient := range d.getDcpClients() {
+		if dcpClient != nil {
+			err := dcpClient.Stop()
+			if err != nil {
+				fmt.Printf("Error stopping %vth dcp client. err=%v\n", i, err)
+			}
 		}
 	}
 
@@ -153,15 +148,16 @@ func (d *DcpDriver) Stop() error {
 		fmt.Printf("%v error stopping checkpoint manager. err=%v\n", d.Name, err)
 	}
 
-	d.state = DriverStateStopped
+	d.setState(DriverStateStopped)
 
 	return nil
 }
 
-func (d *DcpDriver) initializeDcpClients() error {
+func (d *DcpDriver) initializeDcpClients() {
+	d.stateLock.Lock()
+	defer d.stateLock.Unlock()
+
 	loadDistribution := utils.BalanceLoad(d.numberOfClients, base.NumberOfVbuckets)
-	d.clients = make([]*DcpClient, d.numberOfClients)
-	d.childWaitGroup = &sync.WaitGroup{}
 	for i := 0; i < d.numberOfClients; i++ {
 		lowIndex := loadDistribution[i][0]
 		highIndex := loadDistribution[i][1]
@@ -173,7 +169,11 @@ func (d *DcpDriver) initializeDcpClients() error {
 		d.childWaitGroup.Add(1)
 		dcpClient := NewDcpClient(d, i, vbList, d.childWaitGroup)
 		d.clients[i] = dcpClient
+	}
+}
 
+func (d *DcpDriver) startDcpClients() error {
+	for i, dcpClient := range d.getDcpClients() {
 		err := dcpClient.Start()
 		if err != nil {
 			fmt.Printf("%v error starting dcp client. err=%v\n", d.Name, err)
@@ -182,6 +182,15 @@ func (d *DcpDriver) initializeDcpClients() error {
 		fmt.Printf("%v started dcp client %v\n", d.Name, i)
 	}
 	return nil
+}
+
+func (d *DcpDriver) getDcpClients() []*DcpClient {
+	d.stateLock.RLock()
+	defer d.stateLock.RUnlock()
+
+	clients := make([]*DcpClient, len(d.clients))
+	copy(clients, d.clients)
+	return clients
 }
 
 func (d *DcpDriver) getState() DriverState {
@@ -205,7 +214,7 @@ func (d *DcpDriver) reportError(err error) {
 	utils.AddToErrorChan(d.errChan, err)
 }
 
-func (d *DcpDriver) handleVbucketCompletion(vbno uint16, err error) {
+func (d *DcpDriver) handleVbucketCompletion(vbno uint16, err error, reason string) {
 	if err != nil {
 		d.reportError(err)
 	} else {
@@ -215,7 +224,7 @@ func (d *DcpDriver) handleVbucketCompletion(vbno uint16, err error) {
 		d.stateLock.Unlock()
 
 		if d.completeBySeqno {
-			fmt.Printf("%v numOfCompletedVb=%v\n", d.Name, numOfCompletedVb)
+			fmt.Printf("%v %v completed with reason %v. numOfCompletedVb=%v\n", d.Name, vbno, reason, numOfCompletedVb)
 			if numOfCompletedVb == base.NumberOfVbuckets {
 				fmt.Printf("all vbuckets have completed for dcp driver %v\n", d.Name)
 				d.Stop()

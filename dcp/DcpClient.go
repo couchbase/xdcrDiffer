@@ -15,6 +15,7 @@ import (
 	"github.com/nelio2k/xdcrDiffer/base"
 	"github.com/nelio2k/xdcrDiffer/utils"
 	gocbcore "gopkg.in/couchbase/gocbcore.v7"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -209,6 +210,10 @@ func (c *DcpClient) openStreams() error {
 	utils.ShuffleVbList(vbListCopy)
 	for _, vbno := range vbListCopy {
 		vbts := c.dcpDriver.checkpointManager.GetStartVBTS(vbno)
+		if vbts.Checkpoint.Seqno == math.MaxUint64 {
+			c.dcpDriver.handleVbucketCompletion(vbno, nil, "no mutations to stream")
+			continue
+		}
 
 		openStreamFunc := func(f []gocbcore.FailoverEntry, err error) {
 			if err != nil {

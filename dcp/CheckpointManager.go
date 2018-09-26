@@ -29,6 +29,8 @@ type CheckpointManager struct {
 	maxNumOfGetStatsRetry int
 	getStatsRetryInterval time.Duration
 	getStatsMaxBackoff    time.Duration
+	started               bool
+	stateLock             sync.RWMutex
 }
 
 func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, clusterName string,
@@ -68,19 +70,39 @@ func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpoint
 }
 
 func (cm *CheckpointManager) Start() error {
+	err := cm.initialize()
+	if err != nil {
+		return err
+	}
 
 	go cm.reportStatus()
 
+	cm.setStarted()
+
 	return nil
+}
+
+func (cm *CheckpointManager) setStarted() {
+	cm.stateLock.Lock()
+	defer cm.stateLock.Unlock()
+	cm.started = true
+}
+
+func (cm *CheckpointManager) isStarted() bool {
+	cm.stateLock.RLock()
+	defer cm.stateLock.RUnlock()
+	return cm.started
 }
 
 func (cm *CheckpointManager) Stop() error {
 	fmt.Printf("CheckpointManager stopping\n")
 	defer fmt.Printf("CheckpointManager stopped\n")
 
-	err := cm.SaveCheckpoint()
-	if err != nil {
-		fmt.Printf("%v error saving checkpoint. err=%v\n", cm.clusterName, err)
+	if cm.isStarted() {
+		err := cm.SaveCheckpoint()
+		if err != nil {
+			fmt.Printf("%v error saving checkpoint. err=%v\n", cm.clusterName, err)
+		}
 	}
 
 	close(cm.finChan)
@@ -225,6 +247,11 @@ func (cm *CheckpointManager) setStartVBTS() error {
 			return err
 		}
 		for vbno, checkpoint := range checkpointDoc.Checkpoints {
+			if cm.dcpDriver.completeBySeqno && checkpoint.Seqno >= cm.endSeqnoMap[vbno] {
+				// use MaxUint64 to indicate that dcp stream does not need to be started for this vb
+				checkpoint.Seqno = math.MaxUint64
+			}
+
 			cm.startVBTS[vbno] = &VBTS{
 				Checkpoint: checkpoint,
 				EndSeqno:   cm.endSeqnoMap[vbno],
@@ -232,9 +259,6 @@ func (cm *CheckpointManager) setStartVBTS() error {
 			// update start seqno as that in checkpoint doc
 			cm.seqnoMap[vbno].setSeqno(checkpoint.Seqno)
 
-			if cm.dcpDriver.completeBySeqno && checkpoint.Seqno >= cm.endSeqnoMap[vbno] {
-				cm.dcpDriver.handleVbucketCompletion(vbno, nil)
-			}
 		}
 	} else {
 		var vbno uint16
@@ -348,7 +372,7 @@ func (cm *CheckpointManager) SaveCheckpoint() error {
 func (cm *CheckpointManager) HandleMutationProcessedEvent(mut *Mutation) {
 	cm.seqnoMap[mut.vbno].setSeqno(mut.seqno)
 	if cm.dcpDriver.completeBySeqno && mut.seqno >= cm.endSeqnoMap[mut.vbno] {
-		cm.dcpDriver.handleVbucketCompletion(mut.vbno, nil)
+		cm.dcpDriver.handleVbucketCompletion(mut.vbno, nil, "end seqno reached")
 	}
 }
 
