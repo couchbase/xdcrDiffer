@@ -97,7 +97,8 @@ func (c *DcpClient) Stop() error {
 			fmt.Printf("%v error stopping dcp stream for vb %v. err=%v\n", c.Name, i, err)
 		}
 	}
-	<-c.closeStreamsDoneCh
+	// this sometimes does not return after a long time
+	//<-c.closeStreamsDoneCh
 
 	// Close Stream should be enough
 	//	fmt.Printf("Dcp client %v stopping IoRouter...\n", c.Name)

@@ -212,6 +212,8 @@ func (d *DcpDriver) handleVbucketCompletion(vbno uint16, err error) {
 		numOfCompletedVb := len(d.vbState)
 		d.stateLock.Unlock()
 
+		fmt.Printf("%v numOfCompletedVb=%v\n", d.Name, numOfCompletedVb)
+
 		if numOfCompletedVb == base.NumberOfVbuckets {
 			fmt.Printf("all vbuckets have completed for dcp driver %v\n", d.Name)
 			d.Stop()

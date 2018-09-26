@@ -60,7 +60,7 @@ var options struct {
 	// name of file storing keys that encountered errors when being diffed
 	diffErrorKeysFileName string
 	// whether to verify diff keys through aysnc Get on clusters
-	verifyDiffKeys bool
+	runMutationDiffer bool
 	// size of batch used by mutation differ
 	mutationDifferBatchSize uint64
 	// timeout, in seconds, used by mutation differ
@@ -119,7 +119,7 @@ func argParse() {
 		"number of worker threads for mutation differ ")
 	flag.Uint64Var(&options.numberOfBuckets, "numberOfBuckets", 10,
 		"number of buckets per vbucket")
-	flag.Uint64Var(&options.numberOfFileDesc, "numberOfFileDesc", 0,
+	flag.Uint64Var(&options.numberOfFileDesc, "numberOfFileDesc", 1000,
 		"number of file descriptors")
 	flag.Uint64Var(&options.completeByDuration, "completeByDuration", 60,
 		"duration that the tool should run")
@@ -137,7 +137,7 @@ func argParse() {
 		" name of file for storing keys to be diffed")
 	flag.StringVar(&options.diffErrorKeysFileName, "diffErrorKeysFileName", base.DiffErrorKeysFileName,
 		" name of file for storing keys to be diffed")
-	flag.BoolVar(&options.verifyDiffKeys, "verifyDiffKeys", true,
+	flag.BoolVar(&options.runMutationDiffer, "runMutationDiffer", true,
 		" whether to verify diff keys through aysnc Get on clusters")
 	flag.Uint64Var(&options.mutationDifferBatchSize, "mutationDifferBatchSize", 100,
 		"size of batch used by mutation differ")
@@ -176,7 +176,7 @@ func main() {
 	argParse()
 
 	if options.mutationDifferOnly {
-		verifyDiffKeysByGet()
+		runMutationDiffer()
 	} else {
 
 		if options.completeByDuration == 0 && !options.completeBySeqno {
@@ -199,8 +199,8 @@ func main() {
 
 		diffDataFiles()
 
-		if options.verifyDiffKeys {
-			verifyDiffKeysByGet()
+		if options.runMutationDiffer {
+			runMutationDiffer()
 		} else {
 			fmt.Printf("Skipping mutation diff since it has been disabled\n")
 		}
@@ -293,9 +293,9 @@ func diffDataFiles() {
 	}
 }
 
-func verifyDiffKeysByGet() {
-	fmt.Printf("VerifyDiffKeys routine started\n")
-	defer fmt.Printf("VerifyDiffKeys routine completed\n")
+func runMutationDiffer() {
+	fmt.Printf("runMutationDiffer started\n")
+	defer fmt.Printf("runMutationDiffer completed\n")
 
 	differ := differ.NewMutationDiffer(options.sourceUrl, options.sourceBucketName, options.sourceUsername,
 		options.sourcePassword, options.targetUrl, options.targetBucketName, options.targetUsername,
@@ -305,7 +305,7 @@ func verifyDiffKeysByGet() {
 		time.Duration(options.sendBatchMaxBackoff)*time.Second)
 	err := differ.Run()
 	if err != nil {
-		fmt.Printf("Error from verifyDiffKeys = %v\n", err)
+		fmt.Printf("Error from runMutationDiffer = %v\n", err)
 	}
 }
 

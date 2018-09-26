@@ -25,6 +25,7 @@ type CheckpointManager struct {
 	vbuuidMap             map[uint16]uint64
 	seqnoMap              map[uint16]*SeqnoWithLock
 	snapshots             map[uint16]*Snapshot
+	endSeqnoMap           map[uint16]uint64
 	finChan               chan bool
 	bucketOpTimeout       time.Duration
 	maxNumOfGetStatsRetry int
@@ -44,6 +45,7 @@ func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpoint
 		seqnoMap:              make(map[uint16]*SeqnoWithLock),
 		snapshots:             make(map[uint16]*Snapshot),
 		finChan:               make(chan bool),
+		endSeqnoMap:           make(map[uint16]uint64),
 		bucketOpTimeout:       bucketOpTimeout,
 		maxNumOfGetStatsRetry: maxNumOfGetStatsRetry,
 		getStatsRetryInterval: getStatsRetryInterval,
@@ -126,14 +128,14 @@ func (cm *CheckpointManager) initialize() error {
 		return err
 	}
 
-	endSeqnoMap, err := cm.getVbuuidsAndHighSeqnos()
+	err = cm.getVbuuidsAndHighSeqnos()
 	if err != nil {
 		return err
 	}
 
 	fmt.Printf("%v endSeqno map retrieved.\n", cm.clusterName)
 
-	return cm.setStartVBTS(endSeqnoMap)
+	return cm.setStartVBTS()
 }
 
 func (cm *CheckpointManager) initializeCluster() error {
@@ -160,41 +162,40 @@ func (cm *CheckpointManager) initializeCluster() error {
 	return nil
 }
 
-func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() (map[uint16]uint64, error) {
+func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() error {
 	statsBucket, err := cm.cluster.OpenBucket(cm.bucketName, cm.dcpDriver.bucketPassword)
 	if err != nil {
 		fmt.Printf("%v error opening bucket. err=%v\n", cm.clusterName, err)
-		return nil, err
+		return err
 	}
 	defer statsBucket.Close()
 
-	statsBucket.SetOperationTimeout(120 * time.Second)
-	statsBucket.SetBulkOperationTimeout(120 * time.Second)
-
 	statsMap, err := cm.getStatsWithRetry(statsBucket)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	vbuuidMap := make(map[uint16]uint64)
 	endSeqnoMap := make(map[uint16]uint64)
 	err = utils.ParseHighSeqnoStat(statsMap, endSeqnoMap, vbuuidMap, cm.completeBySeqno)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	cm.vbuuidMap = vbuuidMap
-	//fmt.Printf("%v vbuuidMap=%v\n", cm.clusterName, vbuuidMap)
 
-	if !cm.completeBySeqno {
+	if cm.completeBySeqno {
+		cm.endSeqnoMap = endSeqnoMap
+	} else {
+		cm.endSeqnoMap = make(map[uint16]uint64)
 		// set endSeqno to maxInt
 		var vbno uint16
 		for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
-			endSeqnoMap[vbno] = 0xFFFFFFFFFFFFFFFF
+			cm.endSeqnoMap[vbno] = 0xFFFFFFFFFFFFFFFF
 		}
 	}
 
-	return endSeqnoMap, nil
+	return nil
 }
 
 // get stats is likely to time out. add retry
@@ -215,7 +216,7 @@ func (cm *CheckpointManager) getStatsWithRetry(statsBucket *gocb.Bucket) (map[st
 	}
 }
 
-func (cm *CheckpointManager) setStartVBTS(endSeqnoMap map[uint16]uint64) error {
+func (cm *CheckpointManager) setStartVBTS() error {
 	if cm.oldCheckpointFileName != "" {
 		checkpointDoc, err := cm.loadCheckpoints()
 		if err != nil {
@@ -224,7 +225,7 @@ func (cm *CheckpointManager) setStartVBTS(endSeqnoMap map[uint16]uint64) error {
 		for vbno, checkpoint := range checkpointDoc.Checkpoints {
 			cm.startVBTS[vbno] = &VBTS{
 				Checkpoint: checkpoint,
-				EndSeqno:   endSeqnoMap[vbno],
+				EndSeqno:   cm.endSeqnoMap[vbno],
 			}
 			// update start seqno as that in checkpoint doc
 			cm.seqnoMap[vbno].setSeqno(checkpoint.Seqno)
@@ -235,7 +236,7 @@ func (cm *CheckpointManager) setStartVBTS(endSeqnoMap map[uint16]uint64) error {
 			// if we are not loading checkpoints, it is ok to leave all fields in Checkpoint with default values, 0
 			cm.startVBTS[vbno] = &VBTS{
 				Checkpoint: &Checkpoint{},
-				EndSeqno:   endSeqnoMap[vbno],
+				EndSeqno:   cm.endSeqnoMap[vbno],
 			}
 		}
 	}

@@ -66,7 +66,8 @@ func (dh *DcpHandler) Start() error {
 
 func (dh *DcpHandler) Stop() {
 	close(dh.finChan)
-	dh.waitGrp.Wait()
+	// this sometimes does not return after a long time
+	//dh.waitGrp.Wait()
 
 	dh.cleanup()
 }
