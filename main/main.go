@@ -59,15 +59,10 @@ var options struct {
 	diffKeysFileName string
 	// name of file storing keys that encountered errors when being diffed
 	diffErrorKeysFileName string
-	// whether to verify diff keys through aysnc Get on clusters
-	runMutationDiffer bool
 	// size of batch used by mutation differ
 	mutationDifferBatchSize uint64
 	// timeout, in seconds, used by mutation differ
 	mutationDifferTimeout uint64
-	// just run mutation differ and nothing else
-	// this may be helpful when everything else succeeded and mutation differ ran into issues in last run
-	mutationDifferOnly bool
 	// size of dcp handler channel
 	dcpHandlerChanSize uint64
 	// timeout for bucket for stats collection, in seconds
@@ -89,6 +84,12 @@ var options struct {
 	//interval for periodical checkpointing, in seconds
 	// value of 0 indicates no periodical checkpointing
 	checkpointInterval uint64
+	// whether to run data generation
+	runDataGeneration bool
+	// whether to run file differ
+	runFileDiffer bool
+	// whether to verify diff keys through aysnc Get on clusters
+	runMutationDiffer bool
 }
 
 func argParse() {
@@ -126,7 +127,7 @@ func argParse() {
 		"number of file descriptors")
 	flag.Uint64Var(&options.completeByDuration, "completeByDuration", 60,
 		"duration that the tool should run")
-	flag.BoolVar(&options.completeBySeqno, "completeBySeqno", false,
+	flag.BoolVar(&options.completeBySeqno, "completeBySeqno", true,
 		"whether tool should automatically complete (after processing all mutations at start time)")
 	flag.StringVar(&options.checkpointFileDir, "checkpointFileDir", base.CheckpointFileDir,
 		"directory for checkpoint files")
@@ -140,14 +141,10 @@ func argParse() {
 		" name of file for storing keys to be diffed")
 	flag.StringVar(&options.diffErrorKeysFileName, "diffErrorKeysFileName", base.DiffErrorKeysFileName,
 		" name of file for storing keys to be diffed")
-	flag.BoolVar(&options.runMutationDiffer, "runMutationDiffer", true,
-		" whether to verify diff keys through aysnc Get on clusters")
 	flag.Uint64Var(&options.mutationDifferBatchSize, "mutationDifferBatchSize", 100,
 		"size of batch used by mutation differ")
 	flag.Uint64Var(&options.mutationDifferTimeout, "mutationDifferTimeout", 30,
 		"timeout, in seconds, used by mutation differ")
-	flag.BoolVar(&options.mutationDifferOnly, "mutationDifferOnly", false,
-		"just run mutation differ and nothing else")
 	flag.Uint64Var(&options.dcpHandlerChanSize, "dcpHandlerChanSize", base.DcpHandlerChanSize,
 		"size of dcp handler channel")
 	flag.Uint64Var(&options.bucketOpTimeout, "bucketOpTimeout", base.BucketOpTimeout,
@@ -168,6 +165,12 @@ func argParse() {
 		"delay between source cluster start up and target cluster start up, in seconds")
 	flag.Uint64Var(&options.checkpointInterval, "checkpointInterval", base.CheckpointInterval,
 		"interval for periodical checkpointing, in seconds")
+	flag.BoolVar(&options.runDataGeneration, "runDataGeneration", true,
+		" whether to run data generation")
+	flag.BoolVar(&options.runFileDiffer, "runFileDiffer", true,
+		" whether to file differ")
+	flag.BoolVar(&options.runMutationDiffer, "runMutationDiffer", true,
+		" whether to verify diff keys through aysnc Get on clusters")
 
 	flag.Parse()
 }
@@ -180,40 +183,26 @@ func usage() {
 func main() {
 	argParse()
 
-	if options.mutationDifferOnly {
-		runMutationDiffer()
-	} else {
-
-		if options.completeByDuration == 0 && !options.completeBySeqno {
-			fmt.Printf("completeByDuration is required when completeBySeqno is false\n")
-			os.Exit(1)
-		}
-
-		if options.checkpointInterval > 0 && options.newCheckpointFileName == "" {
-			fmt.Printf("newCheckpointFileName is required when checkpointInterval is specified\n")
-			os.Exit(1)
-		}
-
-		fmt.Printf("Tool started\n")
-
-		if err := cleanUpAndSetup(); err != nil {
-			fmt.Printf("Unable to clean and set up directory structure: %v\n", err)
-			os.Exit(1)
-		}
-
+	if options.runDataGeneration {
 		err := generateDataFiles()
 		if err != nil {
-			fmt.Printf("Error generating diff files. err=%v\n", err)
+			fmt.Printf("Error generating data files. err=%v\n", err)
 			os.Exit(1)
 		}
+	} else {
+		fmt.Printf("Skipping  generating data files since it has been disabled\n")
+	}
 
+	if options.runFileDiffer {
 		diffDataFiles()
+	} else {
+		fmt.Printf("Skipping file differ since it has been disabled\n")
+	}
 
-		if options.runMutationDiffer {
-			runMutationDiffer()
-		} else {
-			fmt.Printf("Skipping mutation diff since it has been disabled\n")
-		}
+	if options.runMutationDiffer {
+		runMutationDiffer()
+	} else {
+		fmt.Printf("Skipping mutation diff since it has been disabled\n")
 	}
 }
 
@@ -245,6 +234,23 @@ func cleanUpAndSetup() error {
 func generateDataFiles() error {
 	fmt.Printf("GenerateDataFiles routine started\n")
 	defer fmt.Printf("GenerateDataFiles routine completed\n")
+
+	if options.completeByDuration == 0 && !options.completeBySeqno {
+		fmt.Printf("completeByDuration is required when completeBySeqno is false\n")
+		os.Exit(1)
+	}
+
+	if options.checkpointInterval > 0 && options.newCheckpointFileName == "" {
+		fmt.Printf("newCheckpointFileName is required when checkpointInterval is specified\n")
+		os.Exit(1)
+	}
+
+	fmt.Printf("Tool started\n")
+
+	if err := cleanUpAndSetup(); err != nil {
+		fmt.Printf("Unable to clean and set up directory structure: %v\n", err)
+		os.Exit(1)
+	}
 
 	errChan := make(chan error, 1)
 	waitGroup := &sync.WaitGroup{}
