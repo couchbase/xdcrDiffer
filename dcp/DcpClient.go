@@ -275,7 +275,14 @@ func (c *DcpClient) openDcpStreams() error {
 			continue
 		}
 
-		_, err := c.bucket.IoRouter().OpenStream(vbno, 0, gocbcore.VbUuid(vbts.Checkpoint.Vbuuid), gocbcore.SeqNo(vbts.Checkpoint.Seqno), gocbcore.SeqNo(math.MaxUint64 /*vbts.EndSeqno*/), gocbcore.SeqNo(vbts.Checkpoint.SnapshotStartSeqno), gocbcore.SeqNo(vbts.Checkpoint.SnapshotEndSeqno), c.vbHandlerMap[vbno], c.openStreamFunc)
+		snapshotStartSeqno := vbts.Checkpoint.SnapshotStartSeqno
+		snapshotEndSeqno := vbts.Checkpoint.SnapshotEndSeqno
+		if snapshotStartSeqno > vbts.Checkpoint.Seqno || snapshotEndSeqno < vbts.Checkpoint.Seqno {
+			snapshotStartSeqno = vbts.Checkpoint.Seqno
+			snapshotEndSeqno = vbts.Checkpoint.Seqno
+		}
+
+		_, err := c.bucket.IoRouter().OpenStream(vbno, 0, gocbcore.VbUuid(vbts.Checkpoint.Vbuuid), gocbcore.SeqNo(vbts.Checkpoint.Seqno), gocbcore.SeqNo(math.MaxUint64 /*vbts.EndSeqno*/), gocbcore.SeqNo(snapshotStartSeqno), gocbcore.SeqNo(snapshotEndSeqno), c.vbHandlerMap[vbno], c.openStreamFunc)
 		if err != nil {
 			fmt.Printf("err opening dcp stream for vb %v. err=%v\n", vbno, err)
 			return err
