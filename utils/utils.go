@@ -149,7 +149,7 @@ func ExponentialBackoffExecutor(name string, initialWait time.Duration, maxRetri
 		if opErr == nil {
 			return nil
 		} else if i != maxRetries {
-			fmt.Printf("executor failed with %v. retry=%v\n", opErr, i)
+			fmt.Printf("%v executor failed with %v. retry=%v\n", name, opErr, i)
 			time.Sleep(waitTime)
 			waitTime *= time.Duration(factor)
 			if waitTime > maxBackoff {
@@ -157,7 +157,7 @@ func ExponentialBackoffExecutor(name string, initialWait time.Duration, maxRetri
 			}
 		}
 	}
-	opErr = fmt.Errorf("Operation failed after max retries. Last error: %v", opErr.Error())
+	opErr = fmt.Errorf("%v Operation failed after max retries. Last error: %v", name, opErr.Error())
 	return opErr
 }
 

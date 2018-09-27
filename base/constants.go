@@ -40,7 +40,7 @@ const SASLPasswordKey = "saslPassword"
 const HttpGet = "GET"
 
 // default values for configurable parameters if not specified by user
-const BucketOpTimeout uint64 = 180
+const BucketOpTimeout uint64 = 120
 const GetStatsRetryInterval uint64 = 2
 const GetStatsMaxBackoff uint64 = 10
 const SendBatchRetryInterval uint64 = 500

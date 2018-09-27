@@ -221,6 +221,9 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() error {
 	}
 	defer statsBucket.Close()
 
+	statsBucket.SetOperationTimeout(cm.bucketOpTimeout)
+	statsBucket.SetBulkOperationTimeout(cm.bucketOpTimeout)
+
 	statsMap, err := cm.getStatsWithRetry(statsBucket)
 	if err != nil {
 		return err

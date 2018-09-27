@@ -121,14 +121,6 @@ func (d *DcpDriver) Start() error {
 		return err
 	}
 
-	d.initializeDcpClients()
-
-	err = d.startDcpClients()
-	if err != nil {
-		fmt.Printf("%v error starting dcp clients. err=%v\n", d.Name, err)
-		return err
-	}
-
 	err = d.checkpointManager.Start()
 	if err != nil {
 		fmt.Printf("%v error starting checkpoint manager. err=%v\n", d.Name, err)
@@ -136,6 +128,14 @@ func (d *DcpDriver) Start() error {
 	}
 
 	fmt.Printf("%v started checkpoint manager.\n", d.Name)
+
+	d.initializeDcpClients()
+
+	err = d.startDcpClients()
+	if err != nil {
+		fmt.Printf("%v error starting dcp clients. err=%v\n", d.Name, err)
+		return err
+	}
 
 	d.setState(DriverStateStarted)
 
