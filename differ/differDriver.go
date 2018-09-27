@@ -166,6 +166,7 @@ func (dh *DifferHandler) run() error {
 
 	err := dh.initialize()
 	if err != nil {
+		fmt.Printf("%v diff handler failed to initialize. err=%v\n", dh.index, err)
 		return err
 	}
 
@@ -189,6 +190,7 @@ func (dh *DifferHandler) run() error {
 				continue
 			}
 			if len(diffKeys) > 0 {
+				//filesDiffer.PrettyPrintResult()
 				dh.driver.addDiffKeys(diffKeys)
 				dh.writeDiffBytes(diffBytes)
 			}
@@ -202,7 +204,7 @@ func (dh *DifferHandler) run() error {
 }
 
 func (dh *DifferHandler) initialize() error {
-	diffDetailsFileName := dh.driver.diffFileDir + base.FileDirDelimiter + base.DiffDetailsFileName + base.FileDirDelimiter + fmt.Sprintf("%v", dh.index)
+	diffDetailsFileName := dh.driver.diffFileDir + base.FileDirDelimiter + base.DiffDetailsFileName + base.FileNameDelimiter + fmt.Sprintf("%v", dh.index)
 	diffDetailsFile, err := os.OpenFile(diffDetailsFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
 	if err != nil {
 		return err
