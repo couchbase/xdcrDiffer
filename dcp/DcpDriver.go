@@ -14,7 +14,6 @@ import (
 	"github.com/nelio2k/xdcrDiffer/base"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"github.com/nelio2k/xdcrDiffer/utils"
-	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -266,7 +265,6 @@ func (d *DcpDriver) setState(state DriverState) {
 }
 
 func (d *DcpDriver) reportError(err error) {
-	debug.PrintStack()
 	// avoid printing spurious errors if we are stopping
 	if d.getState() != DriverStateStopped {
 		fmt.Printf("%s dcp driver encountered error=%v\n", d.Name, err)

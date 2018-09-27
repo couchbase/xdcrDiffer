@@ -32,7 +32,6 @@ type DifferDriver struct {
 	diffKeys         []string
 	stateLock        *sync.RWMutex
 	fileDescPool     *fdp.FdPool
-	diffDetailsFile  *os.File
 	vbCompleted      uint32
 	finChan          chan bool
 }
@@ -58,11 +57,6 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName
 }
 
 func (dr *DifferDriver) Run() error {
-	err := dr.initialize()
-	if err != nil {
-		return err
-	}
-
 	loadDistribution := utils.BalanceLoad(dr.numberOfWorkers, base.NumberOfVbuckets)
 
 	go dr.reportStatus()
@@ -93,17 +87,6 @@ func (dr *DifferDriver) cleanup() {
 	if err != nil {
 		fmt.Printf("Error writing diff keys. err=%v\n", err)
 	}
-	dr.diffDetailsFile.Close()
-}
-
-func (dr *DifferDriver) initialize() error {
-	diffDetailsFileName := dr.diffFileDir + base.FileDirDelimiter + base.DiffDetailsFileName
-	diffDetailsFile, err := os.OpenFile(diffDetailsFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
-	if err != nil {
-		return err
-	}
-	dr.diffDetailsFile = diffDetailsFile
-	return nil
 }
 
 func (dr *DifferDriver) reportStatus() {
@@ -122,12 +105,6 @@ func (dr *DifferDriver) reportStatus() {
 			return
 		}
 	}
-}
-
-func (dr *DifferDriver) addDiff(diffKeys []string, diffBytes []byte) {
-	dr.addDiffKeys(diffKeys)
-
-	dr.writeDiffBytes(diffBytes)
 }
 
 func (dr *DifferDriver) addDiffKeys(diffKeys []string) {
@@ -157,17 +134,13 @@ func (dr *DifferDriver) writeDiffKeys() error {
 	return err
 }
 
-func (dr *DifferDriver) writeDiffBytes(diffBytes []byte) error {
-	_, err := dr.diffDetailsFile.Write(diffBytes)
-	return err
-}
-
 type DifferHandler struct {
 	driver          *DifferDriver
 	index           int
 	sourceFileDir   string
 	targetFileDir   string
 	vbList          []uint16
+	diffDetailsFile *os.File
 	numberOfBuckets int
 	waitGroup       *sync.WaitGroup
 	fileDescPool    *fdp.FdPool
@@ -186,10 +159,16 @@ func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFile
 	}
 }
 
-func (dh *DifferHandler) run() {
+func (dh *DifferHandler) run() error {
 	//fmt.Printf("DiffHandler %v starting\n", dh.index)
 	//defer fmt.Printf("DiffHandler %v stopping\n", dh.index)
 	defer dh.waitGroup.Done()
+
+	err := dh.initialize()
+	if err != nil {
+		fmt.Printf("%v diff handler failed to initialize. err=%v\n", dh.index, err)
+		return err
+	}
 
 	var vbno uint16
 	for _, vbno = range dh.vbList {
@@ -202,7 +181,7 @@ func (dh *DifferHandler) run() {
 				// Most likely FD overrun, program should exit. Print a msg just in case
 				fmt.Printf("Creating file differ for files %v and %v resulted in error: %v\n",
 					sourceFileName, targetFileName, err)
-				return
+				return err
 			}
 
 			diffKeys, diffBytes, err := filesDiffer.Diff()
@@ -211,9 +190,37 @@ func (dh *DifferHandler) run() {
 				continue
 			}
 			if len(diffKeys) > 0 {
-				dh.driver.addDiff(diffKeys, diffBytes)
+				//filesDiffer.PrettyPrintResult()
+				dh.driver.addDiffKeys(diffKeys)
+				dh.writeDiffBytes(diffBytes)
 			}
 		}
 		atomic.AddUint32(&dh.driver.vbCompleted, 1)
 	}
+
+	dh.cleanup()
+
+	return nil
+}
+
+func (dh *DifferHandler) initialize() error {
+	diffDetailsFileName := dh.driver.diffFileDir + base.FileDirDelimiter + base.DiffDetailsFileName + base.FileNameDelimiter + fmt.Sprintf("%v", dh.index)
+	diffDetailsFile, err := os.OpenFile(diffDetailsFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
+	if err != nil {
+		return err
+	}
+	dh.diffDetailsFile = diffDetailsFile
+	return nil
+}
+
+func (dh *DifferHandler) writeDiffBytes(diffBytes []byte) error {
+	_, err := dh.diffDetailsFile.Write(diffBytes)
+	if err != nil {
+		fmt.Printf("Diff handler %v error writing diff details. err=%v\n", dh.index, err)
+	}
+	return err
+}
+
+func (dh *DifferHandler) cleanup() {
+	dh.diffDetailsFile.Close()
 }
