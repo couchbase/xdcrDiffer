@@ -29,13 +29,14 @@ type CheckpointManager struct {
 	maxNumOfGetStatsRetry int
 	getStatsRetryInterval time.Duration
 	getStatsMaxBackoff    time.Duration
+	checkpointInterval    int
 	started               bool
 	stateLock             sync.RWMutex
 }
 
 func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, clusterName string,
-	bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int,
-	getStatsRetryInterval, getStatsMaxBackoff time.Duration) *CheckpointManager {
+	bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration,
+	checkpointInterval int) *CheckpointManager {
 	cm := &CheckpointManager{
 		dcpDriver:             dcpDriver,
 		clusterName:           clusterName,
@@ -48,6 +49,7 @@ func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpoint
 		maxNumOfGetStatsRetry: maxNumOfGetStatsRetry,
 		getStatsRetryInterval: getStatsRetryInterval,
 		getStatsMaxBackoff:    getStatsMaxBackoff,
+		checkpointInterval:    checkpointInterval,
 	}
 
 	if checkpointFileDir != "" {
@@ -73,6 +75,10 @@ func (cm *CheckpointManager) Start() error {
 	err := cm.initialize()
 	if err != nil {
 		return err
+	}
+
+	if cm.checkpointInterval > 0 {
+		go cm.periodicalCheckpointing()
 	}
 
 	go cm.reportStatus()
@@ -108,6 +114,30 @@ func (cm *CheckpointManager) Stop() error {
 	close(cm.finChan)
 
 	return nil
+}
+
+func (cm *CheckpointManager) periodicalCheckpointing() {
+	ticker := time.NewTicker(time.Duration(cm.checkpointInterval) * time.Second)
+	defer ticker.Stop()
+
+	// periodical checkpointing iteration
+	// it is appended to checkpoint file name to make file name unique
+	iter := 0
+
+	for {
+		select {
+		case <-ticker.C:
+			cm.checkpointOnce(iter)
+			iter++
+		case <-cm.finChan:
+			return
+		}
+	}
+}
+
+func (cm *CheckpointManager) checkpointOnce(iter int) error {
+	checkpointFileName := cm.newCheckpointFileName + base.FileNameDelimiter + fmt.Sprintf("%v", iter)
+	return cm.saveCheckpoint(checkpointFileName)
 }
 
 func (cm *CheckpointManager) reportStatus() {
@@ -304,9 +334,13 @@ func (cm *CheckpointManager) SaveCheckpoint() error {
 		fmt.Printf("Skipping checkpointing for %v since checkpointing has been disabled\n", cm.clusterName)
 		return nil
 	}
+	return cm.saveCheckpoint(cm.newCheckpointFileName)
+}
+
+func (cm *CheckpointManager) saveCheckpoint(checkpointFileName string) error {
 
 	// delete existing file if exists
-	os.Remove(cm.newCheckpointFileName)
+	os.Remove(checkpointFileName)
 
 	checkpointDoc := &CheckpointDoc{
 		Checkpoints: make(map[uint16]*Checkpoint),
@@ -314,14 +348,10 @@ func (cm *CheckpointManager) SaveCheckpoint() error {
 
 	var vbno uint16
 	var total uint64
-	var emptyVbs int
 	for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
 		vbuuid := cm.vbuuidMap[vbno]
 		seqno := cm.seqnoMap[vbno].getSeqno()
 		total += seqno
-		if seqno == 0 {
-			emptyVbs++
-		}
 		var snapshotStartSeqno uint64
 		var snapshotEndSeqno uint64
 
@@ -346,10 +376,12 @@ func (cm *CheckpointManager) SaveCheckpoint() error {
 		return err
 	}
 
-	checkpointFile, err := os.OpenFile(cm.newCheckpointFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
+	checkpointFile, err := os.OpenFile(checkpointFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
 	if err != nil {
 		return err
 	}
+
+	defer checkpointFile.Close()
 
 	numOfBytes, err := checkpointFile.Write(value)
 	if err != nil {
@@ -360,7 +392,7 @@ func (cm *CheckpointManager) SaveCheckpoint() error {
 	}
 
 	fmt.Printf("----------------------------------------------------------------\n")
-	fmt.Printf("%v totalMutationsChecked=%v, emptyVbs=%v\n", cm.clusterName, total, emptyVbs)
+	fmt.Printf("%v saved checkpoints to %v. totalMutationsChecked=%v\n", cm.clusterName, checkpointFileName, total)
 	return nil
 }
 

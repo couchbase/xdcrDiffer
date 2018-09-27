@@ -50,6 +50,7 @@ const SendBatchBackoffFactor = 2
 const MaxNumOfGetStatsRetry = 10
 const MaxNumOfSendBatchRetry = 10
 const DelayBetweenSourceAndTarget uint64 = 2
+const CheckpointInterval = 600
 
 // length of mutation metadata + body, which consists of
 //  seqno   - 8 bytes

@@ -73,7 +73,8 @@ const (
 func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
 	newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBuckets, dcpHandlerChanSize int,
 	bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration,
-	errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface) *DcpDriver {
+	checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool,
+	fdPool fdp.FdPoolIface) *DcpDriver {
 	dcpDriver := &DcpDriver{
 		Name:               name,
 		url:                url,
@@ -103,8 +104,9 @@ func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoint
 		}
 	}
 
-	dcpDriver.checkpointManager = NewCheckpointManager(dcpDriver, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, name,
-		bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff)
+	dcpDriver.checkpointManager = NewCheckpointManager(dcpDriver, checkpointFileDir, oldCheckpointFileName,
+		newCheckpointFileName, name, bucketOpTimeout, maxNumOfGetStatsRetry,
+		getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval)
 
 	return dcpDriver
 

@@ -86,6 +86,9 @@ var options struct {
 	sendBatchMaxBackoff uint64
 	// delay between source cluster start up and target cluster start up, in seconds
 	delayBetweenSourceAndTarget uint64
+	//interval for periodical checkpointing, in seconds
+	// value of 0 indicates no periodical checkpointing
+	checkpointInterval uint64
 }
 
 func argParse() {
@@ -163,6 +166,8 @@ func argParse() {
 		"max backoff for send batch, in seconds")
 	flag.Uint64Var(&options.delayBetweenSourceAndTarget, "delayBetweenSourceAndTarget", base.DelayBetweenSourceAndTarget,
 		"delay between source cluster start up and target cluster start up, in seconds")
+	flag.Uint64Var(&options.checkpointInterval, "checkpointInterval", base.CheckpointInterval,
+		"interval for periodical checkpointing, in seconds")
 
 	flag.Parse()
 }
@@ -181,6 +186,11 @@ func main() {
 
 		if options.completeByDuration == 0 && !options.completeBySeqno {
 			fmt.Printf("completeByDuration is required when completeBySeqno is false\n")
+			os.Exit(1)
+		}
+
+		if options.checkpointInterval > 0 && options.newCheckpointFileName == "" {
+			fmt.Printf("newCheckpointFileName is required when checkpointInterval is specified\n")
 			os.Exit(1)
 		}
 
@@ -250,7 +260,7 @@ func generateDataFiles() error {
 		options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients,
 		options.numberOfWorkersPerDcpClient, options.numberOfBuckets, options.dcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
-		options.getStatsMaxBackoff, errChan, waitGroup, options.completeBySeqno, fileDescPool)
+		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 
 	delayDurationBetweenSourceAndTarget := time.Duration(options.delayBetweenSourceAndTarget) * time.Second
 	fmt.Printf("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
@@ -262,7 +272,7 @@ func generateDataFiles() error {
 		options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients,
 		options.numberOfWorkersPerDcpClient, options.numberOfBuckets, options.dcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
-		options.getStatsMaxBackoff, errChan, waitGroup, options.completeBySeqno, fileDescPool)
+		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 
 	var err error
 	if options.completeBySeqno {
@@ -303,14 +313,15 @@ func runMutationDiffer() {
 
 func startDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
 	newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBuckets,
-	dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff uint64,
-	errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface) *dcp.DcpDriver {
+	dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff,
+	checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool,
+	fdPool fdp.FdPoolIface) *dcp.DcpDriver {
 	waitGroup.Add(1)
 	dcpDriver := dcp.NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBuckets),
 		int(dcpHandlerChanSize), time.Duration(bucketOpTimeout)*time.Second, int(maxNumOfGetStatsRetry),
 		time.Duration(getStatsRetryInterval)*time.Second, time.Duration(getStatsMaxBackoff)*time.Second,
-		errChan, waitGroup, completeBySeqno, fdPool)
+		int(checkpointInterval), errChan, waitGroup, completeBySeqno, fdPool)
 	// dcp driver startup may take some time. Do it asynchronously
 	go startDcpDriverAysnc(dcpDriver, errChan)
 	return dcpDriver
