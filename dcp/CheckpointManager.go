@@ -277,11 +277,15 @@ func (cm *CheckpointManager) getStatsWithRetry(statsBucket *gocb.Bucket) (map[st
 }
 
 func (cm *CheckpointManager) setStartVBTS() error {
+
+	var sum uint64 = 0
+
 	if cm.oldCheckpointFileName != "" {
 		checkpointDoc, err := cm.loadCheckpoints()
 		if err != nil {
 			return err
 		}
+
 		for vbno, checkpoint := range checkpointDoc.Checkpoints {
 			cm.startVBTS[vbno] = &VBTS{
 				Checkpoint: checkpoint,
@@ -293,6 +297,7 @@ func (cm *CheckpointManager) setStartVBTS() error {
 
 			// update start seqno as that in checkpoint doc
 			cm.seqnoMap[vbno].setSeqno(checkpoint.Seqno)
+			sum += checkpoint.Seqno
 
 		}
 	} else {
@@ -305,6 +310,8 @@ func (cm *CheckpointManager) setStartVBTS() error {
 			}
 		}
 	}
+
+	fmt.Printf("%v starting from %v\n", cm.clusterName, sum)
 
 	close(cm.startVbtsDoneChan)
 
