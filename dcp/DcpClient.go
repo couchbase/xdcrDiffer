@@ -58,6 +58,10 @@ func (c *DcpClient) Start() error {
 		return err
 	}
 
+	if c.dcpDriver.completeBySeqno {
+		go c.closeCompletedStreams()
+	}
+
 	go c.reportActiveStreams()
 
 	// openStreams() needs to be called after checkpointManager initialization
@@ -84,6 +88,44 @@ func (c *DcpClient) reportActiveStreams() {
 done:
 }
 
+func (c *DcpClient) closeCompletedStreams() {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			for _, vbno := range c.vbList {
+				c.closeStreamIfCompleted(vbno)
+			}
+		case <-c.finChan:
+			goto done
+		}
+	}
+done:
+}
+
+func (c *DcpClient) closeStreamIfCompleted(vbno uint16) {
+	vbState := c.dcpDriver.getVbState(vbno)
+	if vbState == VBStateCompleted {
+		err := c.closeStream(vbno)
+		if err == nil {
+			c.dcpDriver.setVbState(vbno, VBStateStreamClosed)
+		}
+	}
+}
+
+func (c *DcpClient) closeStreamIfOpen(vbno uint16) {
+	vbState := c.dcpDriver.getVbState(vbno)
+	if vbState != VBStateStreamClosed {
+		err := c.closeStream(vbno)
+		if err == nil {
+			c.dcpDriver.setVbState(vbno, VBStateStreamClosed)
+		}
+	}
+
+}
+
 func (c *DcpClient) Stop() error {
 	fmt.Printf("Dcp client %v stopping\n", c.Name)
 	defer fmt.Printf("Dcp client %v stopped\n", c.Name)
@@ -91,12 +133,8 @@ func (c *DcpClient) Stop() error {
 	defer c.waitGroup.Done()
 
 	c.numberClosing = uint32(len(c.vbList))
-	var err error
 	for _, i := range c.vbList {
-		_, err = c.bucket.IoRouter().CloseStream(uint16(i), c.closeStreamFunc)
-		if err != nil {
-			fmt.Printf("%v error stopping dcp stream for vb %v. err=%v\n", c.Name, i, err)
-		}
+		c.closeStreamIfOpen(i)
 	}
 	// this sometimes does not return after a long time
 	//<-c.closeStreamsDoneCh
@@ -110,7 +148,9 @@ func (c *DcpClient) Stop() error {
 
 	fmt.Printf("Dcp client %v stopping handlers\n", c.Name)
 	for _, dcpHandler := range c.dcpHandlers {
-		dcpHandler.Stop()
+		if dcpHandler != nil {
+			dcpHandler.Stop()
+		}
 	}
 	fmt.Printf("Dcp client %v done stopping handlers\n", c.Name)
 
@@ -210,21 +250,12 @@ func (c *DcpClient) openStreams() error {
 	utils.ShuffleVbList(vbListCopy)
 	for _, vbno := range vbListCopy {
 		vbts := c.dcpDriver.checkpointManager.GetStartVBTS(vbno)
-		if vbts.Checkpoint.Seqno == math.MaxUint64 {
+		if vbts.NoNeedToStartDcpStream {
 			c.dcpDriver.handleVbucketCompletion(vbno, nil, "no mutations to stream")
 			continue
 		}
 
-		openStreamFunc := func(f []gocbcore.FailoverEntry, err error) {
-			if err != nil {
-				c.reportError(err)
-			} else {
-				atomic.AddUint32(&c.activeStreams, 1)
-			}
-
-		}
-
-		_, err := c.bucket.IoRouter().OpenStream(vbno, 0, gocbcore.VbUuid(vbts.Checkpoint.Vbuuid), gocbcore.SeqNo(vbts.Checkpoint.Seqno), gocbcore.SeqNo(vbts.EndSeqno), gocbcore.SeqNo(vbts.Checkpoint.SnapshotStartSeqno), gocbcore.SeqNo(vbts.Checkpoint.SnapshotEndSeqno), c.vbHandlerMap[vbno], openStreamFunc)
+		_, err := c.bucket.IoRouter().OpenStream(vbno, 0, gocbcore.VbUuid(vbts.Checkpoint.Vbuuid), gocbcore.SeqNo(vbts.Checkpoint.Seqno), gocbcore.SeqNo(math.MaxUint64 /*vbts.EndSeqno*/), gocbcore.SeqNo(vbts.Checkpoint.SnapshotStartSeqno), gocbcore.SeqNo(vbts.Checkpoint.SnapshotEndSeqno), c.vbHandlerMap[vbno], c.openStreamFunc)
 		if err != nil {
 			fmt.Printf("err opening dcp stream for vb %v. err=%v\n", vbno, err)
 			return err
@@ -232,6 +263,25 @@ func (c *DcpClient) openStreams() error {
 	}
 
 	return nil
+}
+
+func (c *DcpClient) closeStream(vbno uint16) error {
+	var err error
+	if c.bucket != nil {
+		_, err = c.bucket.IoRouter().CloseStream(vbno, c.closeStreamFunc)
+		if err != nil {
+			fmt.Printf("%v error stopping dcp stream for vb %v. err=%v\n", c.Name, vbno, err)
+		}
+	}
+	return err
+}
+
+func (c *DcpClient) openStreamFunc(f []gocbcore.FailoverEntry, err error) {
+	if err != nil {
+		c.reportError(err)
+	} else {
+		atomic.AddUint32(&c.activeStreams, 1)
+	}
 }
 
 func (c *DcpClient) reportError(err error) {

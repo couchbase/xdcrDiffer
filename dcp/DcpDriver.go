@@ -14,6 +14,7 @@ import (
 	"github.com/nelio2k/xdcrDiffer/base"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"github.com/nelio2k/xdcrDiffer/utils"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -39,13 +40,27 @@ type DcpDriver struct {
 	fdPool             fdp.FdPoolIface
 	clients            []*DcpClient
 	// value = true if processing on the vb has been completed
-	vbState map[uint16]bool
+	vbStateMap map[uint16]*VBStateWithLock
 	// 0 - not started
 	// 1 - started
 	// 2 - stopped
 	state     DriverState
 	stateLock sync.RWMutex
+	finChan   chan bool
 }
+
+type VBStateWithLock struct {
+	vbState VBState
+	lock    sync.RWMutex
+}
+
+type VBState int
+
+const (
+	VBStateNormal       VBState = iota
+	VBStateCompleted    VBState = iota
+	VBStateStreamClosed VBState = iota
+)
 
 type DriverState int
 
@@ -75,9 +90,17 @@ func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoint
 		waitGroup:          waitGroup,
 		clients:            make([]*DcpClient, numberOfClients),
 		childWaitGroup:     &sync.WaitGroup{},
-		vbState:            make(map[uint16]bool),
+		vbStateMap:         make(map[uint16]*VBStateWithLock),
 		fdPool:             fdPool,
 		state:              DriverStateNew,
+		finChan:            make(chan bool),
+	}
+
+	var vbno uint16
+	for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
+		dcpDriver.vbStateMap[vbno] = &VBStateWithLock{
+			vbState: VBStateNormal,
+		}
 	}
 
 	dcpDriver.checkpointManager = NewCheckpointManager(dcpDriver, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, name,
@@ -112,7 +135,35 @@ func (d *DcpDriver) Start() error {
 
 	d.setState(DriverStateStarted)
 
+	go d.checkForCompletion()
+
 	return nil
+}
+
+func (d *DcpDriver) checkForCompletion() {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			var numOfCompletedVb int
+			var vbno uint16
+			for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
+				vbState := d.getVbState(vbno)
+				if vbState != VBStateNormal {
+					numOfCompletedVb++
+				}
+			}
+			if numOfCompletedVb == base.NumberOfVbuckets {
+				fmt.Printf("all vbuckets have completed for dcp driver %v\n", d.Name)
+				d.Stop()
+				return
+			}
+		case <-d.finChan:
+			return
+		}
+	}
 }
 
 func (d *DcpDriver) populateCredentials() error {
@@ -123,7 +174,10 @@ func (d *DcpDriver) populateCredentials() error {
 }
 
 func (d *DcpDriver) Stop() error {
-	if d.getState() == DriverStateStopped {
+	d.stateLock.Lock()
+	defer d.stateLock.Unlock()
+
+	if d.state == DriverStateStopped {
 		fmt.Printf("Skipping stop() because dcp driver is already stopped\n")
 		return nil
 	}
@@ -132,7 +186,9 @@ func (d *DcpDriver) Stop() error {
 	defer fmt.Printf("Dcp driver %v stopped\n", d.Name)
 	defer d.waitGroup.Done()
 
-	for i, dcpClient := range d.getDcpClients() {
+	close(d.finChan)
+
+	for i, dcpClient := range d.clients {
 		if dcpClient != nil {
 			err := dcpClient.Stop()
 			if err != nil {
@@ -148,7 +204,7 @@ func (d *DcpDriver) Stop() error {
 		fmt.Printf("%v error stopping checkpoint manager. err=%v\n", d.Name, err)
 	}
 
-	d.setState(DriverStateStopped)
+	d.state = DriverStateStopped
 
 	return nil
 }
@@ -206,6 +262,7 @@ func (d *DcpDriver) setState(state DriverState) {
 }
 
 func (d *DcpDriver) reportError(err error) {
+	debug.PrintStack()
 	// avoid printing spurious errors if we are stopping
 	if d.getState() != DriverStateStopped {
 		fmt.Printf("%s dcp driver encountered error=%v\n", d.Name, err)
@@ -218,17 +275,27 @@ func (d *DcpDriver) handleVbucketCompletion(vbno uint16, err error, reason strin
 	if err != nil {
 		d.reportError(err)
 	} else {
-		d.stateLock.Lock()
-		d.vbState[vbno] = true
-		numOfCompletedVb := len(d.vbState)
-		d.stateLock.Unlock()
-
 		if d.completeBySeqno {
-			fmt.Printf("%v %v completed with reason %v. numOfCompletedVb=%v\n", d.Name, vbno, reason, numOfCompletedVb)
-			if numOfCompletedVb == base.NumberOfVbuckets {
-				fmt.Printf("all vbuckets have completed for dcp driver %v\n", d.Name)
-				d.Stop()
+			vbStateWithLock := d.vbStateMap[vbno]
+			vbStateWithLock.lock.Lock()
+			defer vbStateWithLock.lock.Unlock()
+			if vbStateWithLock.vbState == VBStateNormal {
+				vbStateWithLock.vbState = VBStateCompleted
 			}
 		}
 	}
+}
+
+func (d *DcpDriver) getVbState(vbno uint16) VBState {
+	vbStateWithLock := d.vbStateMap[vbno]
+	vbStateWithLock.lock.RLock()
+	defer vbStateWithLock.lock.RUnlock()
+	return vbStateWithLock.vbState
+}
+
+func (d *DcpDriver) setVbState(vbno uint16, vbState VBState) {
+	vbStateWithLock := d.vbStateMap[vbno]
+	vbStateWithLock.lock.Lock()
+	defer vbStateWithLock.lock.Unlock()
+	vbStateWithLock.vbState = vbState
 }

@@ -215,7 +215,7 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() error {
 		// set endSeqno to maxInt
 		var vbno uint16
 		for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
-			cm.endSeqnoMap[vbno] = 0xFFFFFFFFFFFFFFFF
+			cm.endSeqnoMap[vbno] = math.MaxUint64
 		}
 	}
 
@@ -247,15 +247,14 @@ func (cm *CheckpointManager) setStartVBTS() error {
 			return err
 		}
 		for vbno, checkpoint := range checkpointDoc.Checkpoints {
-			if cm.dcpDriver.completeBySeqno && checkpoint.Seqno >= cm.endSeqnoMap[vbno] {
-				// use MaxUint64 to indicate that dcp stream does not need to be started for this vb
-				checkpoint.Seqno = math.MaxUint64
-			}
-
 			cm.startVBTS[vbno] = &VBTS{
 				Checkpoint: checkpoint,
 				EndSeqno:   cm.endSeqnoMap[vbno],
 			}
+			if cm.dcpDriver.completeBySeqno && checkpoint.Seqno >= cm.endSeqnoMap[vbno] {
+				cm.startVBTS[vbno].NoNeedToStartDcpStream = true
+			}
+
 			// update start seqno as that in checkpoint doc
 			cm.seqnoMap[vbno].setSeqno(checkpoint.Seqno)
 
@@ -369,10 +368,21 @@ func (cm *CheckpointManager) SaveCheckpoint() error {
 // 1. MutationProcessedEvent on a vbno are serialized
 // 2. checkpointManager reads seqnoMap when it saves checkpoints.
 //    This is done after all DcpHandlers are stopped and MutationProcessedEvent cease to happen
-func (cm *CheckpointManager) HandleMutationProcessedEvent(mut *Mutation) {
-	cm.seqnoMap[mut.vbno].setSeqno(mut.seqno)
-	if cm.dcpDriver.completeBySeqno && mut.seqno >= cm.endSeqnoMap[mut.vbno] {
-		cm.dcpDriver.handleVbucketCompletion(mut.vbno, nil, "end seqno reached")
+func (cm *CheckpointManager) HandleMutationEvent(mut *Mutation) bool {
+	if cm.dcpDriver.completeBySeqno {
+		endSeqno := cm.endSeqnoMap[mut.vbno]
+		if mut.seqno >= endSeqno {
+			cm.dcpDriver.handleVbucketCompletion(mut.vbno, nil, "end seqno reached")
+		}
+		if mut.seqno <= endSeqno {
+			cm.seqnoMap[mut.vbno].setSeqno(mut.seqno)
+			return true
+		} else {
+			return false
+		}
+	} else {
+		cm.seqnoMap[mut.vbno].setSeqno(mut.seqno)
+		return true
 	}
 }
 

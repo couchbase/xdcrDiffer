@@ -13,6 +13,8 @@ type Checkpoint struct {
 type VBTS struct {
 	Checkpoint *Checkpoint
 	EndSeqno   uint64
+	// whether a dcp stream needs to be started
+	NoNeedToStartDcpStream  bool
 }
 
 type CheckpointDoc struct {

@@ -124,6 +124,12 @@ done:
 }
 
 func (dh *DcpHandler) processMutation(mut *Mutation) {
+	valid := dh.dcpClient.dcpDriver.checkpointManager.HandleMutationEvent(mut)
+	if !valid {
+		// if mutation is out of range, ignore it
+		return
+	}
+
 	vbno := mut.vbno
 	index := utils.GetBucketIndexFromKey(mut.key, dh.numberOfBuckets)
 	innerMap := dh.bucketMap[vbno]
@@ -135,7 +141,6 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 		panic(fmt.Sprintf("cannot find bucket for index %v", index))
 	}
 	bucket.write(serializeMutation(mut))
-	dh.dcpClient.dcpDriver.checkpointManager.HandleMutationProcessedEvent(mut)
 }
 
 func (dh *DcpHandler) writeToDataChan(mut *Mutation) {
@@ -185,7 +190,7 @@ func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool fdp.FdPoolIf
 	var file *os.File
 
 	if fdPool == nil {
-		file, err = os.OpenFile(fileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
+		file, err = os.OpenFile(fileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, base.FileModeReadWrite)
 		if err != nil {
 			return nil, err
 		}
