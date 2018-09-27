@@ -37,6 +37,7 @@ type DcpDriver struct {
 	dcpHandlerChanSize int
 	completeBySeqno    bool
 	checkpointManager  *CheckpointManager
+	startVbtsDoneChan  chan bool
 	fdPool             fdp.FdPoolIface
 	clients            []*DcpClient
 	// value = true if processing on the vb has been completed
@@ -95,6 +96,7 @@ func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoint
 		fdPool:             fdPool,
 		state:              DriverStateNew,
 		finChan:            make(chan bool),
+		startVbtsDoneChan:  make(chan bool),
 	}
 
 	var vbno uint16
@@ -106,7 +108,7 @@ func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoint
 
 	dcpDriver.checkpointManager = NewCheckpointManager(dcpDriver, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, name, bucketOpTimeout, maxNumOfGetStatsRetry,
-		getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval)
+		getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval, dcpDriver.startVbtsDoneChan)
 
 	return dcpDriver
 
@@ -119,14 +121,6 @@ func (d *DcpDriver) Start() error {
 		return err
 	}
 
-	err = d.checkpointManager.Start()
-	if err != nil {
-		fmt.Printf("%v error starting checkpoint manager. err=%v\n", d.Name, err)
-		return err
-	}
-
-	fmt.Printf("%v started checkpoint manager.\n", d.Name)
-
 	d.initializeDcpClients()
 
 	err = d.startDcpClients()
@@ -134,6 +128,14 @@ func (d *DcpDriver) Start() error {
 		fmt.Printf("%v error starting dcp clients. err=%v\n", d.Name, err)
 		return err
 	}
+
+	err = d.checkpointManager.Start()
+	if err != nil {
+		fmt.Printf("%v error starting checkpoint manager. err=%v\n", d.Name, err)
+		return err
+	}
+
+	fmt.Printf("%v started checkpoint manager.\n", d.Name)
 
 	d.setState(DriverStateStarted)
 
@@ -225,7 +227,7 @@ func (d *DcpDriver) initializeDcpClients() {
 		}
 
 		d.childWaitGroup.Add(1)
-		dcpClient := NewDcpClient(d, i, vbList, d.childWaitGroup)
+		dcpClient := NewDcpClient(d, i, vbList, d.childWaitGroup, d.startVbtsDoneChan)
 		d.clients[i] = dcpClient
 	}
 }

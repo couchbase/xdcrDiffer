@@ -34,9 +34,10 @@ type DcpClient struct {
 	closeStreamsDoneCh chan bool
 	activeStreams      uint32
 	finChan            chan bool
+	startVbtsDoneChan  chan bool
 }
 
-func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.WaitGroup) *DcpClient {
+func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.WaitGroup, startVbtsDoneChan chan bool) *DcpClient {
 	return &DcpClient{
 		Name:               fmt.Sprintf("%v_%v", dcpDriver.Name, i),
 		dcpDriver:          dcpDriver,
@@ -46,6 +47,7 @@ func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.
 		vbHandlerMap:       make(map[uint16]*DcpHandler),
 		closeStreamsDoneCh: make(chan bool),
 		finChan:            make(chan bool),
+		startVbtsDoneChan:  startVbtsDoneChan,
 	}
 }
 
@@ -58,14 +60,9 @@ func (c *DcpClient) Start() error {
 		return err
 	}
 
-	if c.dcpDriver.completeBySeqno {
-		go c.closeCompletedStreams()
-	}
+	go c.handleDcpStreams()
 
-	go c.reportActiveStreams()
-
-	// openStreams() needs to be called after checkpointManager initialization
-	return c.openStreams()
+	return nil
 }
 
 func (c *DcpClient) reportActiveStreams() {
@@ -76,7 +73,7 @@ func (c *DcpClient) reportActiveStreams() {
 		select {
 		case <-ticker.C:
 			activeStreams := atomic.LoadUint32(&c.activeStreams)
-			fmt.Printf("%v active streams=%v, expected=%v\n", c.Name, activeStreams, len(c.vbList))
+			fmt.Printf("%v active streams=%v\n", c.Name, activeStreams)
 			if activeStreams == uint32(len(c.vbList)) {
 				fmt.Printf("%v all streams active. Stop reporting\n", c.Name)
 				goto done
@@ -131,6 +128,8 @@ func (c *DcpClient) Stop() error {
 	defer fmt.Printf("Dcp client %v stopped\n", c.Name)
 
 	defer c.waitGroup.Done()
+
+	close(c.finChan)
 
 	c.numberClosing = uint32(len(c.vbList))
 	for _, i := range c.vbList {
@@ -244,7 +243,28 @@ func (c *DcpClient) initializeDcpHandlers() error {
 	return nil
 }
 
-func (c *DcpClient) openStreams() error {
+func (c *DcpClient) handleDcpStreams() {
+	// wait for start vbts done signal from checkpoint manager
+	select {
+	case <-c.startVbtsDoneChan:
+	case <-c.finChan:
+		return
+	}
+
+	err := c.openDcpStreams()
+	if err != nil {
+		c.reportError(err)
+		return
+	}
+
+	if c.dcpDriver.completeBySeqno {
+		go c.closeCompletedStreams()
+	}
+
+	go c.reportActiveStreams()
+}
+
+func (c *DcpClient) openDcpStreams() error {
 	//randomize to evenly distribute [initial] load to handlers
 	vbListCopy := utils.DeepCopyUint16Array(c.vbList)
 	utils.ShuffleVbList(vbListCopy)

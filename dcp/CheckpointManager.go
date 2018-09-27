@@ -25,6 +25,8 @@ type CheckpointManager struct {
 	snapshots             map[uint16]*Snapshot
 	endSeqnoMap           map[uint16]uint64
 	finChan               chan bool
+	// channel to signal the completion of start vbts computation
+	startVbtsDoneChan     chan bool
 	bucketOpTimeout       time.Duration
 	maxNumOfGetStatsRetry int
 	getStatsRetryInterval time.Duration
@@ -36,7 +38,7 @@ type CheckpointManager struct {
 
 func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, clusterName string,
 	bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration,
-	checkpointInterval int) *CheckpointManager {
+	checkpointInterval int, startVbtsDoneChan chan bool) *CheckpointManager {
 	cm := &CheckpointManager{
 		dcpDriver:             dcpDriver,
 		clusterName:           clusterName,
@@ -50,6 +52,7 @@ func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpoint
 		getStatsRetryInterval: getStatsRetryInterval,
 		getStatsMaxBackoff:    getStatsMaxBackoff,
 		checkpointInterval:    checkpointInterval,
+		startVbtsDoneChan:     startVbtsDoneChan,
 	}
 
 	if checkpointFileDir != "" {
@@ -299,6 +302,8 @@ func (cm *CheckpointManager) setStartVBTS() error {
 			}
 		}
 	}
+
+	close(cm.startVbtsDoneChan)
 
 	return nil
 }
