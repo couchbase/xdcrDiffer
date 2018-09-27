@@ -223,7 +223,7 @@ func TestLoadSameFile(t *testing.T) {
 	differ := NewFilesDiffer(file1, file2)
 	assert.NotNil(differ)
 
-	result, _ := differ.Diff()
+	result, _, _ := differ.Diff()
 
 	assert.True(len(result) == 0)
 	differ.PrettyPrintResult()
@@ -248,7 +248,7 @@ func TestLoadMismatchedFiles(t *testing.T) {
 	differ := NewFilesDiffer(file1, file2)
 	assert.NotNil(differ)
 
-	result, _ := differ.Diff()
+	result, _, _ := differ.Diff()
 
 	assert.False(len(result) == 0)
 
@@ -289,7 +289,7 @@ func TestLoadMismatchedFilesAndUneven(t *testing.T) {
 	differ := NewFilesDiffer(file1, file2)
 	assert.NotNil(differ)
 
-	result, _ := differ.Diff()
+	result, _, _ := differ.Diff()
 
 	assert.False(len(result) == 0)
 
@@ -322,7 +322,7 @@ func TestLoadSameFileWPool(t *testing.T) {
 	assert.NotNil(differ)
 	assert.Nil(err)
 
-	result, _ := differ.Diff()
+	result, _, _ := differ.Diff()
 
 	assert.True(len(result) == 0)
 	fmt.Println("============== Test case end: TestLoadSameFileWPool =================")
@@ -331,7 +331,7 @@ func TestLoadSameFileWPool(t *testing.T) {
 func TestNoFilePool(t *testing.T) {
 	assert := assert.New(t)
 
-	differDriver := NewDifferDriver("", "", "", 2, 2, 0)
+	differDriver := NewDifferDriver("", "", "", "", 2, 2, 0)
 	assert.NotNil(differDriver)
 	assert.Nil(differDriver.fileDescPool)
 }
