@@ -194,7 +194,11 @@ func main() {
 	}
 
 	if options.runFileDiffer {
-		diffDataFiles()
+		err := diffDataFiles()
+		if err != nil {
+			fmt.Printf("Error running file differ. err=%v\n", err)
+			os.Exit(1)
+		}
 	} else {
 		fmt.Printf("Skipping file differ since it has been disabled\n")
 	}
@@ -207,21 +211,13 @@ func main() {
 }
 
 func cleanUpAndSetup() error {
-	err := os.RemoveAll(options.diffFileDir)
-	if err != nil {
-		fmt.Printf("Error removing diffFileDir: %v\n", err)
-	}
-	err = os.MkdirAll(options.sourceFileDir, 0777)
+	err := os.MkdirAll(options.sourceFileDir, 0777)
 	if err != nil {
 		fmt.Printf("Error mkdir targetFileDir: %v\n", err)
 	}
 	err = os.MkdirAll(options.targetFileDir, 0777)
 	if err != nil {
 		fmt.Printf("Error mkdir targetFileDir: %v\n", err)
-	}
-	err = os.MkdirAll(options.diffFileDir, 0777)
-	if err != nil {
-		return fmt.Errorf("Error mkdir diffFileDir: %v\n", err)
 	}
 	err = os.MkdirAll(options.checkpointFileDir, 0777)
 	if err != nil {
@@ -290,15 +286,26 @@ func generateDataFiles() error {
 	return err
 }
 
-func diffDataFiles() {
+func diffDataFiles() error {
 	fmt.Printf("DiffDataFiles routine started\n")
 	defer fmt.Printf("DiffDataFiles routine completed\n")
 
+	err := os.RemoveAll(options.diffFileDir)
+	if err != nil {
+		fmt.Printf("Error removing diffFileDir: %v\n", err)
+	}
+	err = os.MkdirAll(options.diffFileDir, 0777)
+	if err != nil {
+		return fmt.Errorf("Error mkdir diffFileDir: %v\n", err)
+	}
+
 	differDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.diffFileDir, options.diffKeysFileName, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBuckets), int(options.numberOfFileDesc))
-	err := differDriver.Run()
+	err = differDriver.Run()
 	if err != nil {
 		fmt.Printf("Error from diffDataFiles = %v\n", err)
 	}
+
+	return err
 }
 
 func runMutationDiffer() {
