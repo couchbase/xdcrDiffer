@@ -58,8 +58,9 @@ const CheckpointInterval = 600
 //  cas     - 8 bytes
 //  flags   - 4 bytes
 //  expiry  - 4 bytes
+//  opCode  - 2 bytes
 //  hash    - 64 bytes
-const BodyLength = 96
+const BodyLength = 98
 
 var VersionForRBACSupport = []int{5, 0}
 

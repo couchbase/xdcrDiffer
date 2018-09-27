@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/couchbase/gomemcached"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"io"
 	"os"
@@ -66,12 +67,13 @@ type oneEntry struct {
 	Cas      uint64
 	Flags    uint32
 	Expiry   uint32
+	opCode   gomemcached.CommandCode
 	BodyHash [sha512.Size]byte
 }
 
 func (oneEntry *oneEntry) String() string {
-	return fmt.Sprintf("<Key>: %v <Seqno>: %v <RevId>: %v <Cas>: %v <Flags>: %v <Expiry>: %v <Hash>: %s",
-		oneEntry.Key, oneEntry.Seqno, oneEntry.RevId, oneEntry.Cas, oneEntry.Flags, oneEntry.Expiry, hex.EncodeToString(oneEntry.BodyHash[:]))
+	return fmt.Sprintf("<Key>: %v <Seqno>: %v <RevId>: %v <Cas>: %v <Flags>: %v <Expiry>: %v <OpCode>: %v <Hash>: %s",
+		oneEntry.Key, oneEntry.Seqno, oneEntry.RevId, oneEntry.Cas, oneEntry.Flags, oneEntry.Expiry, oneEntry.opCode, hex.EncodeToString(oneEntry.BodyHash[:]))
 }
 
 type entryPair [2]*oneEntry
@@ -100,14 +102,18 @@ func (entry oneEntry) Diff(other oneEntry) (int, bool) {
 		} else {
 			return -1, false
 		}
-	} else if entry.RevId != other.RevId {
+	} else if entry.opCode != other.opCode {
 		return 0, false
-	} else if entry.Cas != other.Cas {
-		return 0, false
-	} else if entry.Flags != other.Flags {
-		return 0, false
-	} else if !shaCompare(entry.BodyHash, other.BodyHash) {
-		return 0, false
+	} else if entry.opCode == gomemcached.UPR_MUTATION {
+		if entry.RevId != other.RevId {
+			return 0, false
+		} else if entry.Cas != other.Cas {
+			return 0, false
+		} else if entry.Flags != other.Flags {
+			return 0, false
+		} else if !shaCompare(entry.BodyHash, other.BodyHash) {
+			return 0, false
+		}
 	}
 	return 0, true
 }
@@ -194,6 +200,13 @@ func getOneEntry(readOp fdp.FileOp) (*oneEntry, error) {
 		return nil, fmt.Errorf("Unable to read expiryBytes, bytes read: %v, err: %v", bytesRead, err)
 	}
 	entry.Expiry = binary.BigEndian.Uint32(expiryBytes)
+
+	opCodeBytes := make([]byte, 2)
+	bytesRead, err = readOp(opCodeBytes)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to read opCodeBytes, bytes read: %v, err: %v", bytesRead, err)
+	}
+	entry.opCode = gomemcached.CommandCode(binary.BigEndian.Uint16(opCodeBytes))
 
 	hashBytes := make([]byte, sha512.Size)
 	bytesRead, err = readOp(hashBytes)

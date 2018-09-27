@@ -13,6 +13,7 @@ import (
 	"crypto/sha512"
 	"encoding/binary"
 	"fmt"
+	"github.com/couchbase/gomemcached"
 	"github.com/nelio2k/xdcrDiffer/base"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"github.com/nelio2k/xdcrDiffer/utils"
@@ -156,15 +157,15 @@ func (dh *DcpHandler) SnapshotMarker(startSeqno, endSeqno uint64, vbno uint16, s
 }
 
 func (dh *DcpHandler) Mutation(seqno, revId uint64, flags, expiry, lockTime uint32, cas uint64, datatype uint8, vbno uint16, key, value []byte) {
-	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, flags, expiry, value))
+	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, flags, expiry, gomemcached.UPR_MUTATION, value))
 }
 
 func (dh *DcpHandler) Deletion(seqno, revId, cas uint64, datatype uint8, vbno uint16, key, value []byte) {
-	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, 0, 0, value))
+	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, 0, 0, gomemcached.UPR_DELETION, value))
 }
 
 func (dh *DcpHandler) Expiration(seqno, revId, cas uint64, vbno uint16, key []byte) {
-	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, 0, 0, nil))
+	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, 0, 0, gomemcached.UPR_EXPIRATION, nil))
 }
 
 func (dh *DcpHandler) End(vbno uint16, err error) {
@@ -271,10 +272,11 @@ type Mutation struct {
 	cas    uint64
 	flags  uint32
 	expiry uint32
+	opCode gomemcached.CommandCode
 	value  []byte
 }
 
-func CreateMutation(vbno uint16, key []byte, seqno, revId, cas uint64, flags, expiry uint32, value []byte) *Mutation {
+func CreateMutation(vbno uint16, key []byte, seqno, revId, cas uint64, flags, expiry uint32, opCode gomemcached.CommandCode, value []byte) *Mutation {
 	return &Mutation{
 		vbno:   vbno,
 		key:    key,
@@ -283,6 +285,7 @@ func CreateMutation(vbno uint16, key []byte, seqno, revId, cas uint64, flags, ex
 		cas:    cas,
 		flags:  flags,
 		expiry: expiry,
+		opCode: opCode,
 		value:  value,
 	}
 }
@@ -296,6 +299,7 @@ func CreateMutation(vbno uint16, key []byte, seqno, revId, cas uint64, flags, ex
 //  cas     - 8 bytes
 //  flags   - 4 bytes
 //  expiry  - 4 bytes
+//  opType  - 2 byte
 //  hash    - 64 bytes
 func serializeMutation(mut *Mutation) []byte {
 	keyLen := len(mut.key)
@@ -317,6 +321,8 @@ func serializeMutation(mut *Mutation) []byte {
 	pos += 4
 	binary.BigEndian.PutUint32(ret[pos:pos+4], mut.expiry)
 	pos += 4
+	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(mut.opCode))
+	pos += 2
 	copy(ret[pos:], bodyHash[:])
 
 	return ret

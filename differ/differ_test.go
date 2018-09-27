@@ -13,6 +13,7 @@ import (
 	"crypto/sha512"
 	"encoding/binary"
 	"fmt"
+	"github.com/couchbase/gomemcached"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"github.com/stretchr/testify/assert"
 	"io/ioutil"
@@ -49,8 +50,9 @@ func randInt(min int, max int) int {
 //  cas     - 8 bytes
 //  flags   - 4 bytes
 //  expiry  - 4 bytes
+//  opCode - 1 bytes
 //  hash    - 64 bytes
-func genTestData() (key string, seqno, revId, cas uint64, flags, expiry uint32, hash [sha512.Size]byte, ret []byte) {
+func genTestData(regularMutation bool) (key string, seqno, revId, cas uint64, flags, expiry uint32, opCode gomemcached.CommandCode, hash [sha512.Size]byte, ret []byte) {
 	randomOnce.Do(func() {
 		rand.Seed(time.Now().UTC().UnixNano())
 	})
@@ -61,18 +63,24 @@ func genTestData() (key string, seqno, revId, cas uint64, flags, expiry uint32, 
 	cas = rand.Uint64()
 	flags = rand.Uint32()
 	expiry = rand.Uint32()
+	if regularMutation {
+		opCode = gomemcached.UPR_MUTATION
+	} else {
+		opCodeArray := [3]gomemcached.CommandCode{gomemcached.UPR_MUTATION, gomemcached.UPR_DELETION, gomemcached.UPR_EXPIRATION}
+		opCode = opCodeArray[rand.Uint32()%3]
+	}
 	// Note we don't have the actual body hash so just randomly generate a hash using key
 	hash = sha512.Sum512([]byte(key))
 
-	dataSlice := createDataByteSlice(key, seqno, revId, cas, flags, expiry, hash)
+	dataSlice := createDataByteSlice(key, seqno, revId, cas, flags, expiry, opCode, hash)
 
-	return key, seqno, revId, cas, flags, expiry, hash, dataSlice
+	return key, seqno, revId, cas, flags, expiry, opCode, hash, dataSlice
 }
 
-func createDataByteSlice(key string, seqno, revId, cas uint64, flags, expiry uint32, hash [sha512.Size]byte) []byte {
+func createDataByteSlice(key string, seqno, revId, cas uint64, flags, expiry uint32, opCode gomemcached.CommandCode, hash [sha512.Size]byte) []byte {
 	var keyLen uint16 = uint16(len(key))
-	// 96 - see main/constants.go + 2 bytes for keyLen
-	retLength := 96 + keyLen + 2
+	// 98 - see main/constants.go + 2 bytes for keyLen
+	retLength := 98 + keyLen + 2
 	ret := make([]byte, retLength)
 
 	pos := 0
@@ -90,6 +98,8 @@ func createDataByteSlice(key string, seqno, revId, cas uint64, flags, expiry uin
 	pos += 4
 	binary.BigEndian.PutUint32(ret[pos:pos+4], expiry)
 	pos += 4
+	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(opCode))
+	pos += 2
 	copy(ret[pos:], hash[:])
 
 	return ret
@@ -99,7 +109,7 @@ func genMultipleRecords(numOfRecords int) []byte {
 	var retSlice []byte
 
 	for i := 0; i < numOfRecords; i++ {
-		_, _, _, _, _, _, _, record := genTestData()
+		_, _, _, _, _, _, _, _, record := genTestData(true /*regular mutations*/)
 		retSlice = append(retSlice, record...)
 	}
 
@@ -150,8 +160,8 @@ func genMismatchedFiles(numOfRecords, mismatchCnt int, fileName1, fileName2 stri
 	defer f2.Close()
 
 	for i := 0; i < mismatchCnt; i++ {
-		key, seqno, revId, cas, flags, expiry, hash, oneData := genTestData()
-		mismatchedData := createDataByteSlice(key, seqno, revId, cas+1, flags, expiry, hash)
+		key, seqno, revId, cas, flags, expiry, opCode, hash, oneData := genTestData(true /*regular mutations*/)
+		mismatchedData := createDataByteSlice(key, seqno, revId, cas+1, flags, expiry, opCode, hash)
 
 		_, err = f1.Write(oneData)
 		if err != nil {
@@ -190,7 +200,7 @@ func TestLoader(t *testing.T) {
 	var outputFileTemp string = "/tmp/xdcrDiffer.tmp"
 	defer os.Remove(outputFileTemp)
 
-	key, seqno, _, _, _, _, _, data := genTestData()
+	key, seqno, _, _, _, _, _, _, data := genTestData(true /*regular mutations*/)
 
 	err := ioutil.WriteFile(outputFileTemp, data, 0644)
 	assert.Nil(err)
@@ -329,9 +339,11 @@ func TestLoadSameFileWPool(t *testing.T) {
 }
 
 func TestNoFilePool(t *testing.T) {
+	fmt.Println("============== Test case start: TestNoFilePool =================")
 	assert := assert.New(t)
 
 	differDriver := NewDifferDriver("", "", "", "", 2, 2, 0)
 	assert.NotNil(differDriver)
 	assert.Nil(differDriver.fileDescPool)
+	fmt.Println("============== Test case end: TestNoFilePool =================")
 }
