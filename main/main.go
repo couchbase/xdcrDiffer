@@ -39,7 +39,7 @@ var options struct {
 	numberOfWorkersPerDcpClient      uint64
 	numberOfWorkersForFileDiffer     uint64
 	numberOfWorkersForMutationDiffer uint64
-	numberOfBuckets                  uint64
+	numberOfBins                  uint64
 	numberOfFileDesc                 uint64
 	// the duration that the tools should be run, in minutes
 	completeByDuration uint64
@@ -47,9 +47,12 @@ var options struct {
 	completeBySeqno bool
 	// directory for checkpoint files
 	checkpointFileDir string
-	// name of checkpoint file to load from when tool starts
-	// if not specified, tool will start from 0
-	oldCheckpointFileName string
+	// name of source cluster checkpoint file to load from when tool starts
+	// if not specified, source cluster will start from 0
+	oldSourceCheckpointFileName string
+	// name of target cluster checkpoint file to load from when tool starts
+	// if not specified, target cluster will start from 0
+	oldTargetCheckpointFileName string
 	// name of new checkpoint file to write to when tool shuts down
 	// if not specified, tool will not save checkpoint files
 	newCheckpointFileName string
@@ -93,23 +96,23 @@ var options struct {
 }
 
 func argParse() {
-	flag.StringVar(&options.sourceUrl, "sourceUrl", "http://54.90.174.157:8091",
+	flag.StringVar(&options.sourceUrl, "sourceUrl", "",
 		"url for source cluster")
-	flag.StringVar(&options.sourceUsername, "sourceUsername", "Administrator",
+	flag.StringVar(&options.sourceUsername, "sourceUsername", "",
 		"username for source cluster")
-	flag.StringVar(&options.sourcePassword, "sourcePassword", "password",
+	flag.StringVar(&options.sourcePassword, "sourcePassword", "",
 		"password for source cluster")
-	flag.StringVar(&options.sourceBucketName, "sourceBucketName", "default",
+	flag.StringVar(&options.sourceBucketName, "sourceBucketName", "",
 		"bucket name for source cluster")
 	flag.StringVar(&options.sourceFileDir, "sourceFileDir", base.SourceFileDir,
 		"directory to store mutations in source cluster")
-	flag.StringVar(&options.targetUrl, "targetUrl", "http://13.56.246.168:8091",
+	flag.StringVar(&options.targetUrl, "targetUrl", "",
 		"url for target cluster")
-	flag.StringVar(&options.targetUsername, "targetUsername", "Administrator",
+	flag.StringVar(&options.targetUsername, "targetUsername", "",
 		"username for target cluster")
-	flag.StringVar(&options.targetPassword, "targetPassword", "password",
+	flag.StringVar(&options.targetPassword, "targetPassword", "",
 		"password for target cluster")
-	flag.StringVar(&options.targetBucketName, "targetBucketName", "target",
+	flag.StringVar(&options.targetBucketName, "targetBucketName", "",
 		"bucket name for target cluster")
 	flag.StringVar(&options.targetFileDir, "targetFileDir", base.TargetFileDir,
 		"directory to store mutations in target cluster")
@@ -121,18 +124,20 @@ func argParse() {
 		"number of worker threads for file differ ")
 	flag.Uint64Var(&options.numberOfWorkersForMutationDiffer, "numberOfWorkersForMutationDiffer", 30,
 		"number of worker threads for mutation differ ")
-	flag.Uint64Var(&options.numberOfBuckets, "numberOfBuckets", 10,
+	flag.Uint64Var(&options.numberOfBins, "numberOfBins", 10,
 		"number of buckets per vbucket")
 	flag.Uint64Var(&options.numberOfFileDesc, "numberOfFileDesc", 500,
 		"number of file descriptors")
-	flag.Uint64Var(&options.completeByDuration, "completeByDuration", 60,
+	flag.Uint64Var(&options.completeByDuration, "completeByDuration", 0,
 		"duration that the tool should run")
 	flag.BoolVar(&options.completeBySeqno, "completeBySeqno", true,
 		"whether tool should automatically complete (after processing all mutations at start time)")
 	flag.StringVar(&options.checkpointFileDir, "checkpointFileDir", base.CheckpointFileDir,
 		"directory for checkpoint files")
-	flag.StringVar(&options.oldCheckpointFileName, "oldCheckpointFileName", "",
-		"old checkpoint file to load from when tool starts")
+	flag.StringVar(&options.oldSourceCheckpointFileName, "oldSourceCheckpointFileName", "",
+		"old source checkpoint file to load from when tool starts")
+	flag.StringVar(&options.oldTargetCheckpointFileName, "oldTargetCheckpointFileName", "",
+		"old target checkpoint file to load from when tool starts")
 	flag.StringVar(&options.newCheckpointFileName, "newCheckpointFileName", "",
 		"new checkpoint file to write to when tool shuts down")
 	flag.StringVar(&options.diffFileDir, "diffFileDir", base.DiffFileDir,
@@ -236,11 +241,6 @@ func generateDataFiles() error {
 		os.Exit(1)
 	}
 
-	if options.checkpointInterval > 0 && options.newCheckpointFileName == "" {
-		fmt.Printf("newCheckpointFileName is required when checkpointInterval is specified\n")
-		os.Exit(1)
-	}
-
 	fmt.Printf("Tool started\n")
 
 	if err := cleanUpAndSetup(); err != nil {
@@ -259,8 +259,8 @@ func generateDataFiles() error {
 	fmt.Printf("Starting source dcp clients\n")
 	sourceDcpDriver := startDcpDriver(base.SourceClusterName, options.sourceUrl, options.sourceBucketName,
 		options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir,
-		options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients,
-		options.numberOfWorkersPerDcpClient, options.numberOfBuckets, options.dcpHandlerChanSize,
+		options.oldSourceCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients,
+		options.numberOfWorkersPerDcpClient, options.numberOfBins, options.dcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 
@@ -271,8 +271,8 @@ func generateDataFiles() error {
 	fmt.Printf("Starting target dcp clients\n")
 	targetDcpDriver := startDcpDriver(base.TargetClusterName, options.targetUrl, options.targetBucketName,
 		options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir,
-		options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients,
-		options.numberOfWorkersPerDcpClient, options.numberOfBuckets, options.dcpHandlerChanSize,
+		options.oldTargetCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients,
+		options.numberOfWorkersPerDcpClient, options.numberOfBins, options.dcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 
@@ -299,7 +299,7 @@ func diffDataFiles() error {
 		return fmt.Errorf("Error mkdir diffFileDir: %v\n", err)
 	}
 
-	differDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.diffFileDir, options.diffKeysFileName, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBuckets), int(options.numberOfFileDesc))
+	differDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.diffFileDir, options.diffKeysFileName, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBins), int(options.numberOfFileDesc))
 	err = differDriver.Run()
 	if err != nil {
 		fmt.Printf("Error from diffDataFiles = %v\n", err)
@@ -325,13 +325,13 @@ func runMutationDiffer() {
 }
 
 func startDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
-	newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBuckets,
+	newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins,
 	dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff,
 	checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool,
 	fdPool fdp.FdPoolIface) *dcp.DcpDriver {
 	waitGroup.Add(1)
 	dcpDriver := dcp.NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
-		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBuckets),
+		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBins),
 		int(dcpHandlerChanSize), time.Duration(bucketOpTimeout)*time.Second, int(maxNumOfGetStatsRetry),
 		time.Duration(getStatsRetryInterval)*time.Second, time.Duration(getStatsMaxBackoff)*time.Second,
 		int(checkpointInterval), errChan, waitGroup, completeBySeqno, fdPool)

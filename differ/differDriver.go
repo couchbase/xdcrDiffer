@@ -27,7 +27,7 @@ type DifferDriver struct {
 	diffFileDir      string
 	diffKeysFileName string
 	numberOfWorkers  int
-	numberOfBuckets  int
+	numberOfBins  int
 	waitGroup        *sync.WaitGroup
 	diffKeys         []string
 	stateLock        *sync.RWMutex
@@ -36,7 +36,7 @@ type DifferDriver struct {
 	finChan          chan bool
 }
 
-func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBuckets int, numberOfFds int) *DifferDriver {
+func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBins int, numberOfFds int) *DifferDriver {
 	var fdPool *fdp.FdPool
 	if numberOfFds > 0 {
 		fdPool = fdp.NewFileDescriptorPool(numberOfFds)
@@ -48,7 +48,7 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName
 		diffFileDir:      diffFileDir,
 		diffKeysFileName: diffKeysFileName,
 		numberOfWorkers:  numberOfWorkers,
-		numberOfBuckets:  numberOfBuckets,
+		numberOfBins:  numberOfBins,
 		waitGroup:        &sync.WaitGroup{},
 		stateLock:        &sync.RWMutex{},
 		fileDescPool:     fdPool,
@@ -70,7 +70,7 @@ func (dr *DifferDriver) Run() error {
 		}
 
 		dr.waitGroup.Add(1)
-		differHandler := NewDifferHandler(dr, i, dr.sourceFileDir, dr.targetFileDir, vbList, dr.numberOfBuckets, dr.waitGroup, dr.fileDescPool)
+		differHandler := NewDifferHandler(dr, i, dr.sourceFileDir, dr.targetFileDir, vbList, dr.numberOfBins, dr.waitGroup, dr.fileDescPool)
 		go differHandler.run()
 	}
 
@@ -141,19 +141,19 @@ type DifferHandler struct {
 	targetFileDir   string
 	vbList          []uint16
 	diffDetailsFile *os.File
-	numberOfBuckets int
+	numberOfBins int
 	waitGroup       *sync.WaitGroup
 	fileDescPool    *fdp.FdPool
 }
 
-func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFileDir string, vbList []uint16, numberOfBuckets int, waitGroup *sync.WaitGroup, fdPool *fdp.FdPool) *DifferHandler {
+func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFileDir string, vbList []uint16, numberOfBins int, waitGroup *sync.WaitGroup, fdPool *fdp.FdPool) *DifferHandler {
 	return &DifferHandler{
 		driver:          driver,
 		index:           index,
 		sourceFileDir:   sourceFileDir,
 		targetFileDir:   targetFileDir,
 		vbList:          vbList,
-		numberOfBuckets: numberOfBuckets,
+		numberOfBins: numberOfBins,
 		waitGroup:       waitGroup,
 		fileDescPool:    fdPool,
 	}
@@ -172,7 +172,7 @@ func (dh *DifferHandler) run() error {
 
 	var vbno uint16
 	for _, vbno = range dh.vbList {
-		for bucketIndex := 0; bucketIndex < dh.numberOfBuckets; bucketIndex++ {
+		for bucketIndex := 0; bucketIndex < dh.numberOfBins; bucketIndex++ {
 			sourceFileName := utils.GetFileName(dh.sourceFileDir, vbno, bucketIndex)
 			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex)
 

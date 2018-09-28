@@ -32,7 +32,7 @@ type DcpDriver struct {
 	childWaitGroup     *sync.WaitGroup
 	numberOfClients    int
 	numberOfWorkers    int
-	numberOfBuckets    int
+	numberOfBins    int
 	dcpHandlerChanSize int
 	completeBySeqno    bool
 	checkpointManager  *CheckpointManager
@@ -71,7 +71,7 @@ const (
 )
 
 func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
-	newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBuckets, dcpHandlerChanSize int,
+	newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int,
 	bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration,
 	checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool,
 	fdPool fdp.FdPoolIface) *DcpDriver {
@@ -84,7 +84,7 @@ func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoint
 		fileDir:            fileDir,
 		numberOfClients:    numberOfClients,
 		numberOfWorkers:    numberOfWorkers,
-		numberOfBuckets:    numberOfBuckets,
+		numberOfBins:    numberOfBins,
 		dcpHandlerChanSize: dcpHandlerChanSize,
 		completeBySeqno:    completeBySeqno,
 		errChan:            errChan,

@@ -37,7 +37,7 @@ Usage of ./xdcrDiffer:
     	 directory for storing diffs (default "diff")
   -newCheckpointFileName string
     	new checkpoint file to write to when tool shuts down
-  -numberOfBuckets uint
+  -numberOfBins uint
     	number of buckets per vbucket (default 10)
   -numberOfFileDesc uint
     	number of file descriptors
@@ -79,7 +79,7 @@ A few options worth noting:
 - checkpointDir - checkpointing allows the tool to resume from the last point in time when the tool was interrupted.
 - oldCheckpointFileName - this is the flag to use to specify a last checkpoint from which to resume.
 - verifyDiffKeys - By default this is enabled, which uses a non-stream based, key-by-key retrieval and validation. This is what is considered the second pass of verification after the first pass.
-- numberOfBuckets - Each Couchbase bucket contains 1024 vbuckets. For optimizing sorting, each vbucket is also sub-divided into sub-buckets as the data are streamed before the diff operation.
+- numberOfBins - Each Couchbase bucket contains 1024 vbuckets. For optimizing sorting, each vbucket is also sub-divided into bins as the data are streamed before the diff operation.
 - numberOfFileDesc - If the tool has exhausted all system file descriptors, this option allows the tool to limit the max number of concurently open file descriptors.
 
 ## License

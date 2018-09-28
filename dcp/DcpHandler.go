@@ -28,7 +28,7 @@ type DcpHandler struct {
 	fileDir         string
 	index           int
 	vbList          []uint16
-	numberOfBuckets int
+	numberOfBins int
 	dataChan        chan *Mutation
 	waitGrp         sync.WaitGroup
 	finChan         chan bool
@@ -36,7 +36,7 @@ type DcpHandler struct {
 	fdPool          fdp.FdPoolIface
 }
 
-func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBuckets, dataChanSize int, fdPool fdp.FdPoolIface) (*DcpHandler, error) {
+func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface) (*DcpHandler, error) {
 	if len(vbList) == 0 {
 		return nil, fmt.Errorf("vbList is empty for handler %v", index)
 	}
@@ -45,7 +45,7 @@ func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uin
 		fileDir:         fileDir,
 		index:           index,
 		vbList:          vbList,
-		numberOfBuckets: numberOfBuckets,
+		numberOfBins: numberOfBins,
 		dataChan:        make(chan *Mutation, dataChanSize),
 		finChan:         make(chan bool),
 		bucketMap:       make(map[uint16]map[int]*Bucket),
@@ -77,7 +77,7 @@ func (dh *DcpHandler) initialize() error {
 	for _, vbno := range dh.vbList {
 		innerMap := make(map[int]*Bucket)
 		dh.bucketMap[vbno] = innerMap
-		for i := 0; i < dh.numberOfBuckets; i++ {
+		for i := 0; i < dh.numberOfBins; i++ {
 			bucket, err := NewBucket(dh.fileDir, vbno, i, dh.fdPool)
 			if err != nil {
 				return err
@@ -96,7 +96,7 @@ func (dh *DcpHandler) cleanup() {
 			fmt.Printf("Cannot find innerMap for vbno %v at cleanup\n", vbno)
 			continue
 		}
-		for i := 0; i < dh.numberOfBuckets; i++ {
+		for i := 0; i < dh.numberOfBins; i++ {
 			bucket := innerMap[i]
 			if bucket == nil {
 				fmt.Printf("Cannot find bucket for vbno %v and index %v at cleanup\n", vbno, i)
@@ -132,7 +132,7 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 	}
 
 	vbno := mut.vbno
-	index := utils.GetBucketIndexFromKey(mut.key, dh.numberOfBuckets)
+	index := utils.GetBucketIndexFromKey(mut.key, dh.numberOfBins)
 	innerMap := dh.bucketMap[vbno]
 	if innerMap == nil {
 		panic(fmt.Sprintf("cannot find bucketMap for vbno %v", vbno))
