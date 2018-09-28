@@ -117,13 +117,13 @@ func argParse() {
 		"number of dcp clients")
 	flag.Uint64Var(&options.numberOfWorkersPerDcpClient, "numberOfWorkersPerDcpClient", 256,
 		"number of workers for each dcp client")
-	flag.Uint64Var(&options.numberOfWorkersForFileDiffer, "numberOfWorkersForFileDiffer", 10,
+	flag.Uint64Var(&options.numberOfWorkersForFileDiffer, "numberOfWorkersForFileDiffer", 30,
 		"number of worker threads for file differ ")
 	flag.Uint64Var(&options.numberOfWorkersForMutationDiffer, "numberOfWorkersForMutationDiffer", 30,
 		"number of worker threads for mutation differ ")
 	flag.Uint64Var(&options.numberOfBuckets, "numberOfBuckets", 10,
 		"number of buckets per vbucket")
-	flag.Uint64Var(&options.numberOfFileDesc, "numberOfFileDesc", 1000,
+	flag.Uint64Var(&options.numberOfFileDesc, "numberOfFileDesc", 500,
 		"number of file descriptors")
 	flag.Uint64Var(&options.completeByDuration, "completeByDuration", 60,
 		"duration that the tool should run")

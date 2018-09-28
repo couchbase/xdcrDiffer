@@ -80,7 +80,7 @@ func (cm *CheckpointManager) Start() error {
 		return err
 	}
 
-	if cm.checkpointInterval > 0 {
+	if cm.newCheckpointFileName != "" && cm.checkpointInterval > 0 {
 		go cm.periodicalCheckpointing()
 	}
 
@@ -120,6 +120,8 @@ func (cm *CheckpointManager) Stop() error {
 }
 
 func (cm *CheckpointManager) periodicalCheckpointing() {
+	fmt.Printf("%v starting periodical checkpointing routine\n", cm.clusterName)
+
 	ticker := time.NewTicker(time.Duration(cm.checkpointInterval) * time.Second)
 	defer ticker.Stop()
 
@@ -140,7 +142,11 @@ func (cm *CheckpointManager) periodicalCheckpointing() {
 
 func (cm *CheckpointManager) checkpointOnce(iter int) error {
 	checkpointFileName := cm.newCheckpointFileName + base.FileNameDelimiter + fmt.Sprintf("%v", iter)
-	return cm.saveCheckpoint(checkpointFileName)
+	err := cm.saveCheckpoint(checkpointFileName)
+	if err != nil {
+		fmt.Printf("%v error saving checkpoint %v. err=%v\n", cm.clusterName, checkpointFileName, err)
+	}
+	return err
 }
 
 func (cm *CheckpointManager) reportStatus() {
@@ -353,6 +359,8 @@ func (cm *CheckpointManager) SaveCheckpoint() error {
 }
 
 func (cm *CheckpointManager) saveCheckpoint(checkpointFileName string) error {
+	fmt.Printf("%v starting to save checkpoint %v\n", cm.clusterName, checkpointFileName)
+	defer fmt.Printf("%v completed saving checkpoint %v\n", cm.clusterName, checkpointFileName)
 
 	// delete existing file if exists
 	os.Remove(checkpointFileName)
