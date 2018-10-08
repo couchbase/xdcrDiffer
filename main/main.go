@@ -25,22 +25,24 @@ import (
 var done = make(chan bool)
 
 var options struct {
-	sourceUrl                        string
-	sourceUsername                   string
-	sourcePassword                   string
-	sourceBucketName                 string
-	sourceFileDir                    string
-	targetUrl                        string
-	targetUsername                   string
-	targetPassword                   string
-	targetBucketName                 string
-	targetFileDir                    string
-	numberOfDcpClients               uint64
-	numberOfWorkersPerDcpClient      uint64
-	numberOfWorkersForFileDiffer     uint64
-	numberOfWorkersForMutationDiffer uint64
-	numberOfBins                  uint64
-	numberOfFileDesc                 uint64
+	sourceUrl                         string
+	sourceUsername                    string
+	sourcePassword                    string
+	sourceBucketName                  string
+	sourceFileDir                     string
+	targetUrl                         string
+	targetUsername                    string
+	targetPassword                    string
+	targetBucketName                  string
+	targetFileDir                     string
+	numberOfSourceDcpClients          uint64
+	numberOfWorkersPerSourceDcpClient uint64
+	numberOfTargetDcpClients          uint64
+	numberOfWorkersPerTargetDcpClient uint64
+	numberOfWorkersForFileDiffer      uint64
+	numberOfWorkersForMutationDiffer  uint64
+	numberOfBins                      uint64
+	numberOfFileDesc                  uint64
 	// the duration that the tools should be run, in minutes
 	completeByDuration uint64
 	// whether tool should complete after processing all mutations at tool start time
@@ -66,8 +68,10 @@ var options struct {
 	mutationDifferBatchSize uint64
 	// timeout, in seconds, used by mutation differ
 	mutationDifferTimeout uint64
-	// size of dcp handler channel
-	dcpHandlerChanSize uint64
+	// size of source dcp handler channel
+	sourceDcpHandlerChanSize uint64
+	// size of target dcp handler channel
+	targetDcpHandlerChanSize uint64
 	// timeout for bucket for stats collection, in seconds
 	bucketOpTimeout uint64
 	// max number of retry for get stats
@@ -116,10 +120,14 @@ func argParse() {
 		"bucket name for target cluster")
 	flag.StringVar(&options.targetFileDir, "targetFileDir", base.TargetFileDir,
 		"directory to store mutations in target cluster")
-	flag.Uint64Var(&options.numberOfDcpClients, "numberOfDcpClients", 4,
-		"number of dcp clients")
-	flag.Uint64Var(&options.numberOfWorkersPerDcpClient, "numberOfWorkersPerDcpClient", 256,
-		"number of workers for each dcp client")
+	flag.Uint64Var(&options.numberOfSourceDcpClients, "numberOfSourceDcpClients", 4,
+		"number of source dcp clients")
+	flag.Uint64Var(&options.numberOfWorkersPerSourceDcpClient, "numberOfWorkersPerSourceDcpClient", 256,
+		"number of workers for each source dcp client")
+	flag.Uint64Var(&options.numberOfTargetDcpClients, "numberOfTargetDcpClients", 4,
+		"number of target dcp clients")
+	flag.Uint64Var(&options.numberOfWorkersPerTargetDcpClient, "numberOfWorkersPerTargetDcpClient", 256,
+		"number of workers for each target dcp client")
 	flag.Uint64Var(&options.numberOfWorkersForFileDiffer, "numberOfWorkersForFileDiffer", 30,
 		"number of worker threads for file differ ")
 	flag.Uint64Var(&options.numberOfWorkersForMutationDiffer, "numberOfWorkersForMutationDiffer", 30,
@@ -150,8 +158,10 @@ func argParse() {
 		"size of batch used by mutation differ")
 	flag.Uint64Var(&options.mutationDifferTimeout, "mutationDifferTimeout", 30,
 		"timeout, in seconds, used by mutation differ")
-	flag.Uint64Var(&options.dcpHandlerChanSize, "dcpHandlerChanSize", base.DcpHandlerChanSize,
-		"size of dcp handler channel")
+	flag.Uint64Var(&options.sourceDcpHandlerChanSize, "sourceDcpHandlerChanSize", base.DcpHandlerChanSize,
+		"size of source dcp handler channel")
+	flag.Uint64Var(&options.targetDcpHandlerChanSize, "targetDcpHandlerChanSize", base.DcpHandlerChanSize,
+		"size of target dcp handler channel")
 	flag.Uint64Var(&options.bucketOpTimeout, "bucketOpTimeout", base.BucketOpTimeout,
 		" timeout for bucket for stats collection, in seconds")
 	flag.Uint64Var(&options.maxNumOfGetStatsRetry, "maxNumOfGetStatsRetry", base.MaxNumOfGetStatsRetry,
@@ -259,8 +269,8 @@ func generateDataFiles() error {
 	fmt.Printf("Starting source dcp clients\n")
 	sourceDcpDriver := startDcpDriver(base.SourceClusterName, options.sourceUrl, options.sourceBucketName,
 		options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir,
-		options.oldSourceCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients,
-		options.numberOfWorkersPerDcpClient, options.numberOfBins, options.dcpHandlerChanSize,
+		options.oldSourceCheckpointFileName, options.newCheckpointFileName, options.numberOfSourceDcpClients,
+		options.numberOfWorkersPerSourceDcpClient, options.numberOfBins, options.sourceDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 
@@ -271,8 +281,8 @@ func generateDataFiles() error {
 	fmt.Printf("Starting target dcp clients\n")
 	targetDcpDriver := startDcpDriver(base.TargetClusterName, options.targetUrl, options.targetBucketName,
 		options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir,
-		options.oldTargetCheckpointFileName, options.newCheckpointFileName, options.numberOfDcpClients,
-		options.numberOfWorkersPerDcpClient, options.numberOfBins, options.dcpHandlerChanSize,
+		options.oldTargetCheckpointFileName, options.newCheckpointFileName, options.numberOfTargetDcpClients,
+		options.numberOfWorkersPerTargetDcpClient, options.numberOfBins, options.targetDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 
