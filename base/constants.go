@@ -29,6 +29,7 @@ const DiffFileDir = "diff"
 const DiffKeysFileName = "diffKeys"
 const DiffDetailsFileName = "diffDetails"
 const MutationDiffFileName = "mutationDiffDetails"
+const MutationDiffKeysFileName = "mutationDiffKeys"
 const DiffErrorKeysFileName = "diffKeysWithError"
 const StatsReportInterval = 5
 const SourceClusterName = "source"

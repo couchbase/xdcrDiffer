@@ -28,20 +28,20 @@ import (
 const KeyNotFoundErrMsg = "key not found"
 
 type MutationDiffer struct {
-	sourceUrl             string
-	sourceBucketName      string
-	sourceUserName        string
-	sourcePassword        string
-	targetUrl             string
-	targetBucketName      string
-	targetUserName        string
-	targetPassword        string
-	diffFileDir           string
-	diffKeysFileName      string
-	diffErrorKeysFileName string
-	numberOfWorkers       int
-	batchSize             int
-	timeout               int
+	sourceUrl              string
+	sourceBucketName       string
+	sourceUserName         string
+	sourcePassword         string
+	targetUrl              string
+	targetBucketName       string
+	targetUserName         string
+	targetPassword         string
+	diffFileDir            string
+	inputDiffKeysFileName  string
+	outputDiffKeysFileName string
+	numberOfWorkers        int
+	batchSize              int
+	timeout                int
 
 	sourceBucket *gocb.Bucket
 	targetBucket *gocb.Bucket
@@ -70,8 +70,8 @@ func NewMutationDiffer(sourceUrl string,
 	targetUserName string,
 	targetPassword string,
 	diffFileDir string,
-	diffKeysFileName string,
-	diffErrorKeysFileName string,
+	inputDiffKeysFileName string,
+	outputDiffKeysFileName string,
 	numberOfWorkers int,
 	batchSize int,
 	timeout int,
@@ -88,8 +88,8 @@ func NewMutationDiffer(sourceUrl string,
 		targetUserName:         targetUserName,
 		targetPassword:         targetPassword,
 		diffFileDir:            diffFileDir,
-		diffKeysFileName:       diffKeysFileName,
-		diffErrorKeysFileName:  diffErrorKeysFileName,
+		inputDiffKeysFileName:  inputDiffKeysFileName,
+		outputDiffKeysFileName: outputDiffKeysFileName,
 		numberOfWorkers:        numberOfWorkers,
 		batchSize:              batchSize,
 		timeout:                timeout,
@@ -177,12 +177,23 @@ func (d *MutationDiffer) writeDiff() error {
 	err := d.writeKeysWithDiff()
 	if err != nil {
 		fmt.Printf("Error writing keys with diff. err=%v\n", err)
+		return err
 	}
 
-	return d.writeKeysWithError()
+	err = d.writeKeysWithError()
+	if err != nil {
+		fmt.Printf("Error writing keys with errors. err=%v\n", err)
+		return err
+	}
+
+	err = d.writeDiffDetails()
+	if err != nil {
+		fmt.Printf("Error writing diff details. err=%v\n", err)
+	}
+	return err
 }
 
-func (d *MutationDiffer) writeKeysWithDiff() error {
+func (d *MutationDiffer) writeDiffDetails() error {
 	diffBytes, err := d.getDiffBytes()
 	if err != nil {
 		return err
@@ -191,13 +202,48 @@ func (d *MutationDiffer) writeKeysWithDiff() error {
 	return d.writeDiffBytesToFile(diffBytes)
 }
 
+func (d *MutationDiffer) writeKeysWithDiff() error {
+	// aggragate all keys with diffs into a diffKeys array
+	numberOfDiffKeys := len(d.missingFromSource) + len(d.missingFromTarget) + len(d.diff)
+	diffKeys := make([]string, numberOfDiffKeys)
+	index := 0
+	for key, _ := range d.missingFromSource {
+		diffKeys[index] = key
+		index++
+	}
+	for key, _ := range d.missingFromTarget {
+		diffKeys[index] = key
+		index++
+	}
+	for key, _ := range d.diff {
+		diffKeys[index] = key
+		index++
+	}
+
+	diffKeysBytes, err := json.Marshal(diffKeys)
+	if err != nil {
+		return err
+	}
+
+	diffKeysFileName := d.diffFileDir + base.FileDirDelimiter + d.outputDiffKeysFileName
+	diffKeysFile, err := os.OpenFile(diffKeysFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
+	if err != nil {
+		return err
+	}
+
+	defer diffKeysFile.Close()
+
+	_, err = diffKeysFile.Write(diffKeysBytes)
+	return err
+}
+
 func (d *MutationDiffer) writeKeysWithError() error {
 	keysWithErrorBytes, err := json.Marshal(d.keysWithError)
 	if err != nil {
 		return err
 	}
 
-	keysWithErrorFileName := d.diffFileDir + base.FileDirDelimiter + d.diffErrorKeysFileName
+	keysWithErrorFileName := d.diffFileDir + base.FileDirDelimiter + base.DiffErrorKeysFileName
 	keysWithErrorFile, err := os.OpenFile(keysWithErrorFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
 	if err != nil {
 		return err
@@ -234,7 +280,7 @@ func (d *MutationDiffer) writeDiffBytesToFile(diffBytes []byte) error {
 }
 
 func (d *MutationDiffer) loadDiffKeys() ([]string, error) {
-	diffKeysFileName := d.diffFileDir + base.FileDirDelimiter + d.diffKeysFileName
+	diffKeysFileName := d.diffFileDir + base.FileDirDelimiter + d.inputDiffKeysFileName
 	diffKeysBytes, err := ioutil.ReadFile(diffKeysFileName)
 	if err != nil {
 		return nil, err
