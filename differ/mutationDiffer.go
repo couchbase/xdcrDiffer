@@ -48,6 +48,7 @@ type MutationDiffer struct {
 	missingFromSource map[string]*gocbcore.GetResult
 	missingFromTarget map[string]*gocbcore.GetResult
 	diff              map[string][]*gocbcore.GetResult
+	bodyDiff          map[string][]*gocbcore.GetResult
 	keysWithError     []string
 	stateLock         *sync.RWMutex
 
@@ -102,6 +103,7 @@ func NewMutationDiffer(sourceUrl string,
 		missingFromSource:      make(map[string]*gocbcore.GetResult),
 		missingFromTarget:      make(map[string]*gocbcore.GetResult),
 		diff:                   make(map[string][]*gocbcore.GetResult),
+		bodyDiff:               make(map[string][]*gocbcore.GetResult),
 		keysWithError:          make([]string, 0),
 		stateLock:              &sync.RWMutex{},
 		finChan:                make(chan bool),
@@ -183,13 +185,11 @@ func (d *MutationDiffer) writeDiff() error {
 	err := d.writeKeysWithDiff()
 	if err != nil {
 		fmt.Printf("Error writing keys with diff. err=%v\n", err)
-		return err
 	}
 
 	err = d.writeKeysWithError()
 	if err != nil {
 		fmt.Printf("Error writing keys with errors. err=%v\n", err)
-		return err
 	}
 
 	err = d.writeDiffDetails()
@@ -199,18 +199,29 @@ func (d *MutationDiffer) writeDiff() error {
 	return err
 }
 
-func (d *MutationDiffer) writeDiffDetails() error {
-	diffBytes, err := d.getDiffBytes()
+func (d *MutationDiffer) writeKeysWithDiff() error {
+	err := d.writeKeysWithDiff2(true)
 	if err != nil {
-		return err
+		fmt.Printf("Error writing mutation body diff keys. err=%v\n", err)
 	}
 
-	return d.writeDiffBytesToFile(diffBytes)
+	err = d.writeKeysWithDiff2(false)
+	if err != nil {
+		fmt.Printf("Error writing mutation diff keys. err=%v\n", err)
+	}
+	return err
 }
 
-func (d *MutationDiffer) writeKeysWithDiff() error {
+func (d *MutationDiffer) writeKeysWithDiff2(isBodyDiff bool) error {
+	diff := d.diff
+	fileName := base.MutationDiffKeysFileName
+	if isBodyDiff {
+		diff = d.bodyDiff
+		fileName = base.MutationBodyDiffKeysFileName
+	}
+
 	// aggragate all keys with diffs into a diffKeys array
-	numberOfDiffKeys := len(d.missingFromSource) + len(d.missingFromTarget) + len(d.diff)
+	numberOfDiffKeys := len(d.missingFromSource) + len(d.missingFromTarget) + len(diff)
 	diffKeys := make([]string, numberOfDiffKeys)
 	index := 0
 	for key, _ := range d.missingFromSource {
@@ -221,7 +232,7 @@ func (d *MutationDiffer) writeKeysWithDiff() error {
 		diffKeys[index] = key
 		index++
 	}
-	for key, _ := range d.diff {
+	for key, _ := range diff {
 		diffKeys[index] = key
 		index++
 	}
@@ -231,7 +242,8 @@ func (d *MutationDiffer) writeKeysWithDiff() error {
 		return err
 	}
 
-	diffKeysFileName := d.mutationDifferFileDir + base.FileDirDelimiter + base.MutationDiffKeysFileName
+	diffKeysFileName := d.mutationDifferFileDir + base.FileDirDelimiter + fileName
+
 	diffKeysFile, err := os.OpenFile(diffKeysFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
 	if err != nil {
 		return err
@@ -241,6 +253,29 @@ func (d *MutationDiffer) writeKeysWithDiff() error {
 
 	_, err = diffKeysFile.Write(diffKeysBytes)
 	return err
+}
+
+func (d *MutationDiffer) writeDiffDetails() error {
+	err := d.writeDiffDetails2(true)
+	if err != nil {
+		fmt.Printf("Error writing mutation body diff details. err=%v\n", err)
+	}
+
+	err = d.writeDiffDetails2(false)
+	if err != nil {
+		fmt.Printf("Error writing mutation diff details. err=%v\n", err)
+	}
+
+	return err
+}
+
+func (d *MutationDiffer) writeDiffDetails2(isBodyDiff bool) error {
+	diffBytes, err := d.getDiffBytes(isBodyDiff)
+	if err != nil {
+		return err
+	}
+
+	return d.writeDiffBytesToFile(diffBytes, isBodyDiff)
 }
 
 func (d *MutationDiffer) writeKeysWithError() error {
@@ -261,9 +296,13 @@ func (d *MutationDiffer) writeKeysWithError() error {
 	return err
 }
 
-func (d *MutationDiffer) getDiffBytes() ([]byte, error) {
+func (d *MutationDiffer) getDiffBytes(isBodyDiff bool) ([]byte, error) {
+	diff := d.diff
+	if isBodyDiff {
+		diff = d.bodyDiff
+	}
 	outputMap := map[string]interface{}{
-		"Mismatch":          d.diff,
+		"Mismatch":          diff,
 		"MissingFromSource": d.missingFromSource,
 		"MissingFromTarget": d.missingFromTarget,
 	}
@@ -271,9 +310,14 @@ func (d *MutationDiffer) getDiffBytes() ([]byte, error) {
 	return json.Marshal(outputMap)
 }
 
-func (d *MutationDiffer) writeDiffBytesToFile(diffBytes []byte) error {
-	diffFileName := d.mutationDifferFileDir + base.FileDirDelimiter + base.MutationDiffFileName
-	diffFile, err := os.OpenFile(diffFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
+func (d *MutationDiffer) writeDiffBytesToFile(diffBytes []byte, isBodyDiff bool) error {
+	fileName := base.MutationDiffFileName
+	if isBodyDiff {
+		fileName = base.MutationBodyDiffFileName
+	}
+	fullFileName := d.mutationDifferFileDir + base.FileDirDelimiter + fileName
+
+	diffFile, err := os.OpenFile(fullFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
 	if err != nil {
 		return err
 	}
@@ -301,7 +345,7 @@ func (d *MutationDiffer) loadDiffKeys() ([]string, error) {
 
 func (d *MutationDiffer) addDiff(missingFromSource map[string]*gocbcore.GetResult,
 	missingFromTarget map[string]*gocbcore.GetResult,
-	diff map[string][]*gocbcore.GetResult) {
+	diff map[string][]*gocbcore.GetResult, bodyDiff map[string][]*gocbcore.GetResult) {
 	d.stateLock.Lock()
 	defer d.stateLock.Unlock()
 
@@ -313,6 +357,9 @@ func (d *MutationDiffer) addDiff(missingFromSource map[string]*gocbcore.GetResul
 	}
 	for key, results := range diff {
 		d.diff[key] = results
+	}
+	for key, results := range bodyDiff {
+		d.bodyDiff[key] = results
 	}
 }
 
@@ -410,6 +457,7 @@ func (dw *DifferWorker) diff() {
 	missingFromSource := make(map[string]*gocbcore.GetResult)
 	missingFromTarget := make(map[string]*gocbcore.GetResult)
 	diff := make(map[string][]*gocbcore.GetResult)
+	bodyDiff := make(map[string][]*gocbcore.GetResult)
 
 	for key, sourceResult := range dw.sourceResults {
 		if sourceResult.Key == "" {
@@ -433,9 +481,12 @@ func (dw *DifferWorker) diff() {
 		if !areGetResultsTheSame(sourceResult.Result, targetResult.Result) {
 			diff[key] = []*gocbcore.GetResult{sourceResult.Result, targetResult.Result}
 		}
+		if !areGetResultsBodyTheSame(sourceResult.Result, targetResult.Result) {
+			bodyDiff[key] = []*gocbcore.GetResult{sourceResult.Result, targetResult.Result}
+		}
 	}
 
-	dw.differ.addDiff(missingFromSource, missingFromTarget, diff)
+	dw.differ.addDiff(missingFromSource, missingFromTarget, diff, bodyDiff)
 }
 
 type batch struct {
@@ -534,6 +585,16 @@ func areGetResultsTheSame(result1, result2 *gocbcore.GetResult) bool {
 	}
 	return reflect.DeepEqual(result1.Value, result2.Value) && result1.Flags == result2.Flags &&
 		result1.Datatype == result2.Datatype && result1.Cas == result2.Cas
+}
+
+func areGetResultsBodyTheSame(result1, result2 *gocbcore.GetResult) bool {
+	if result1 == nil {
+		return result2 == nil
+	}
+	if result2 == nil {
+		return false
+	}
+	return reflect.DeepEqual(result1.Value, result2.Value)
 }
 
 type GetResult struct {
