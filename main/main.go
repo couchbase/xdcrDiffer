@@ -12,12 +12,19 @@ package main
 import (
 	"flag"
 	"fmt"
+	xdcrLog "github.com/couchbase/goxdcr/log"
+	"github.com/couchbase/goxdcr/metadata"
+	"github.com/couchbase/goxdcr/metadata_svc"
+	"github.com/couchbase/goxdcr/service_def"
+	service_def_mock "github.com/couchbase/goxdcr/service_def/mocks"
+	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"github.com/nelio2k/xdcrDiffer/base"
 	"github.com/nelio2k/xdcrDiffer/dcp"
 	"github.com/nelio2k/xdcrDiffer/differ"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"github.com/nelio2k/xdcrDiffer/utils"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -29,6 +36,7 @@ var options struct {
 	sourceUsername                    string
 	sourcePassword                    string
 	sourceBucketName                  string
+	remoteClusterName                 string
 	sourceFileDir                     string
 	targetUrl                         string
 	targetUsername                    string
@@ -112,6 +120,8 @@ func argParse() {
 		"password for source cluster")
 	flag.StringVar(&options.sourceBucketName, "sourceBucketName", "",
 		"bucket name for source cluster")
+	flag.StringVar(&options.remoteClusterName, "remoteClusterName", "",
+		"Remote cluster reference name used when creating it")
 	flag.StringVar(&options.sourceFileDir, "sourceFileDir", base.SourceFileDir,
 		"directory to store mutations in source cluster")
 	flag.StringVar(&options.targetUrl, "targetUrl", "",
@@ -199,34 +209,86 @@ func usage() {
 	flag.PrintDefaults()
 }
 
+type xdcrDiffer struct {
+	utils              xdcrUtils.UtilsIface
+	metadataSvc        service_def.MetadataSvc
+	remoteClusterSvc   service_def.RemoteClusterSvc
+	replicationSpecSvc service_def.ReplicationSpecSvc
+	logger             *xdcrLog.CommonLogger
+
+	specifiedRef  *metadata.RemoteClusterReference
+	specifiedSpec *metadata.ReplicationSpecification
+}
+
+func NewDiffer() *xdcrDiffer {
+
+	differ := &xdcrDiffer{
+		utils: xdcrUtils.NewUtilities(),
+	}
+	differ.metadataSvc, _ = metadata_svc.NewMetaKVMetadataSvc(nil, differ.utils)
+
+	uiLogSvcMock := &service_def_mock.UILogSvc{}
+	xdcrTopologyMock := &service_def_mock.XDCRCompTopologySvc{}
+	clusterInfoSvcMock := &service_def_mock.ClusterInfoSvc{}
+
+	differ.logger = xdcrLog.NewLogger("xdcrDiffer", nil)
+
+	differ.remoteClusterSvc, _ = metadata_svc.NewRemoteClusterService(uiLogSvcMock, differ.metadataSvc, xdcrTopologyMock,
+		clusterInfoSvcMock, xdcrLog.DefaultLoggerContext, differ.utils)
+
+	differ.replicationSpecSvc, _ = metadata_svc.NewReplicationSpecService(uiLogSvcMock, differ.remoteClusterSvc,
+		differ.metadataSvc, xdcrTopologyMock, clusterInfoSvcMock,
+		nil, differ.utils)
+
+	return differ
+}
+
+func maybeSetEnv(key, value string) {
+	if os.Getenv(key) != "" {
+		return
+	}
+	os.Setenv(key, value)
+}
+
 func main() {
 	argParse()
 
-	if options.runDataGeneration {
-		err := generateDataFiles()
+	differ := NewDiffer()
+
+	if len(options.remoteClusterName) > 0 {
+		err := differ.retrieveReplicationSpecInfo()
 		if err != nil {
-			fmt.Printf("Error generating data files. err=%v\n", err)
 			os.Exit(1)
 		}
-	} else {
-		fmt.Printf("Skipping  generating data files since it has been disabled\n")
 	}
 
-	if options.runFileDiffer {
-		err := diffDataFiles()
-		if err != nil {
-			fmt.Printf("Error running file differ. err=%v\n", err)
-			os.Exit(1)
+	/*
+		if options.runDataGeneration {
+			err := generateDataFiles()
+			if err != nil {
+				fmt.Printf("Error generating data files. err=%v\n", err)
+				os.Exit(1)
+			}
+		} else {
+			fmt.Printf("Skipping  generating data files since it has been disabled\n")
 		}
-	} else {
-		fmt.Printf("Skipping file differ since it has been disabled\n")
-	}
 
-	if options.runMutationDiffer {
-		runMutationDiffer()
-	} else {
-		fmt.Printf("Skipping mutation diff since it has been disabled\n")
-	}
+		if options.runFileDiffer {
+			err := diffDataFiles()
+			if err != nil {
+				fmt.Printf("Error running file differ. err=%v\n", err)
+				os.Exit(1)
+			}
+		} else {
+			fmt.Printf("Skipping file differ since it has been disabled\n")
+		}
+
+		if options.runMutationDiffer {
+			runMutationDiffer()
+		} else {
+			fmt.Printf("Skipping mutation diff since it has been disabled\n")
+		}
+	*/
 }
 
 func cleanUpAndSetup() error {
@@ -419,4 +481,49 @@ func waitForDuration(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan ch
 	}
 
 	return err
+}
+
+func (differ *xdcrDiffer) retrieveReplicationSpecInfo() error {
+	// CBAUTH has already been setup
+	rcMap, err := differ.remoteClusterSvc.RemoteClusters()
+	if err != nil {
+		differ.logger.Errorf("Error retrieving remote clusters: %v\n", err)
+		return err
+	}
+
+	specMap, err := differ.replicationSpecSvc.AllReplicationSpecs()
+	if err != nil {
+		differ.logger.Errorf("Error retrieving specs: %v\n", err)
+	}
+
+	for _, ref := range rcMap {
+		if ref.Name_ == options.remoteClusterName {
+			differ.specifiedRef = ref
+			break
+		}
+	}
+
+	for _, spec := range specMap {
+		if spec.SourceBucketName == options.sourceBucketName && spec.TargetBucketName == options.targetBucketName {
+			differ.specifiedSpec = spec
+			break
+		}
+	}
+
+	var errStrs []string
+	if differ.specifiedRef == nil {
+		errStrs = append(errStrs, fmt.Sprintf("Unable to find Remote cluster %v\n", options.remoteClusterName))
+	}
+	if differ.specifiedSpec == nil {
+		errStrs = append(errStrs, fmt.Sprintf("Unable to find Replication Spec with source %v target %v\n", options.sourceBucketName, options.targetBucketName))
+	}
+	if len(errStrs) > 0 {
+		err := fmt.Errorf(strings.Join(errStrs, " and "))
+		differ.logger.Errorf(err.Error())
+		return err
+	}
+
+	differ.logger.Infof("Found Remote Cluster: %v and Replication Spec: %v\n", differ.specifiedRef.String(), differ.specifiedSpec.String())
+
+	return nil
 }
