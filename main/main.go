@@ -24,6 +24,7 @@ import (
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"github.com/nelio2k/xdcrDiffer/utils"
 	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"time"
@@ -209,6 +210,19 @@ func usage() {
 	flag.PrintDefaults()
 }
 
+type differStateType int
+
+const (
+	finStateInitial differStateType = iota
+	dcpDriving      differStateType = iota
+	finStateFinal   differStateType = iota
+)
+
+type differState struct {
+	state differStateType
+	mtx   sync.Mutex
+}
+
 type xdcrDiffer struct {
 	utils              xdcrUtils.UtilsIface
 	metadataSvc        service_def.MetadataSvc
@@ -218,12 +232,20 @@ type xdcrDiffer struct {
 
 	specifiedRef  *metadata.RemoteClusterReference
 	specifiedSpec *metadata.ReplicationSpecification
+
+	sourceDcpDriver *dcp.DcpDriver
+	targetDcpDriver *dcp.DcpDriver
+
+	curState differState
+	// finch - to interrupt one at a time
+	//	generateDataFinch chan bool
 }
 
 func NewDiffer() *xdcrDiffer {
 
 	differ := &xdcrDiffer{
 		utils: xdcrUtils.NewUtilities(),
+		//		generateDataFinch: make(chan bool),
 	}
 	differ.metadataSvc, _ = metadata_svc.NewMetaKVMetadataSvc(nil, differ.utils)
 
@@ -239,6 +261,9 @@ func NewDiffer() *xdcrDiffer {
 	differ.replicationSpecSvc, _ = metadata_svc.NewReplicationSpecService(uiLogSvcMock, differ.remoteClusterSvc,
 		differ.metadataSvc, xdcrTopologyMock, clusterInfoSvcMock,
 		nil, differ.utils)
+
+	// Capture any Ctrl-C for continuing to next steps or cleanup
+	go differ.monitorInterruptSignal()
 
 	return differ
 }
@@ -335,7 +360,7 @@ func (differ *xdcrDiffer) generateDataFiles() error {
 	}
 
 	differ.logger.Infof("Starting source dcp clients on %v\n", options.sourceUrl)
-	sourceDcpDriver := startDcpDriver(differ.logger, base.SourceClusterName, options.sourceUrl, differ.specifiedSpec.SourceBucketName,
+	differ.sourceDcpDriver = startDcpDriver(differ.logger, base.SourceClusterName, options.sourceUrl, differ.specifiedSpec.SourceBucketName,
 		options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir,
 		options.oldSourceCheckpointFileName, options.newCheckpointFileName, options.numberOfSourceDcpClients,
 		options.numberOfWorkersPerSourceDcpClient, options.numberOfBins, options.sourceDcpHandlerChanSize,
@@ -347,18 +372,22 @@ func (differ *xdcrDiffer) generateDataFiles() error {
 	time.Sleep(delayDurationBetweenSourceAndTarget)
 
 	differ.logger.Infof("Starting target dcp clients\n")
-	targetDcpDriver := startDcpDriver(differ.logger, base.TargetClusterName, differ.specifiedRef.HostName_, differ.specifiedSpec.TargetBucketName,
+	differ.targetDcpDriver = startDcpDriver(differ.logger, base.TargetClusterName, differ.specifiedRef.HostName_, differ.specifiedSpec.TargetBucketName,
 		differ.specifiedRef.UserName_, differ.specifiedRef.Password_, options.targetFileDir, options.checkpointFileDir,
 		options.oldTargetCheckpointFileName, options.newCheckpointFileName, options.numberOfTargetDcpClients,
 		options.numberOfWorkersPerTargetDcpClient, options.numberOfBins, options.targetDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 
+	differ.curState.mtx.Lock()
+	differ.curState.state = dcpDriving
+	differ.curState.mtx.Unlock()
+
 	var err error
 	if options.completeBySeqno {
-		err = waitForCompletion(sourceDcpDriver, targetDcpDriver, errChan, waitGroup)
+		err = waitForCompletion(differ.sourceDcpDriver, differ.targetDcpDriver, errChan, waitGroup)
 	} else {
-		err = waitForDuration(sourceDcpDriver, targetDcpDriver, errChan, options.completeByDuration, delayDurationBetweenSourceAndTarget)
+		err = waitForDuration(differ.sourceDcpDriver, differ.targetDcpDriver, errChan, options.completeByDuration, delayDurationBetweenSourceAndTarget)
 	}
 
 	return err
@@ -536,4 +565,28 @@ func (differ *xdcrDiffer) populateTemporarySpecAndRef() {
 
 	differ.specifiedRef, _ = metadata.NewRemoteClusterReference("" /*uuid*/, "" /*name*/, options.targetUrl, options.targetUsername, options.targetPassword,
 		false /*demandEncryption*/, "" /*encryptionType*/, nil, nil, nil)
+}
+
+func (differ *xdcrDiffer) monitorInterruptSignal() {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+	go func() {
+		for sig := range c {
+			if sig.String() == "interrupt" {
+				differ.curState.mtx.Lock()
+				switch differ.curState.state {
+				case finStateInitial:
+					os.Exit(0)
+				case dcpDriving:
+					differ.logger.Warnf("Received interrupt. Closing DCP drivers")
+					differ.sourceDcpDriver.Stop()
+					differ.targetDcpDriver.Stop()
+					differ.curState.state = finStateFinal
+				case finStateFinal:
+					os.Exit(0)
+				}
+				differ.curState.mtx.Unlock()
+			}
+		}
+	}()
 }

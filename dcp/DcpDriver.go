@@ -167,11 +167,12 @@ func (d *DcpDriver) checkForCompletion() {
 				}
 			}
 			if numOfCompletedVb == base.NumberOfVbuckets {
-				d.logger.Infof("all vbuckets have completed for dcp driver %v\n", d.Name)
+				d.logger.Infof("%v all vbuckets have completed for dcp driver %v\n", d.Name)
 				d.Stop()
 				return
 			}
 		case <-d.finChan:
+			d.logger.Infof("%v Received close channel", d.Name)
 			return
 		}
 	}
