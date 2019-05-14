@@ -11,9 +11,11 @@ package dcp
 
 import (
 	"fmt"
+	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/nelio2k/xdcrDiffer/base"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"github.com/nelio2k/xdcrDiffer/utils"
+	"strings"
 	"sync"
 	"time"
 )
@@ -32,7 +34,7 @@ type DcpDriver struct {
 	childWaitGroup     *sync.WaitGroup
 	numberOfClients    int
 	numberOfWorkers    int
-	numberOfBins    int
+	numberOfBins       int
 	dcpHandlerChanSize int
 	completeBySeqno    bool
 	checkpointManager  *CheckpointManager
@@ -47,6 +49,7 @@ type DcpDriver struct {
 	state     DriverState
 	stateLock sync.RWMutex
 	finChan   chan bool
+	logger    *xdcrLog.CommonLogger
 }
 
 type VBStateWithLock struct {
@@ -70,7 +73,7 @@ const (
 	DriverStateStopped DriverState = iota
 )
 
-func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
+func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
 	newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int,
 	bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration,
 	checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool,
@@ -84,7 +87,7 @@ func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoint
 		fileDir:            fileDir,
 		numberOfClients:    numberOfClients,
 		numberOfWorkers:    numberOfWorkers,
-		numberOfBins:    numberOfBins,
+		numberOfBins:       numberOfBins,
 		dcpHandlerChanSize: dcpHandlerChanSize,
 		completeBySeqno:    completeBySeqno,
 		errChan:            errChan,
@@ -96,6 +99,7 @@ func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoint
 		state:              DriverStateNew,
 		finChan:            make(chan bool),
 		startVbtsDoneChan:  make(chan bool),
+		logger:             logger,
 	}
 
 	var vbno uint16
@@ -109,6 +113,10 @@ func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoint
 		newCheckpointFileName, name, bucketOpTimeout, maxNumOfGetStatsRetry,
 		getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval, dcpDriver.startVbtsDoneChan)
 
+	if !strings.HasPrefix(dcpDriver.url, "http") {
+		dcpDriver.url = fmt.Sprintf("http://%v", dcpDriver.url)
+	}
+
 	return dcpDriver
 
 }
@@ -116,23 +124,23 @@ func NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpoint
 func (d *DcpDriver) Start() error {
 	err := d.populateCredentials()
 	if err != nil {
-		fmt.Printf("%v error populating credentials. err=%v\n", d.Name, err)
+		d.logger.Errorf("%v error populating credentials. err=%v\n", d.Name, err)
 		return err
 	}
 
 	err = d.checkpointManager.Start()
 	if err != nil {
-		fmt.Printf("%v error starting checkpoint manager. err=%v\n", d.Name, err)
+		d.logger.Errorf("%v error starting checkpoint manager. err=%v\n", d.Name, err)
 		return err
 	}
 
-	fmt.Printf("%v started checkpoint manager.\n", d.Name)
+	d.logger.Infof("%v started checkpoint manager.\n", d.Name)
 
 	d.initializeDcpClients()
 
 	err = d.startDcpClients()
 	if err != nil {
-		fmt.Printf("%v error starting dcp clients. err=%v\n", d.Name, err)
+		d.logger.Errorf("%v error starting dcp clients. err=%v\n", d.Name, err)
 		return err
 	}
 
@@ -159,7 +167,7 @@ func (d *DcpDriver) checkForCompletion() {
 				}
 			}
 			if numOfCompletedVb == base.NumberOfVbuckets {
-				fmt.Printf("all vbuckets have completed for dcp driver %v\n", d.Name)
+				d.logger.Infof("all vbuckets have completed for dcp driver %v\n", d.Name)
 				d.Stop()
 				return
 			}
@@ -172,7 +180,7 @@ func (d *DcpDriver) checkForCompletion() {
 func (d *DcpDriver) populateCredentials() error {
 	var err error
 	d.rbacSupported, d.bucketPassword, err = utils.GetRBACSupportedAndBucketPassword(d.url, d.bucketName, d.userName, d.password)
-	fmt.Printf("%v rbacSupported=%v\n", d.Name, d.rbacSupported)
+	d.logger.Infof("%v rbacSupported=%v url=%v\n", d.Name, d.rbacSupported, d.url)
 	return err
 }
 
@@ -181,12 +189,12 @@ func (d *DcpDriver) Stop() error {
 	defer d.stateLock.Unlock()
 
 	if d.state == DriverStateStopped {
-		fmt.Printf("Skipping stop() because dcp driver is already stopped\n")
+		d.logger.Infof("Skipping stop() because dcp driver is already stopped\n")
 		return nil
 	}
 
-	fmt.Printf("Dcp driver %v stopping\n", d.Name)
-	defer fmt.Printf("Dcp driver %v stopped\n", d.Name)
+	d.logger.Infof("Dcp driver %v stopping\n", d.Name)
+	defer d.logger.Infof("Dcp driver %v stopped\n", d.Name)
 	defer d.waitGroup.Done()
 
 	close(d.finChan)
@@ -195,7 +203,7 @@ func (d *DcpDriver) Stop() error {
 		if dcpClient != nil {
 			err := dcpClient.Stop()
 			if err != nil {
-				fmt.Printf("Error stopping %vth dcp client. err=%v\n", i, err)
+				d.logger.Errorf("Error stopping %vth dcp client. err=%v\n", i, err)
 			}
 		}
 	}
@@ -204,7 +212,7 @@ func (d *DcpDriver) Stop() error {
 
 	err := d.checkpointManager.Stop()
 	if err != nil {
-		fmt.Printf("%v error stopping checkpoint manager. err=%v\n", d.Name, err)
+		d.logger.Errorf("%v error stopping checkpoint manager. err=%v\n", d.Name, err)
 	}
 
 	d.state = DriverStateStopped
@@ -235,10 +243,10 @@ func (d *DcpDriver) startDcpClients() error {
 	for i, dcpClient := range d.getDcpClients() {
 		err := dcpClient.Start()
 		if err != nil {
-			fmt.Printf("%v error starting dcp client. err=%v\n", d.Name, err)
+			d.logger.Errorf("%v error starting dcp client. err=%v\n", d.Name, err)
 			return err
 		}
-		fmt.Printf("%v started dcp client %v\n", d.Name, i)
+		d.logger.Infof("%v started dcp client %v\n", d.Name, i)
 	}
 	return nil
 }
@@ -267,7 +275,7 @@ func (d *DcpDriver) setState(state DriverState) {
 func (d *DcpDriver) reportError(err error) {
 	// avoid printing spurious errors if we are stopping
 	if d.getState() != DriverStateStopped {
-		fmt.Printf("%s dcp driver encountered error=%v\n", d.Name, err)
+		d.logger.Infof("%s dcp driver encountered error=%v\n", d.Name, err)
 	}
 
 	utils.AddToErrorChan(d.errChan, err)

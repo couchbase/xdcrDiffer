@@ -260,19 +260,21 @@ func main() {
 		if err != nil {
 			os.Exit(1)
 		}
+	} else {
+		differ.populateTemporarySpecAndRef()
+	}
+
+	if options.runDataGeneration {
+		err := differ.generateDataFiles()
+		if err != nil {
+			fmt.Printf("Error generating data files. err=%v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		fmt.Printf("Skipping  generating data files since it has been disabled\n")
 	}
 
 	/*
-		if options.runDataGeneration {
-			err := generateDataFiles()
-			if err != nil {
-				fmt.Printf("Error generating data files. err=%v\n", err)
-				os.Exit(1)
-			}
-		} else {
-			fmt.Printf("Skipping  generating data files since it has been disabled\n")
-		}
-
 		if options.runFileDiffer {
 			err := diffDataFiles()
 			if err != nil {
@@ -308,19 +310,19 @@ func cleanUpAndSetup() error {
 	return nil
 }
 
-func generateDataFiles() error {
-	fmt.Printf("GenerateDataFiles routine started\n")
-	defer fmt.Printf("GenerateDataFiles routine completed\n")
+func (differ *xdcrDiffer) generateDataFiles() error {
+	differ.logger.Infof("GenerateDataFiles routine started\n")
+	defer differ.logger.Infof("GenerateDataFiles routine completed\n")
 
 	if options.completeByDuration == 0 && !options.completeBySeqno {
-		fmt.Printf("completeByDuration is required when completeBySeqno is false\n")
+		differ.logger.Infof("completeByDuration is required when completeBySeqno is false\n")
 		os.Exit(1)
 	}
 
-	fmt.Printf("Tool started\n")
+	differ.logger.Infof("Tool started\n")
 
 	if err := cleanUpAndSetup(); err != nil {
-		fmt.Printf("Unable to clean and set up directory structure: %v\n", err)
+		differ.logger.Errorf("Unable to clean and set up directory structure: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -332,8 +334,8 @@ func generateDataFiles() error {
 		fileDescPool = fdp.NewFileDescriptorPool(int(options.numberOfFileDesc))
 	}
 
-	fmt.Printf("Starting source dcp clients\n")
-	sourceDcpDriver := startDcpDriver(base.SourceClusterName, options.sourceUrl, options.sourceBucketName,
+	differ.logger.Infof("Starting source dcp clients on %v\n", options.sourceUrl)
+	sourceDcpDriver := startDcpDriver(differ.logger, base.SourceClusterName, options.sourceUrl, differ.specifiedSpec.SourceBucketName,
 		options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir,
 		options.oldSourceCheckpointFileName, options.newCheckpointFileName, options.numberOfSourceDcpClients,
 		options.numberOfWorkersPerSourceDcpClient, options.numberOfBins, options.sourceDcpHandlerChanSize,
@@ -341,12 +343,12 @@ func generateDataFiles() error {
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool)
 
 	delayDurationBetweenSourceAndTarget := time.Duration(options.delayBetweenSourceAndTarget) * time.Second
-	fmt.Printf("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
+	differ.logger.Infof("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
 	time.Sleep(delayDurationBetweenSourceAndTarget)
 
-	fmt.Printf("Starting target dcp clients\n")
-	targetDcpDriver := startDcpDriver(base.TargetClusterName, options.targetUrl, options.targetBucketName,
-		options.targetUsername, options.targetPassword, options.targetFileDir, options.checkpointFileDir,
+	differ.logger.Infof("Starting target dcp clients\n")
+	targetDcpDriver := startDcpDriver(differ.logger, base.TargetClusterName, differ.specifiedRef.HostName_, differ.specifiedSpec.TargetBucketName,
+		differ.specifiedRef.UserName_, differ.specifiedRef.Password_, options.targetFileDir, options.checkpointFileDir,
 		options.oldTargetCheckpointFileName, options.newCheckpointFileName, options.numberOfTargetDcpClients,
 		options.numberOfWorkersPerTargetDcpClient, options.numberOfBins, options.targetDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
@@ -410,26 +412,26 @@ func runMutationDiffer() {
 	}
 }
 
-func startDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
+func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
 	newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins,
 	dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff,
 	checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool,
 	fdPool fdp.FdPoolIface) *dcp.DcpDriver {
 	waitGroup.Add(1)
-	dcpDriver := dcp.NewDcpDriver(name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
+	dcpDriver := dcp.NewDcpDriver(logger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBins),
 		int(dcpHandlerChanSize), time.Duration(bucketOpTimeout)*time.Second, int(maxNumOfGetStatsRetry),
 		time.Duration(getStatsRetryInterval)*time.Second, time.Duration(getStatsMaxBackoff)*time.Second,
 		int(checkpointInterval), errChan, waitGroup, completeBySeqno, fdPool)
 	// dcp driver startup may take some time. Do it asynchronously
-	go startDcpDriverAysnc(dcpDriver, errChan)
+	go startDcpDriverAysnc(dcpDriver, errChan, logger)
 	return dcpDriver
 }
 
-func startDcpDriverAysnc(dcpDriver *dcp.DcpDriver, errChan chan error) {
+func startDcpDriverAysnc(dcpDriver *dcp.DcpDriver, errChan chan error, logger *xdcrLog.CommonLogger) {
 	err := dcpDriver.Start()
 	if err != nil {
-		fmt.Printf("Error starting dcp driver %v. err=%v\n", dcpDriver.Name, err)
+		logger.Errorf("Error starting dcp driver %v. err=%v\n", dcpDriver.Name, err)
 		utils.AddToErrorChan(errChan, err)
 	}
 }
@@ -526,4 +528,12 @@ func (differ *xdcrDiffer) retrieveReplicationSpecInfo() error {
 	differ.logger.Infof("Found Remote Cluster: %v and Replication Spec: %v\n", differ.specifiedRef.String(), differ.specifiedSpec.String())
 
 	return nil
+}
+
+func (differ *xdcrDiffer) populateTemporarySpecAndRef() {
+	differ.specifiedSpec, _ = metadata.NewReplicationSpecification(options.sourceBucketName, "", /*sourceBucketUUID*/
+		"" /*targetClusterUUID*/, options.targetBucketName, "" /*targetBucketUUID*/)
+
+	differ.specifiedRef, _ = metadata.NewRemoteClusterReference("" /*uuid*/, "" /*name*/, options.targetUrl, options.targetUsername, options.targetPassword,
+		false /*demandEncryption*/, "" /*encryptionType*/, nil, nil, nil)
 }
