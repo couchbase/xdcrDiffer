@@ -6,12 +6,12 @@ execGo="./main"
 
 function printHelp() {
 cat << EOF
-Usage: $0 -n <username> -p <password> -u <url:port> -r <remoteClusterName> -s <sourceBucket> -t <targetBucket>
+Usage: $0 -n <username> -p <password> -h <hostname:port> -r <remoteClusterName> -s <sourceBucket> -t <targetBucket>
 Example: $0 -n Administrator -p password -u 127.0.0.1:9000
 EOF
 }
 
-while getopts ":u:p:n:r:s:t:" opt; do
+while getopts ":h:p:n:r:s:t:" opt; do
   case ${opt} in
     n )
       username=$OPTARG
@@ -19,8 +19,8 @@ while getopts ":u:p:n:r:s:t:" opt; do
     p )
       password=$OPTARG
       ;;
-    u )
-      url=$OPTARG
+    h )
+      hostname=$OPTARG
       ;;
     r )
       remoteClusterName=$OPTARG
@@ -49,8 +49,8 @@ elif [[ -z "$password" ]];then
 	echo "Missing password"
 	printHelp
 	exit 1
-elif [[ -z "$url" ]];then
-	echo "Missing url"
+elif [[ -z "$hostname" ]];then
+	echo "Missing hostname and port"
 	printHelp
 	exit 1
 elif [[ -z "$sourceBucketName" ]];then
@@ -67,17 +67,9 @@ elif [[ -z "$remoteClusterName" ]];then
 	exit 1
 fi
 
-# separate url and port
-if [[ "$url" =~ (.*):([0-9]+) ]];then
-	echo "URL: $url port: $port"
-else
-	echo "Did not find port in url"
-	exit 1
-fi
-
-export CBAUTH_REVRPC_URL="http://$username:$password@$url"
+export CBAUTH_REVRPC_URL="http://$username:$password@$hostname"
 echo "Exporting $CBAUTH_REVRPC_URL"
 
-$execGo -sourceUrl $hostname:$port -sourceUsername $username -sourcePassword $password -sourceBucketName $sourceBucketName -targetBucketName $targetBucketName -remoteClusterName $remoteClusterName
+$execGo -sourceUrl "$hostname" -sourceUsername $username -sourcePassword $password -sourceBucketName $sourceBucketName -targetBucketName $targetBucketName -remoteClusterName $remoteClusterName
 
 unset CBAUTH_REVRPC_URL

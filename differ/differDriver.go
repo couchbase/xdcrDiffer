@@ -27,13 +27,14 @@ type DifferDriver struct {
 	diffFileDir      string
 	diffKeysFileName string
 	numberOfWorkers  int
-	numberOfBins  int
+	numberOfBins     int
 	waitGroup        *sync.WaitGroup
 	diffKeys         []string
 	stateLock        *sync.RWMutex
 	fileDescPool     *fdp.FdPool
 	vbCompleted      uint32
 	finChan          chan bool
+	stopOnce         sync.Once
 }
 
 func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBins int, numberOfFds int) *DifferDriver {
@@ -48,7 +49,7 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName
 		diffFileDir:      diffFileDir,
 		diffKeysFileName: diffKeysFileName,
 		numberOfWorkers:  numberOfWorkers,
-		numberOfBins:  numberOfBins,
+		numberOfBins:     numberOfBins,
 		waitGroup:        &sync.WaitGroup{},
 		stateLock:        &sync.RWMutex{},
 		fileDescPool:     fdPool,
@@ -76,9 +77,13 @@ func (dr *DifferDriver) Run() error {
 
 	dr.waitGroup.Wait()
 
-	dr.cleanup()
+	dr.Stop()
 
 	return nil
+}
+
+func (dr *DifferDriver) Stop() {
+	dr.stopOnce.Do(func() { dr.cleanup() })
 }
 
 func (dr *DifferDriver) cleanup() {
@@ -141,21 +146,21 @@ type DifferHandler struct {
 	targetFileDir   string
 	vbList          []uint16
 	diffDetailsFile *os.File
-	numberOfBins int
+	numberOfBins    int
 	waitGroup       *sync.WaitGroup
 	fileDescPool    *fdp.FdPool
 }
 
 func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFileDir string, vbList []uint16, numberOfBins int, waitGroup *sync.WaitGroup, fdPool *fdp.FdPool) *DifferHandler {
 	return &DifferHandler{
-		driver:          driver,
-		index:           index,
-		sourceFileDir:   sourceFileDir,
-		targetFileDir:   targetFileDir,
-		vbList:          vbList,
-		numberOfBins: numberOfBins,
-		waitGroup:       waitGroup,
-		fileDescPool:    fdPool,
+		driver:        driver,
+		index:         index,
+		sourceFileDir: sourceFileDir,
+		targetFileDir: targetFileDir,
+		vbList:        vbList,
+		numberOfBins:  numberOfBins,
+		waitGroup:     waitGroup,
+		fileDescPool:  fdPool,
 	}
 }
 
