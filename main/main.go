@@ -309,13 +309,11 @@ func main() {
 		fmt.Printf("Skipping file difftool since it has been disabled\n")
 	}
 
-	/*
-		if options.runMutationDiffer {
-			runMutationDiffer()
-		} else {
-			fmt.Printf("Skipping mutation diff since it has been disabled\n")
-		}
-	*/
+	if options.runMutationDiffer {
+		runMutationDiffer()
+	} else {
+		fmt.Printf("Skipping mutation diff since it has been disabled\n")
+	}
 }
 
 func cleanUpAndSetup() error {
@@ -429,13 +427,13 @@ func runMutationDiffer() {
 		return
 	}
 
-	difftool := differ.NewMutationDiffer(options.sourceUrl, options.sourceBucketName, options.sourceUsername,
+	differ := differ.NewMutationDiffer(options.sourceUrl, options.sourceBucketName, options.sourceUsername,
 		options.sourcePassword, options.targetUrl, options.targetBucketName, options.targetUsername,
 		options.targetPassword, options.fileDifferDir, options.mutationDifferDir, options.inputDiffKeysFileDir,
 		int(options.numberOfWorkersForMutationDiffer), int(options.mutationDifferBatchSize), int(options.mutationDifferTimeout),
 		int(options.maxNumOfSendBatchRetry), time.Duration(options.sendBatchRetryInterval)*time.Millisecond,
 		time.Duration(options.sendBatchMaxBackoff)*time.Second)
-	err = difftool.Run()
+	err = differ.Run()
 	if err != nil {
 		fmt.Printf("Error from runMutationDiffer = %v\n", err)
 	}
