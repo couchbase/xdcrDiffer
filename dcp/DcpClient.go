@@ -12,6 +12,7 @@ package dcp
 import (
 	"fmt"
 	"github.com/couchbase/gocb"
+	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/nelio2k/xdcrDiffer/base"
 	"github.com/nelio2k/xdcrDiffer/utils"
 	gocbcore "gopkg.in/couchbase/gocbcore.v7"
@@ -35,6 +36,7 @@ type DcpClient struct {
 	activeStreams      uint32
 	finChan            chan bool
 	startVbtsDoneChan  chan bool
+	logger             *xdcrLog.CommonLogger
 }
 
 func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.WaitGroup, startVbtsDoneChan chan bool) *DcpClient {
@@ -48,12 +50,13 @@ func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.
 		closeStreamsDoneCh: make(chan bool),
 		finChan:            make(chan bool),
 		startVbtsDoneChan:  startVbtsDoneChan,
+		logger:             dcpDriver.logger,
 	}
 }
 
 func (c *DcpClient) Start() error {
-	fmt.Printf("Dcp client %v starting\n", c.Name)
-	defer fmt.Printf("Dcp client %v started\n", c.Name)
+	c.logger.Infof("Dcp client %v starting\n", c.Name)
+	defer c.logger.Infof("Dcp client %v started\n", c.Name)
 
 	err := c.initialize()
 	if err != nil {
@@ -73,9 +76,9 @@ func (c *DcpClient) reportActiveStreams() {
 		select {
 		case <-ticker.C:
 			activeStreams := atomic.LoadUint32(&c.activeStreams)
-			fmt.Printf("%v active streams=%v\n", c.Name, activeStreams)
+			c.logger.Infof("%v active streams=%v\n", c.Name, activeStreams)
 			if activeStreams == uint32(len(c.vbList)) {
-				fmt.Printf("%v all streams active. Stop reporting\n", c.Name)
+				c.logger.Infof("%v all streams active. Stop reporting\n", c.Name)
 				goto done
 			}
 		case <-c.finChan:
@@ -124,8 +127,8 @@ func (c *DcpClient) closeStreamIfOpen(vbno uint16) {
 }
 
 func (c *DcpClient) Stop() error {
-	fmt.Printf("Dcp client %v stopping\n", c.Name)
-	defer fmt.Printf("Dcp client %v stopped\n", c.Name)
+	c.logger.Infof("Dcp client %v stopping\n", c.Name)
+	defer c.logger.Infof("Dcp client %v stopped\n", c.Name)
 
 	defer c.waitGroup.Done()
 
@@ -145,13 +148,13 @@ func (c *DcpClient) Stop() error {
 	//		fmt.Printf("%v error closing gocb agent. err=%v\n", c.Name, err)
 	//	}
 
-	fmt.Printf("Dcp client %v stopping handlers\n", c.Name)
+	c.logger.Infof("Dcp client %v stopping handlers\n", c.Name)
 	for _, dcpHandler := range c.dcpHandlers {
 		if dcpHandler != nil {
 			dcpHandler.Stop()
 		}
 	}
-	fmt.Printf("Dcp client %v done stopping handlers\n", c.Name)
+	c.logger.Infof("Dcp client %v done stopping handlers\n", c.Name)
 
 	return nil
 }
@@ -159,19 +162,19 @@ func (c *DcpClient) Stop() error {
 func (c *DcpClient) initialize() error {
 	err := c.initializeCluster()
 	if err != nil {
-		fmt.Println("Error initializing cluster")
+		c.logger.Errorf("Error initializing cluster")
 		return err
 	}
 
 	err = c.initializeBucket()
 	if err != nil {
-		fmt.Println("Error initializing bucket")
+		c.logger.Errorf("Error initializing bucket")
 		return err
 	}
 
 	err = c.initializeDcpHandlers()
 	if err != nil {
-		fmt.Println("Error initializing DCP Handlers")
+		c.logger.Errorf("Error initializing DCP Handlers")
 		return err
 	}
 
@@ -181,7 +184,7 @@ func (c *DcpClient) initialize() error {
 func (c *DcpClient) initializeCluster() (err error) {
 	cluster, err := gocb.Connect(c.dcpDriver.url)
 	if err != nil {
-		fmt.Printf("Error connecting to cluster %v. err=%v\n", c.dcpDriver.url, err)
+		c.logger.Errorf("Error connecting to cluster %v. err=%v\n", c.dcpDriver.url, err)
 		return
 	}
 
@@ -192,7 +195,7 @@ func (c *DcpClient) initializeCluster() (err error) {
 		})
 
 		if err != nil {
-			fmt.Printf(err.Error())
+			c.logger.Errorf(err.Error())
 			return
 		}
 	}
@@ -204,7 +207,7 @@ func (c *DcpClient) initializeCluster() (err error) {
 func (c *DcpClient) initializeBucket() (err error) {
 	bucket, err := c.cluster.OpenStreamingBucket(fmt.Sprintf("%v_%v", base.StreamingBucketName, c.Name), c.dcpDriver.bucketName, c.dcpDriver.bucketPassword)
 	if err != nil {
-		fmt.Printf("Error opening streaming bucket. bucket=%v, err=%v\n", c.dcpDriver.bucketName, err)
+		c.logger.Errorf("Error opening streaming bucket. bucket=%v, err=%v\n", c.dcpDriver.bucketName, err)
 	}
 
 	c.bucket = bucket
@@ -224,13 +227,13 @@ func (c *DcpClient) initializeDcpHandlers() error {
 
 		dcpHandler, err := NewDcpHandler(c, c.dcpDriver.fileDir, i, vbList, c.dcpDriver.numberOfBins, c.dcpDriver.dcpHandlerChanSize, c.dcpDriver.fdPool)
 		if err != nil {
-			fmt.Printf("Error constructing dcp handler. err=%v\n", err)
+			c.logger.Errorf("Error constructing dcp handler. err=%v\n", err)
 			return err
 		}
 
 		err = dcpHandler.Start()
 		if err != nil {
-			fmt.Printf("Error starting dcp handler. err=%v\n", err)
+			c.logger.Errorf("Error starting dcp handler. err=%v\n", err)
 			return err
 		}
 
@@ -280,7 +283,7 @@ func (c *DcpClient) openDcpStreams() error {
 
 		_, err := c.bucket.IoRouter().OpenStream(vbno, 0, gocbcore.VbUuid(vbts.Checkpoint.Vbuuid), gocbcore.SeqNo(vbts.Checkpoint.Seqno), gocbcore.SeqNo(math.MaxUint64 /*vbts.EndSeqno*/), gocbcore.SeqNo(snapshotStartSeqno), gocbcore.SeqNo(snapshotEndSeqno), c.vbHandlerMap[vbno], c.openStreamFunc)
 		if err != nil {
-			fmt.Printf("err opening dcp stream for vb %v. err=%v\n", vbno, err)
+			c.logger.Errorf("err opening dcp stream for vb %v. err=%v\n", vbno, err)
 			return err
 		}
 	}
@@ -293,7 +296,7 @@ func (c *DcpClient) closeStream(vbno uint16) error {
 	if c.bucket != nil {
 		_, err = c.bucket.IoRouter().CloseStream(vbno, c.closeStreamFunc)
 		if err != nil {
-			fmt.Printf("%v error stopping dcp stream for vb %v. err=%v\n", c.Name, vbno, err)
+			c.logger.Errorf("%v error stopping dcp stream for vb %v. err=%v\n", c.Name, vbno, err)
 		}
 	}
 	return err
