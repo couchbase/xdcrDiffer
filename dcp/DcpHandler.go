@@ -14,6 +14,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/couchbase/gomemcached"
+	mcc "github.com/couchbase/gomemcached/client"
+	xdcrLog "github.com/couchbase/goxdcr/log"
+	xdcrParts "github.com/couchbase/goxdcr/parts"
 	"github.com/nelio2k/xdcrDiffer/base"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"github.com/nelio2k/xdcrDiffer/utils"
@@ -24,16 +27,18 @@ import (
 
 // implements StreamObserver
 type DcpHandler struct {
-	dcpClient       *DcpClient
-	fileDir         string
-	index           int
-	vbList          []uint16
+	dcpClient    *DcpClient
+	fileDir      string
+	index        int
+	vbList       []uint16
 	numberOfBins int
-	dataChan        chan *Mutation
-	waitGrp         sync.WaitGroup
-	finChan         chan bool
-	bucketMap       map[uint16]map[int]*Bucket
-	fdPool          fdp.FdPoolIface
+	dataChan     chan *Mutation
+	waitGrp      sync.WaitGroup
+	finChan      chan bool
+	bucketMap    map[uint16]map[int]*Bucket
+	fdPool       fdp.FdPoolIface
+	logger       *xdcrLog.CommonLogger
+	filter       xdcrParts.FilterIface
 }
 
 func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface) (*DcpHandler, error) {
@@ -41,15 +46,17 @@ func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uin
 		return nil, fmt.Errorf("vbList is empty for handler %v", index)
 	}
 	return &DcpHandler{
-		dcpClient:       dcpClient,
-		fileDir:         fileDir,
-		index:           index,
-		vbList:          vbList,
+		dcpClient:    dcpClient,
+		fileDir:      fileDir,
+		index:        index,
+		vbList:       vbList,
 		numberOfBins: numberOfBins,
-		dataChan:        make(chan *Mutation, dataChanSize),
-		finChan:         make(chan bool),
-		bucketMap:       make(map[uint16]map[int]*Bucket),
-		fdPool:          fdPool,
+		dataChan:     make(chan *Mutation, dataChanSize),
+		finChan:      make(chan bool),
+		bucketMap:    make(map[uint16]map[int]*Bucket),
+		fdPool:       fdPool,
+		logger:       dcpClient.logger,
+		filter:       dcpClient.dcpDriver.filter,
 	}, nil
 }
 
@@ -78,7 +85,7 @@ func (dh *DcpHandler) initialize() error {
 		innerMap := make(map[int]*Bucket)
 		dh.bucketMap[vbno] = innerMap
 		for i := 0; i < dh.numberOfBins; i++ {
-			bucket, err := NewBucket(dh.fileDir, vbno, i, dh.fdPool)
+			bucket, err := NewBucket(dh.fileDir, vbno, i, dh.fdPool, dh.logger)
 			if err != nil {
 				return err
 			}
@@ -93,13 +100,13 @@ func (dh *DcpHandler) cleanup() {
 	for _, vbno := range dh.vbList {
 		innerMap := dh.bucketMap[vbno]
 		if innerMap == nil {
-			fmt.Printf("Cannot find innerMap for vbno %v at cleanup\n", vbno)
+			dh.logger.Warnf("Cannot find innerMap for vbno %v at cleanup\n", vbno)
 			continue
 		}
 		for i := 0; i < dh.numberOfBins; i++ {
 			bucket := innerMap[i]
 			if bucket == nil {
-				fmt.Printf("Cannot find bucket for vbno %v and index %v at cleanup\n", vbno, i)
+				dh.logger.Warnf("Cannot find bucket for vbno %v and index %v at cleanup\n", vbno, i)
 				continue
 			}
 			//fmt.Printf("%v DcpHandler closing bucket %v\n", dh.dcpClient.Name, i)
@@ -109,8 +116,8 @@ func (dh *DcpHandler) cleanup() {
 }
 
 func (dh *DcpHandler) processData() {
-	fmt.Printf("%v DcpHandler %v processData starts..........\n", dh.dcpClient.Name, dh.index)
-	defer fmt.Printf("%v DcpHandler %v processData exits..........\n", dh.dcpClient.Name, dh.index)
+	dh.logger.Infof("%v DcpHandler %v processData starts..........\n", dh.dcpClient.Name, dh.index)
+	defer dh.logger.Infof("%v DcpHandler %v processData exits..........\n", dh.dcpClient.Name, dh.index)
 	defer dh.waitGrp.Done()
 
 	for {
@@ -125,6 +132,20 @@ done:
 }
 
 func (dh *DcpHandler) processMutation(mut *Mutation) {
+	var matched bool
+	var err error
+	var errStr string
+	if dh.filter != nil {
+		matched, err, errStr, _ = dh.filter.FilterUprEvent(mut.ToUprEvent())
+		if !matched {
+			dh.logger.Infof("NEIL DEBUG filtered: %v\n", string(mut.key))
+		}
+		if err != nil {
+			dh.logger.Warnf("Err %v - (%v) when filtering mutation %v", err, errStr, mut)
+		}
+	}
+
+	// TODO - handle filter counts
 	valid := dh.dcpClient.dcpDriver.checkpointManager.HandleMutationEvent(mut)
 	if !valid {
 		// if mutation is out of range, ignore it
@@ -157,15 +178,15 @@ func (dh *DcpHandler) SnapshotMarker(startSeqno, endSeqno uint64, vbno uint16, s
 }
 
 func (dh *DcpHandler) Mutation(seqno, revId uint64, flags, expiry, lockTime uint32, cas uint64, datatype uint8, vbno uint16, key, value []byte) {
-	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, flags, expiry, gomemcached.UPR_MUTATION, value))
+	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, flags, expiry, gomemcached.UPR_MUTATION, value, datatype))
 }
 
 func (dh *DcpHandler) Deletion(seqno, revId, cas uint64, datatype uint8, vbno uint16, key, value []byte) {
-	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, 0, 0, gomemcached.UPR_DELETION, value))
+	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, 0, 0, gomemcached.UPR_DELETION, value, datatype))
 }
 
 func (dh *DcpHandler) Expiration(seqno, revId, cas uint64, vbno uint16, key []byte) {
-	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, 0, 0, gomemcached.UPR_EXPIRATION, nil))
+	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, 0, 0, gomemcached.UPR_EXPIRATION, nil, 0 /*dataType*/))
 }
 
 func (dh *DcpHandler) End(vbno uint16, err error) {
@@ -181,9 +202,11 @@ type Bucket struct {
 
 	fdPoolCb fdp.FileOp
 	closeOp  func() error
+
+	logger *xdcrLog.CommonLogger
 }
 
-func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool fdp.FdPoolIface) (*Bucket, error) {
+func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool fdp.FdPoolIface, logger *xdcrLog.CommonLogger) (*Bucket, error) {
 	fileName := utils.GetFileName(fileDir, vbno, bucketIndex)
 	var cb fdp.FileOp
 	var closeOp func() error
@@ -211,6 +234,7 @@ func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool fdp.FdPoolIf
 		fileName: fileName,
 		fdPoolCb: cb,
 		closeOp:  closeOp,
+		logger:   logger,
 	}, nil
 }
 
@@ -249,34 +273,35 @@ func (b *Bucket) flushToFile() error {
 func (b *Bucket) close() {
 	err := b.flushToFile()
 	if err != nil {
-		fmt.Printf("Error flushing to file %v at bucket close err=%v\n", b.fileName, err)
+		b.logger.Errorf("Error flushing to file %v at bucket close err=%v\n", b.fileName, err)
 	}
 	if b.fdPoolCb != nil {
 		err = b.closeOp()
 		if err != nil {
-			fmt.Printf("Error closing file %v.  err=%v\n", b.fileName, err)
+			b.logger.Errorf("Error closing file %v.  err=%v\n", b.fileName, err)
 		}
 	} else {
 		err = b.file.Close()
 		if err != nil {
-			fmt.Printf("Error closing file %v.  err=%v\n", b.fileName, err)
+			b.logger.Errorf("Error closing file %v.  err=%v\n", b.fileName, err)
 		}
 	}
 }
 
 type Mutation struct {
-	vbno   uint16
-	key    []byte
-	seqno  uint64
-	revId  uint64
-	cas    uint64
-	flags  uint32
-	expiry uint32
-	opCode gomemcached.CommandCode
-	value  []byte
+	vbno     uint16
+	key      []byte
+	seqno    uint64
+	revId    uint64
+	cas      uint64
+	flags    uint32
+	expiry   uint32
+	opCode   gomemcached.CommandCode
+	value    []byte
+	datatype uint8
 }
 
-func CreateMutation(vbno uint16, key []byte, seqno, revId, cas uint64, flags, expiry uint32, opCode gomemcached.CommandCode, value []byte) *Mutation {
+func CreateMutation(vbno uint16, key []byte, seqno, revId, cas uint64, flags, expiry uint32, opCode gomemcached.CommandCode, value []byte, datatype uint8) *Mutation {
 	return &Mutation{
 		vbno:   vbno,
 		key:    key,
@@ -290,17 +315,35 @@ func CreateMutation(vbno uint16, key []byte, seqno, revId, cas uint64, flags, ex
 	}
 }
 
+func (m *Mutation) ToUprEvent() *mcc.UprEvent {
+	if m == nil {
+		return nil
+	}
+	return &mcc.UprEvent{
+		Opcode:   m.opCode,
+		VBucket:  m.vbno,
+		DataType: m.datatype,
+		Flags:    m.flags,
+		Expiry:   m.expiry,
+		Key:      m.key,
+		Value:    m.value,
+		Cas:      m.cas,
+		Seqno:    m.seqno,
+	}
+}
+
 // serialize mutation into []byte
 // format:
-//  keyLen  - 2 bytes
+//  keyLen   - 2 bytes
 //  key  - length specified by keyLen
-//  seqno   - 8 bytes
-//  revId   - 8 bytes
-//  cas     - 8 bytes
-//  flags   - 4 bytes
-//  expiry  - 4 bytes
-//  opType  - 2 byte
-//  hash    - 64 bytes
+//  seqno    - 8 bytes
+//  revId    - 8 bytes
+//  cas      - 8 bytes
+//  flags    - 4 bytes
+//  expiry   - 4 bytes
+//  opType   - 2 byte
+//  datatype - 2 byte
+//  hash     - 64 bytes
 func serializeMutation(mut *Mutation) []byte {
 	keyLen := len(mut.key)
 	ret := make([]byte, keyLen+base.BodyLength+2)
@@ -322,6 +365,8 @@ func serializeMutation(mut *Mutation) []byte {
 	binary.BigEndian.PutUint32(ret[pos:pos+4], mut.expiry)
 	pos += 4
 	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(mut.opCode))
+	pos += 2
+	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(mut.datatype))
 	pos += 2
 	copy(ret[pos:], bodyHash[:])
 

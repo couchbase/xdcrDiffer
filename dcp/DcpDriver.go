@@ -12,6 +12,7 @@ package dcp
 import (
 	"fmt"
 	xdcrLog "github.com/couchbase/goxdcr/log"
+	xdcrParts "github.com/couchbase/goxdcr/parts"
 	"github.com/nelio2k/xdcrDiffer/base"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"github.com/nelio2k/xdcrDiffer/utils"
@@ -50,6 +51,7 @@ type DcpDriver struct {
 	stateLock sync.RWMutex
 	finChan   chan bool
 	logger    *xdcrLog.CommonLogger
+	filter    xdcrParts.FilterIface
 }
 
 type VBStateWithLock struct {
@@ -77,7 +79,7 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName,
 	newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int,
 	bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration,
 	checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool,
-	fdPool fdp.FdPoolIface) *DcpDriver {
+	fdPool fdp.FdPoolIface, filter xdcrParts.FilterIface) *DcpDriver {
 	dcpDriver := &DcpDriver{
 		Name:               name,
 		url:                url,
@@ -100,6 +102,7 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName,
 		finChan:            make(chan bool),
 		startVbtsDoneChan:  make(chan bool),
 		logger:             logger,
+		filter:             filter,
 	}
 
 	var vbno uint16
@@ -111,7 +114,7 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName,
 
 	dcpDriver.checkpointManager = NewCheckpointManager(dcpDriver, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, name, bucketOpTimeout, maxNumOfGetStatsRetry,
-		getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval, dcpDriver.startVbtsDoneChan)
+		getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval, dcpDriver.startVbtsDoneChan, logger)
 
 	if !strings.HasPrefix(dcpDriver.url, "http") {
 		dcpDriver.url = fmt.Sprintf("http://%v", dcpDriver.url)

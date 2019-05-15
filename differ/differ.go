@@ -67,13 +67,14 @@ type oneEntry struct {
 	Cas      uint64
 	Flags    uint32
 	Expiry   uint32
-	opCode   gomemcached.CommandCode
+	OpCode   gomemcached.CommandCode
+	Datatype uint8
 	BodyHash [sha512.Size]byte
 }
 
 func (oneEntry *oneEntry) String() string {
-	return fmt.Sprintf("<Key>: %v <Seqno>: %v <RevId>: %v <Cas>: %v <Flags>: %v <Expiry>: %v <OpCode>: %v <Hash>: %s",
-		oneEntry.Key, oneEntry.Seqno, oneEntry.RevId, oneEntry.Cas, oneEntry.Flags, oneEntry.Expiry, oneEntry.opCode, hex.EncodeToString(oneEntry.BodyHash[:]))
+	return fmt.Sprintf("<Key>: %v <Seqno>: %v <RevId>: %v <Cas>: %v <Flags>: %v <Expiry>: %v <OpCode>: %v <DataType>: %v <Hash>: %s",
+		oneEntry.Key, oneEntry.Seqno, oneEntry.RevId, oneEntry.Cas, oneEntry.Flags, oneEntry.Expiry, oneEntry.OpCode, oneEntry.Datatype, hex.EncodeToString(oneEntry.BodyHash[:]))
 }
 
 type entryPair [2]*oneEntry
@@ -102,9 +103,9 @@ func (entry oneEntry) Diff(other oneEntry) (int, bool) {
 		} else {
 			return -1, false
 		}
-	} else if entry.opCode != other.opCode {
+	} else if entry.OpCode != other.OpCode {
 		return 0, false
-	} else if entry.opCode == gomemcached.UPR_MUTATION {
+	} else if entry.OpCode == gomemcached.UPR_MUTATION {
 		if entry.RevId != other.RevId {
 			return 0, false
 		} else if entry.Cas != other.Cas {
@@ -112,6 +113,8 @@ func (entry oneEntry) Diff(other oneEntry) (int, bool) {
 		} else if entry.Flags != other.Flags {
 			return 0, false
 		} else if !shaCompare(entry.BodyHash, other.BodyHash) {
+			return 0, false
+		} else if entry.Datatype != other.Datatype {
 			return 0, false
 		}
 	}
@@ -206,7 +209,14 @@ func getOneEntry(readOp fdp.FileOp) (*oneEntry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read opCodeBytes, bytes read: %v, err: %v", bytesRead, err)
 	}
-	entry.opCode = gomemcached.CommandCode(binary.BigEndian.Uint16(opCodeBytes))
+	entry.OpCode = gomemcached.CommandCode(binary.BigEndian.Uint16(opCodeBytes))
+
+	dataTypeBytes := make([]byte, 2)
+	bytesRead, err = readOp(dataTypeBytes)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to read dataTypeBytes, bytes read: %v, err: %v", bytesRead, err)
+	}
+	entry.Datatype = uint8(binary.BigEndian.Uint16(dataTypeBytes))
 
 	hashBytes := make([]byte, sha512.Size)
 	bytesRead, err = readOp(hashBytes)
