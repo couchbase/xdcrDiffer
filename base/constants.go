@@ -57,17 +57,26 @@ const DelayBetweenSourceAndTarget uint64 = 2
 const CheckpointInterval = 600
 
 // length of mutation metadata + body, which consists of
-//  seqno   - 8 bytes
-//  revId   - 8 bytes
-//  cas     - 8 bytes
-//  flags   - 4 bytes
-//  expiry  - 4 bytes
-//  opCode  - 2 bytes
-//  hash    - 64 bytes
-const BodyLength = 98
+//  seqno    - 8 bytes
+//  revId    - 8 bytes
+//  cas      - 8 bytes
+//  flags    - 4 bytes
+//  expiry   - 4 bytes
+//  opCode   - 2 bytes
+//  datatype - 2 byte
+//  hash     - 64 bytes
+const BodyLength = 100
 
 var VersionForRBACSupport = []int{5, 0}
 
 var ClusterCompatibilityKey = "clusterCompatibility"
 var ClusterMembershipKey = "clusterMembership"
 var ClusterMembership_Active = "active"
+
+type FilterResultType int
+
+const (
+	NoFilter       FilterResultType = iota
+	Filtered       FilterResultType = iota
+	UnableToFilter FilterResultType = iota
+)

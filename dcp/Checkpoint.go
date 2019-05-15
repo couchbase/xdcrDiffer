@@ -7,6 +7,8 @@ type Checkpoint struct {
 	Seqno              uint64
 	SnapshotStartSeqno uint64
 	SnapshotEndSeqno   uint64
+	FilteredCnt        uint64
+	FailedFilterCnt    uint64
 }
 
 // vbucket timestamp required by dcp
@@ -14,7 +16,7 @@ type VBTS struct {
 	Checkpoint *Checkpoint
 	EndSeqno   uint64
 	// whether a dcp stream needs to be started
-	NoNeedToStartDcpStream  bool
+	NoNeedToStartDcpStream bool
 }
 
 type CheckpointDoc struct {

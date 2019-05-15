@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/couchbase/gocb"
+	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/nelio2k/xdcrDiffer/base"
 	"github.com/nelio2k/xdcrDiffer/utils"
+	"github.com/rcrowley/go-metrics"
 	"io/ioutil"
 	"math"
 	"os"
@@ -24,6 +26,8 @@ type CheckpointManager struct {
 	seqnoMap              map[uint16]*SeqnoWithLock
 	snapshots             map[uint16]*Snapshot
 	endSeqnoMap           map[uint16]uint64
+	filteredCnt           map[uint16]metrics.Counter
+	failedFilterCnt       map[uint16]metrics.Counter
 	finChan               chan bool
 	// channel to signal the completion of start vbts computation
 	startVbtsDoneChan     chan bool
@@ -34,11 +38,12 @@ type CheckpointManager struct {
 	checkpointInterval    int
 	started               bool
 	stateLock             sync.RWMutex
+	logger                *xdcrLog.CommonLogger
 }
 
 func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, clusterName string,
 	bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration,
-	checkpointInterval int, startVbtsDoneChan chan bool) *CheckpointManager {
+	checkpointInterval int, startVbtsDoneChan chan bool, logger *xdcrLog.CommonLogger) *CheckpointManager {
 	cm := &CheckpointManager{
 		dcpDriver:             dcpDriver,
 		clusterName:           clusterName,
@@ -47,12 +52,15 @@ func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpoint
 		snapshots:             make(map[uint16]*Snapshot),
 		finChan:               make(chan bool),
 		endSeqnoMap:           make(map[uint16]uint64),
+		filteredCnt:           make(map[uint16]metrics.Counter),
+		failedFilterCnt:       make(map[uint16]metrics.Counter),
 		bucketOpTimeout:       bucketOpTimeout,
 		maxNumOfGetStatsRetry: maxNumOfGetStatsRetry,
 		getStatsRetryInterval: getStatsRetryInterval,
 		getStatsMaxBackoff:    getStatsMaxBackoff,
 		checkpointInterval:    checkpointInterval,
 		startVbtsDoneChan:     startVbtsDoneChan,
+		logger:                logger,
 	}
 
 	if checkpointFileDir != "" {
@@ -69,6 +77,8 @@ func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpoint
 	for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
 		cm.seqnoMap[vbno] = &SeqnoWithLock{}
 		cm.snapshots[vbno] = &Snapshot{}
+		cm.filteredCnt[vbno] = metrics.NewCounter()
+		cm.failedFilterCnt[vbno] = metrics.NewCounter()
 	}
 
 	return cm
@@ -104,13 +114,13 @@ func (cm *CheckpointManager) isStarted() bool {
 }
 
 func (cm *CheckpointManager) Stop() error {
-	fmt.Printf("CheckpointManager stopping\n")
-	defer fmt.Printf("CheckpointManager stopped\n")
+	cm.logger.Infof("CheckpointManager stopping\n")
+	defer cm.logger.Infof("CheckpointManager stopped\n")
 
 	if cm.isStarted() {
 		err := cm.SaveCheckpoint()
 		if err != nil {
-			fmt.Printf("%v error saving checkpoint. err=%v\n", cm.clusterName, err)
+			cm.logger.Errorf("%v error saving checkpoint. err=%v\n", cm.clusterName, err)
 		}
 	}
 
@@ -120,7 +130,7 @@ func (cm *CheckpointManager) Stop() error {
 }
 
 func (cm *CheckpointManager) periodicalCheckpointing() {
-	fmt.Printf("%v starting periodical checkpointing routine\n", cm.clusterName)
+	cm.logger.Infof("%v starting periodical checkpointing routine\n", cm.clusterName)
 
 	ticker := time.NewTicker(time.Duration(cm.checkpointInterval) * time.Second)
 	defer ticker.Stop()
@@ -144,7 +154,7 @@ func (cm *CheckpointManager) checkpointOnce(iter int) error {
 	checkpointFileName := cm.newCheckpointFileName + base.FileNameDelimiter + fmt.Sprintf("%v", iter)
 	err := cm.saveCheckpoint(checkpointFileName)
 	if err != nil {
-		fmt.Printf("%v error saving checkpoint %v. err=%v\n", cm.clusterName, checkpointFileName, err)
+		cm.logger.Errorf("%v error saving checkpoint %v. err=%v\n", cm.clusterName, checkpointFileName, err)
 	}
 	return err
 }
@@ -168,13 +178,19 @@ func (cm *CheckpointManager) reportStatus() {
 func (cm *CheckpointManager) reportStatusOnce(prevSum uint64) uint64 {
 	var vbno uint16
 	var sum uint64
+	var filtered int64
+	var failedFilter int64
 	for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
 		sum += cm.seqnoMap[vbno].getSeqno()
+		filtered += cm.filteredCnt[vbno].Count()
+		failedFilter += cm.failedFilterCnt[vbno].Count()
 	}
 	if prevSum != math.MaxUint64 {
-		fmt.Printf("%v %v processed %v mutations. processing rate=%v mutation/second\n", time.Now(), cm.clusterName, sum, (sum-prevSum)/base.StatsReportInterval)
+		cm.logger.Infof("%v %v processed %v mutations, filtered %v mutations, %v failed filtering. processing rate=%v mutation/second\n",
+			time.Now(), cm.clusterName, sum, filtered, failedFilter, (sum-prevSum)/base.StatsReportInterval)
 	} else {
-		fmt.Printf("%v %v processed %v mutations.\n", time.Now(), cm.clusterName, sum)
+		cm.logger.Infof("%v %v processed %v mutations, filtered %v mutations, %v failed filtering.\n",
+			time.Now(), cm.clusterName, sum, filtered, failedFilter)
 	}
 	return sum
 }
@@ -190,7 +206,7 @@ func (cm *CheckpointManager) initialize() error {
 		return err
 	}
 
-	fmt.Printf("%v endSeqno map retrieved.\n", cm.clusterName)
+	cm.logger.Infof("%v endSeqno map retrieved.\n", cm.clusterName)
 
 	return cm.setStartVBTS()
 }
@@ -198,7 +214,7 @@ func (cm *CheckpointManager) initialize() error {
 func (cm *CheckpointManager) initializeCluster() error {
 	cluster, err := gocb.Connect(cm.dcpDriver.url)
 	if err != nil {
-		fmt.Printf("%v error connecting to cluster %v. err=%v\n", cm.clusterName, cm.dcpDriver.url, err)
+		cm.logger.Errorf("%v error connecting to cluster %v. err=%v\n", cm.clusterName, cm.dcpDriver.url, err)
 		return err
 	}
 
@@ -209,7 +225,7 @@ func (cm *CheckpointManager) initializeCluster() error {
 		})
 
 		if err != nil {
-			fmt.Printf("%v error authenticating cluster. err=%v\n", cm.clusterName, err)
+			cm.logger.Errorf("%v error authenticating cluster. err=%v\n", cm.clusterName, err)
 			return err
 		}
 	}
@@ -222,7 +238,7 @@ func (cm *CheckpointManager) initializeCluster() error {
 func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() error {
 	statsBucket, err := cm.cluster.OpenBucket(cm.dcpDriver.bucketName, cm.dcpDriver.bucketPassword)
 	if err != nil {
-		fmt.Printf("%v error opening bucket. err=%v\n", cm.clusterName, err)
+		cm.logger.Errorf("%v error opening bucket. err=%v\n", cm.clusterName, err)
 		return err
 	}
 	defer statsBucket.Close()
@@ -246,7 +262,7 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() error {
 	for _, seqno := range endSeqnoMap {
 		sum += seqno
 	}
-	fmt.Printf("%v total docs=%v\n", cm.clusterName, sum)
+	cm.logger.Infof("%v total docs=%v\n", cm.clusterName, sum)
 
 	cm.vbuuidMap = vbuuidMap
 
@@ -305,6 +321,9 @@ func (cm *CheckpointManager) setStartVBTS() error {
 			cm.seqnoMap[vbno].setSeqno(checkpoint.Seqno)
 			sum += checkpoint.Seqno
 
+			// Resume previous counters
+			cm.filteredCnt[vbno].Inc(int64(checkpoint.FilteredCnt))
+			cm.failedFilterCnt[vbno].Inc(int64(checkpoint.FailedFilterCnt))
 		}
 	} else {
 		var vbno uint16
@@ -317,7 +336,7 @@ func (cm *CheckpointManager) setStartVBTS() error {
 		}
 	}
 
-	fmt.Printf("%v starting from %v\n", cm.clusterName, sum)
+	cm.logger.Infof("%v starting from %v\n", cm.clusterName, sum)
 
 	close(cm.startVbtsDoneChan)
 
@@ -331,14 +350,14 @@ func (cm *CheckpointManager) GetStartVBTS(vbno uint16) *VBTS {
 func (cm *CheckpointManager) loadCheckpoints() (*CheckpointDoc, error) {
 	checkpointFileBytes, err := ioutil.ReadFile(cm.oldCheckpointFileName)
 	if err != nil {
-		fmt.Printf("Error opening checkpoint file. err=%v\n", err)
+		cm.logger.Errorf("Error opening checkpoint file. err=%v\n", err)
 		return nil, err
 	}
 
 	checkpointDoc := &CheckpointDoc{}
 	err = json.Unmarshal(checkpointFileBytes, checkpointDoc)
 	if err != nil {
-		fmt.Printf("Error unmarshalling checkpoint file. err=%v\n", err)
+		cm.logger.Errorf("Error unmarshalling checkpoint file. err=%v\n", err)
 		return nil, err
 	}
 
@@ -352,15 +371,15 @@ func (cm *CheckpointManager) loadCheckpoints() (*CheckpointDoc, error) {
 func (cm *CheckpointManager) SaveCheckpoint() error {
 	if cm.newCheckpointFileName == "" {
 		// checkpointing disabled
-		fmt.Printf("Skipping checkpointing for %v since checkpointing has been disabled\n", cm.clusterName)
+		cm.logger.Infof("Skipping checkpointing for %v since checkpointing has been disabled\n", cm.clusterName)
 		return nil
 	}
 	return cm.saveCheckpoint(cm.newCheckpointFileName)
 }
 
 func (cm *CheckpointManager) saveCheckpoint(checkpointFileName string) error {
-	fmt.Printf("%v starting to save checkpoint %v\n", cm.clusterName, checkpointFileName)
-	defer fmt.Printf("%v completed saving checkpoint %v\n", cm.clusterName, checkpointFileName)
+	cm.logger.Infof("%v starting to save checkpoint %v\n", cm.clusterName, checkpointFileName)
+	defer cm.logger.Infof("%v completed saving checkpoint %v\n", cm.clusterName, checkpointFileName)
 
 	// delete existing file if exists
 	os.Remove(checkpointFileName)
@@ -371,12 +390,18 @@ func (cm *CheckpointManager) saveCheckpoint(checkpointFileName string) error {
 
 	var vbno uint16
 	var total uint64
+	var totalFiltered uint64
+	var totalFailedFilter uint64
 	for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
 		vbuuid := cm.vbuuidMap[vbno]
 		seqno := cm.seqnoMap[vbno].getSeqno()
 		total += seqno
 		var snapshotStartSeqno uint64
 		var snapshotEndSeqno uint64
+		filteredCnt := uint64(cm.filteredCnt[vbno].Count())
+		totalFiltered += filteredCnt
+		failedFilterCnt := uint64(cm.failedFilterCnt[vbno].Count())
+		totalFailedFilter += failedFilterCnt
 
 		curStartVBTS := cm.startVBTS[vbno].Checkpoint
 		if seqno != curStartVBTS.Seqno {
@@ -391,6 +416,8 @@ func (cm *CheckpointManager) saveCheckpoint(checkpointFileName string) error {
 			Seqno:              seqno,
 			SnapshotStartSeqno: snapshotStartSeqno,
 			SnapshotEndSeqno:   snapshotEndSeqno,
+			FilteredCnt:        filteredCnt,
+			FailedFilterCnt:    failedFilterCnt,
 		}
 	}
 
@@ -414,16 +441,30 @@ func (cm *CheckpointManager) saveCheckpoint(checkpointFileName string) error {
 		return fmt.Errorf("Incomplete write. expected=%v, actual=%v", len(value), numOfBytes)
 	}
 
-	fmt.Printf("----------------------------------------------------------------\n")
-	fmt.Printf("%v saved checkpoints to %v. totalMutationsChecked=%v\n", cm.clusterName, checkpointFileName, total)
+	cm.logger.Infof("----------------------------------------------------------------\n")
+	cm.logger.Infof("%v saved checkpoints to %v. totalMutationsChecked=%v filtered=%v filterErr=%v\n",
+		cm.clusterName, checkpointFileName, total, totalFiltered, totalFailedFilter)
 	return nil
+}
+
+// Returns false if mutation is filtered (should not be recorded into bucket)
+func (cm *CheckpointManager) RecordFilterEvent(vbno uint16, filterResult base.FilterResultType) bool {
+	switch filterResult {
+	case base.Filtered:
+		cm.filteredCnt[vbno].Inc(1)
+		return false
+	case base.UnableToFilter:
+		cm.failedFilterCnt[vbno].Inc(1)
+		return false
+	}
+	return true
 }
 
 // no need to lock seqoMap since
 // 1. MutationProcessedEvent on a vbno are serialized
 // 2. checkpointManager reads seqnoMap when it saves checkpoints.
 //    This is done after all DcpHandlers are stopped and MutationProcessedEvent cease to happen
-func (cm *CheckpointManager) HandleMutationEvent(mut *Mutation) bool {
+func (cm *CheckpointManager) HandleMutationEvent(mut *Mutation, filterResult base.FilterResultType) bool {
 	if cm.dcpDriver.completeBySeqno {
 		endSeqno := cm.endSeqnoMap[mut.vbno]
 		if mut.seqno >= endSeqno {
@@ -431,13 +472,13 @@ func (cm *CheckpointManager) HandleMutationEvent(mut *Mutation) bool {
 		}
 		if mut.seqno <= endSeqno {
 			cm.seqnoMap[mut.vbno].setSeqno(mut.seqno)
-			return true
+			return cm.RecordFilterEvent(mut.vbno, filterResult)
 		} else {
 			return false
 		}
 	} else {
 		cm.seqnoMap[mut.vbno].setSeqno(mut.seqno)
-		return true
+		return cm.RecordFilterEvent(mut.vbno, filterResult)
 	}
 }
 

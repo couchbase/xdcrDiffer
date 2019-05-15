@@ -12,9 +12,11 @@ package main
 import (
 	"flag"
 	"fmt"
+	xdcrBase "github.com/couchbase/goxdcr/base"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/couchbase/goxdcr/metadata"
 	"github.com/couchbase/goxdcr/metadata_svc"
+	xdcrParts "github.com/couchbase/goxdcr/parts"
 	"github.com/couchbase/goxdcr/service_def"
 	service_def_mock "github.com/couchbase/goxdcr/service_def/mocks"
 	xdcrUtils "github.com/couchbase/goxdcr/utils"
@@ -232,20 +234,18 @@ type xdcrDiffTool struct {
 
 	specifiedRef  *metadata.RemoteClusterReference
 	specifiedSpec *metadata.ReplicationSpecification
+	filter        xdcrParts.FilterIface
 
 	sourceDcpDriver *dcp.DcpDriver
 	targetDcpDriver *dcp.DcpDriver
 
 	curState difftoolState
-	// finch - to interrupt one at a time
-	//	generateDataFinch chan bool
 }
 
 func NewDiffTool() *xdcrDiffTool {
 
 	difftool := &xdcrDiffTool{
 		utils: xdcrUtils.NewUtilities(),
-		//		generateDataFinch: make(chan bool),
 	}
 	difftool.metadataSvc, _ = metadata_svc.NewMetaKVMetadataSvc(nil, difftool.utils)
 
@@ -310,7 +310,7 @@ func main() {
 	}
 
 	if options.runMutationDiffer {
-		runMutationDiffer()
+		difftool.runMutationDiffer()
 	} else {
 		fmt.Printf("Skipping mutation diff since it has been disabled\n")
 	}
@@ -319,7 +319,7 @@ func main() {
 func cleanUpAndSetup() error {
 	err := os.MkdirAll(options.sourceFileDir, 0777)
 	if err != nil {
-		fmt.Printf("Error mkdir targetFileDir: %v\n", err)
+		fmt.Printf("Error mkdir sourceFileDir: %v\n", err)
 	}
 	err = os.MkdirAll(options.targetFileDir, 0777)
 	if err != nil {
@@ -331,6 +331,29 @@ func cleanUpAndSetup() error {
 		fmt.Printf("Error mkdir checkpointFileDir: %v\n", err)
 	}
 	return nil
+}
+
+func (difftool *xdcrDiffTool) createFilterIfNecessary() error {
+	var ok bool
+	var expr string
+	if expr, ok = difftool.specifiedSpec.Settings.Values[metadata.FilterExpressionKey].(string); !ok {
+		return nil
+	}
+
+	var filterVersion xdcrBase.FilterVersionType
+	if filterVersion, ok = difftool.specifiedSpec.Settings.Values[metadata.FilterVersionKey].(xdcrBase.FilterVersionType); !ok {
+		err := fmt.Errorf("Unable to find filter version given filter expression %v\nsettings:%v\n", expr, difftool.specifiedSpec.Settings)
+		return err
+	}
+
+	if filterVersion == xdcrBase.FilterVersionKeyOnly {
+		expr = xdcrBase.UpgradeFilter(expr)
+	}
+	difftool.logger.Infof("Found filtering expression: %v\n", expr)
+
+	filter, err := xdcrParts.NewFilter("XDCRDiffToolFilter", expr, difftool.utils)
+	difftool.filter = filter
+	return err
 }
 
 func (difftool *xdcrDiffTool) generateDataFiles() error {
@@ -357,13 +380,18 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		fileDescPool = fdp.NewFileDescriptorPool(int(options.numberOfFileDesc))
 	}
 
+	if err := difftool.createFilterIfNecessary(); err != nil {
+		difftool.logger.Errorf("Error creating filter: %v", err.Error())
+		os.Exit(1)
+	}
+
 	difftool.logger.Infof("Starting source dcp clients on %v\n", options.sourceUrl)
 	difftool.sourceDcpDriver = startDcpDriver(difftool.logger, base.SourceClusterName, options.sourceUrl, difftool.specifiedSpec.SourceBucketName,
 		options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir,
 		options.oldSourceCheckpointFileName, options.newCheckpointFileName, options.numberOfSourceDcpClients,
 		options.numberOfWorkersPerSourceDcpClient, options.numberOfBins, options.sourceDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
-		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool)
+		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter)
 
 	delayDurationBetweenSourceAndTarget := time.Duration(options.delayBetweenSourceAndTarget) * time.Second
 	difftool.logger.Infof("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
@@ -375,7 +403,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.oldTargetCheckpointFileName, options.newCheckpointFileName, options.numberOfTargetDcpClients,
 		options.numberOfWorkersPerTargetDcpClient, options.numberOfBins, options.targetDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
-		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool)
+		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter)
 
 	difftool.curState.mtx.Lock()
 	difftool.curState.state = dcpDriving
@@ -383,21 +411,21 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 
 	var err error
 	if options.completeBySeqno {
-		err = waitForCompletion(difftool.sourceDcpDriver, difftool.targetDcpDriver, errChan, waitGroup)
+		err = difftool.waitForCompletion(difftool.sourceDcpDriver, difftool.targetDcpDriver, errChan, waitGroup)
 	} else {
-		err = waitForDuration(difftool.sourceDcpDriver, difftool.targetDcpDriver, errChan, options.completeByDuration, delayDurationBetweenSourceAndTarget)
+		err = difftool.waitForDuration(difftool.sourceDcpDriver, difftool.targetDcpDriver, errChan, options.completeByDuration, delayDurationBetweenSourceAndTarget)
 	}
 
 	return err
 }
 
 func (difftool *xdcrDiffTool) diffDataFiles() error {
-	fmt.Printf("DiffDataFiles routine started\n")
-	defer fmt.Printf("DiffDataFiles routine completed\n")
+	difftool.logger.Infof("DiffDataFiles routine started\n")
+	defer difftool.logger.Infof("DiffDataFiles routine completed\n")
 
 	err := os.RemoveAll(options.fileDifferDir)
 	if err != nil {
-		fmt.Printf("Error removing fileDifferDir: %v\n", err)
+		difftool.logger.Errorf("Error removing fileDifferDir: %v\n", err)
 	}
 	err = os.MkdirAll(options.fileDifferDir, 0777)
 	if err != nil {
@@ -407,19 +435,19 @@ func (difftool *xdcrDiffTool) diffDataFiles() error {
 	difftoolDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.fileDifferDir, base.DiffKeysFileName, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBins), int(options.numberOfFileDesc))
 	err = difftoolDriver.Run()
 	if err != nil {
-		fmt.Printf("Error from diffDataFiles = %v\n", err)
+		difftool.logger.Errorf("Error from diffDataFiles = %v\n", err)
 	}
 
 	return err
 }
 
-func runMutationDiffer() {
-	fmt.Printf("runMutationDiffer started\n")
-	defer fmt.Printf("runMutationDiffer completed\n")
+func (difftool *xdcrDiffTool) runMutationDiffer() {
+	difftool.logger.Infof("runMutationDiffer started\n")
+	defer difftool.logger.Infof("runMutationDiffer completed\n")
 
 	err := os.RemoveAll(options.mutationDifferDir)
 	if err != nil {
-		fmt.Printf("Error removing mutationDifferDir: %v\n", err)
+		difftool.logger.Errorf("Error removing mutationDifferDir: %v\n", err)
 	}
 	err = os.MkdirAll(options.mutationDifferDir, 0777)
 	if err != nil {
@@ -427,15 +455,15 @@ func runMutationDiffer() {
 		return
 	}
 
-	differ := differ.NewMutationDiffer(options.sourceUrl, options.sourceBucketName, options.sourceUsername,
-		options.sourcePassword, options.targetUrl, options.targetBucketName, options.targetUsername,
-		options.targetPassword, options.fileDifferDir, options.mutationDifferDir, options.inputDiffKeysFileDir,
+	mutationDiffer := differ.NewMutationDiffer(options.sourceUrl, difftool.specifiedSpec.SourceBucketName, options.sourceUsername,
+		options.sourcePassword, difftool.specifiedRef.HostName_, difftool.specifiedSpec.TargetBucketName, difftool.specifiedRef.UserName_,
+		difftool.specifiedRef.Password_, options.fileDifferDir, options.mutationDifferDir, options.inputDiffKeysFileDir,
 		int(options.numberOfWorkersForMutationDiffer), int(options.mutationDifferBatchSize), int(options.mutationDifferTimeout),
 		int(options.maxNumOfSendBatchRetry), time.Duration(options.sendBatchRetryInterval)*time.Millisecond,
-		time.Duration(options.sendBatchMaxBackoff)*time.Second)
-	err = differ.Run()
+		time.Duration(options.sendBatchMaxBackoff)*time.Second, difftool.logger)
+	err = mutationDiffer.Run()
 	if err != nil {
-		fmt.Printf("Error from runMutationDiffer = %v\n", err)
+		difftool.logger.Errorf("Error from runMutationDiffer = %v\n", err)
 	}
 }
 
@@ -443,13 +471,13 @@ func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userNam
 	newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins,
 	dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff,
 	checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool,
-	fdPool fdp.FdPoolIface) *dcp.DcpDriver {
+	fdPool fdp.FdPoolIface, filter xdcrParts.FilterIface) *dcp.DcpDriver {
 	waitGroup.Add(1)
 	dcpDriver := dcp.NewDcpDriver(logger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBins),
 		int(dcpHandlerChanSize), time.Duration(bucketOpTimeout)*time.Second, int(maxNumOfGetStatsRetry),
 		time.Duration(getStatsRetryInterval)*time.Second, time.Duration(getStatsMaxBackoff)*time.Second,
-		int(checkpointInterval), errChan, waitGroup, completeBySeqno, fdPool)
+		int(checkpointInterval), errChan, waitGroup, completeBySeqno, fdPool, filter)
 	// dcp driver startup may take some time. Do it asynchronously
 	go startDcpDriverAysnc(dcpDriver, errChan, logger)
 	return dcpDriver
@@ -463,50 +491,50 @@ func startDcpDriverAysnc(dcpDriver *dcp.DcpDriver, errChan chan error, logger *x
 	}
 }
 
-func waitForCompletion(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan chan error, waitGroup *sync.WaitGroup) error {
+func (difftool *xdcrDiffTool) waitForCompletion(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan chan error, waitGroup *sync.WaitGroup) error {
 	doneChan := make(chan bool, 1)
 	go utils.WaitForWaitGroup(waitGroup, doneChan)
 
 	select {
 	case err := <-errChan:
-		fmt.Printf("Stop diff generation due to error from dcp client %v\n", err)
+		difftool.logger.Errorf("Stop diff generation due to error from dcp client %v\n", err)
 		err1 := sourceDcpDriver.Stop()
 		if err1 != nil {
-			fmt.Printf("Error stopping source dcp client. err=%v\n", err1)
+			difftool.logger.Errorf("Error stopping source dcp client. err=%v\n", err1)
 		}
 		err1 = targetDcpDriver.Stop()
 		if err1 != nil {
-			fmt.Printf("Error stopping target dcp client. err=%v\n", err1)
+			difftool.logger.Errorf("Error stopping target dcp client. err=%v\n", err1)
 		}
 		return err
 	case <-doneChan:
-		fmt.Printf("Source cluster and target cluster have completed\n")
+		difftool.logger.Infof("Source cluster and target cluster have completed\n")
 		return nil
 	}
 
 	return nil
 }
 
-func waitForDuration(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan chan error, duration uint64, delayDurationBetweenSourceAndTarget time.Duration) (err error) {
+func (difftool *xdcrDiffTool) waitForDuration(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan chan error, duration uint64, delayDurationBetweenSourceAndTarget time.Duration) (err error) {
 	timer := time.NewTimer(time.Duration(duration) * time.Second)
 
 	select {
 	case err = <-errChan:
-		fmt.Printf("Stop diff generation due to error from dcp client %v\n", err)
+		difftool.logger.Errorf("Stop diff generation due to error from dcp client %v\n", err)
 	case <-timer.C:
-		fmt.Printf("Stop diff generation after specified processing duration\n")
+		difftool.logger.Infof("Stop diff generation after specified processing duration\n")
 	}
 
 	err1 := sourceDcpDriver.Stop()
 	if err1 != nil {
-		fmt.Printf("Error stopping source dcp client. err=%v\n", err1)
+		difftool.logger.Errorf("Error stopping source dcp client. err=%v\n", err1)
 	}
 
 	time.Sleep(delayDurationBetweenSourceAndTarget)
 
 	err1 = targetDcpDriver.Stop()
 	if err1 != nil {
-		fmt.Printf("Error stopping target dcp client. err=%v\n", err1)
+		difftool.logger.Errorf("Error stopping target dcp client. err=%v\n", err1)
 	}
 
 	return err
