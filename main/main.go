@@ -13,18 +13,22 @@ import (
 	"flag"
 	"fmt"
 	xdcrBase "github.com/couchbase/goxdcr/base"
+	common_mock "github.com/couchbase/goxdcr/common/mocks"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/couchbase/goxdcr/metadata"
 	"github.com/couchbase/goxdcr/metadata_svc"
 	xdcrParts "github.com/couchbase/goxdcr/parts"
+	"github.com/couchbase/goxdcr/pipeline_svc"
 	"github.com/couchbase/goxdcr/service_def"
 	service_def_mock "github.com/couchbase/goxdcr/service_def/mocks"
+	"github.com/couchbase/goxdcr/service_impl"
 	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"github.com/nelio2k/xdcrDiffer/base"
 	"github.com/nelio2k/xdcrDiffer/dcp"
 	"github.com/nelio2k/xdcrDiffer/differ"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"github.com/nelio2k/xdcrDiffer/utils"
+	mock "github.com/stretchr/testify/mock"
 	"os"
 	"os/signal"
 	"strings"
@@ -236,33 +240,43 @@ type xdcrDiffTool struct {
 	specifiedSpec *metadata.ReplicationSpecification
 	filter        xdcrParts.FilterIface
 
+	statsMgr pipeline_svc.StatsMgrIface
+
 	sourceDcpDriver *dcp.DcpDriver
 	targetDcpDriver *dcp.DcpDriver
 
 	curState difftoolState
-	// finch - to interrupt one at a time
-	//	generateDataFinch chan bool
+
+	// Mocks
+	uiLogSvcMock     *service_def_mock.UILogSvc
+	xdcrTopologyMock *service_def_mock.XDCRCompTopologySvc
+	clusterInfoSvc   *service_impl.ClusterInfoSvc
+	seqnoTrackerSvc  *service_def_mock.ThroughSeqnoTrackerSvc
+	pipelineMock     *common_mock.Pipeline
+	runtimeCtx       *common_mock.PipelineRuntimeContext
 }
 
 func NewDiffTool() *xdcrDiffTool {
-
 	difftool := &xdcrDiffTool{
-		utils: xdcrUtils.NewUtilities(),
-		//		generateDataFinch: make(chan bool),
+		utils:            xdcrUtils.NewUtilities(),
+		uiLogSvcMock:     &service_def_mock.UILogSvc{},
+		xdcrTopologyMock: &service_def_mock.XDCRCompTopologySvc{},
+		seqnoTrackerSvc:  &service_def_mock.ThroughSeqnoTrackerSvc{},
+		pipelineMock:     &common_mock.Pipeline{},
+		runtimeCtx:       &common_mock.PipelineRuntimeContext{},
 	}
 	difftool.metadataSvc, _ = metadata_svc.NewMetaKVMetadataSvc(nil, difftool.utils)
 
-	uiLogSvcMock := &service_def_mock.UILogSvc{}
-	xdcrTopologyMock := &service_def_mock.XDCRCompTopologySvc{}
-	clusterInfoSvcMock := &service_def_mock.ClusterInfoSvc{}
-
 	difftool.logger = xdcrLog.NewLogger("xdcrDiffTool", nil)
 
-	difftool.remoteClusterSvc, _ = metadata_svc.NewRemoteClusterService(uiLogSvcMock, difftool.metadataSvc, xdcrTopologyMock,
-		clusterInfoSvcMock, xdcrLog.DefaultLoggerContext, difftool.utils)
+	difftool.setupXDCRCompTopologyMock()
+	difftool.clusterInfoSvc = service_impl.NewClusterInfoSvc(nil, difftool.utils)
 
-	difftool.replicationSpecSvc, _ = metadata_svc.NewReplicationSpecService(uiLogSvcMock, difftool.remoteClusterSvc,
-		difftool.metadataSvc, xdcrTopologyMock, clusterInfoSvcMock,
+	difftool.remoteClusterSvc, _ = metadata_svc.NewRemoteClusterService(difftool.uiLogSvcMock, difftool.metadataSvc, difftool.xdcrTopologyMock,
+		difftool.clusterInfoSvc, xdcrLog.DefaultLoggerContext, difftool.utils)
+
+	difftool.replicationSpecSvc, _ = metadata_svc.NewReplicationSpecService(difftool.uiLogSvcMock, difftool.remoteClusterSvc,
+		difftool.metadataSvc, difftool.xdcrTopologyMock, difftool.clusterInfoSvc,
 		nil, difftool.utils)
 
 	// Capture any Ctrl-C for continuing to next steps or cleanup
@@ -293,13 +307,20 @@ func main() {
 	}
 
 	if options.runDataGeneration {
-		err := difftool.generateDataFiles()
+		difftool.logger.Infof("Starting stats mgr")
+		err := difftool.startStatsMgr()
+		difftool.logger.Infof("Done Starting stats mgr")
 		if err != nil {
-			fmt.Printf("Error generating data files. err=%v\n", err)
+			difftool.logger.Errorf("Error starting statsMgr. err=%v\n", err)
+			os.Exit(1)
+		}
+		//		err := difftool.generateDataFiles()
+		if err != nil {
+			difftool.logger.Errorf("Error generating data files. err=%v\n", err)
 			os.Exit(1)
 		}
 	} else {
-		fmt.Printf("Skipping  generating data files since it has been disabled\n")
+		difftool.logger.Warnf("Skipping  generating data files since it has been disabled\n")
 	}
 
 	if options.runFileDiffer {
@@ -593,6 +614,57 @@ func (difftool *xdcrDiffTool) populateTemporarySpecAndRef() {
 
 	difftool.specifiedRef, _ = metadata.NewRemoteClusterReference("" /*uuid*/, "" /*name*/, options.targetUrl, options.targetUsername, options.targetPassword,
 		false /*demandEncryption*/, "" /*encryptionType*/, nil, nil, nil)
+
+}
+
+func (difftool *xdcrDiffTool) setupStatsMgrMocks() {
+	difftool.setupContextMocks()
+	difftool.setupPipelineMock()
+}
+
+func (difftool *xdcrDiffTool) setupContextMocks() {
+	difftool.runtimeCtx.On("Service", "CheckpointManager").Return(nil)
+}
+
+func (difftool *xdcrDiffTool) setupXDCRCompTopologyMock() {
+	difftool.xdcrTopologyMock.On("MyConnectionStr").Return(options.sourceUrl, nil)
+	difftool.xdcrTopologyMock.On("MyCredentials").Return(options.sourceUsername, options.sourcePassword, xdcrBase.HttpAuthMechPlain, nil, false, nil, nil, nil)
+}
+
+func (difftool *xdcrDiffTool) setupPipelineMock() {
+	difftool.pipelineMock.On("Specification").Return(difftool.specifiedSpec)
+	difftool.pipelineMock.On("Topic").Return("XdcrDifftoolTopic")
+	// Diff tool doesn't have any out nozzles
+	difftool.pipelineMock.On("Targets").Return(nil)
+	// TODO
+	difftool.pipelineMock.On("GetAsyncListenerMap").Return(nil)
+	difftool.pipelineMock.On("Sources").Return(nil)
+	difftool.pipelineMock.On("SetAsyncListenerMap", mock.Anything).Return(nil)
+	difftool.pipelineMock.On("RuntimeContext").Return(difftool.runtimeCtx)
+	difftool.pipelineMock.On("InstanceId").Return("XdcrDifftoolInstance")
+}
+
+func (difftool *xdcrDiffTool) startStatsMgr() error {
+	// Assuming running on a data node
+	kv_vb_map, err := difftool.clusterInfoSvc.GetLocalServerVBucketsMap(difftool.xdcrTopologyMock, difftool.specifiedSpec.SourceBucketName)
+	if err != nil {
+		return err
+	}
+
+	difftool.statsMgr = pipeline_svc.NewStatisticsManager(difftool.seqnoTrackerSvc, difftool.clusterInfoSvc, difftool.xdcrTopologyMock, nil,
+		kv_vb_map, difftool.specifiedSpec.SourceBucketName, difftool.utils)
+
+	// various settings needed for statsMgr
+	settingsMap := make(metadata.ReplicationSettingsMap)
+	settingsMap[pipeline_svc.PUBLISH_INTERVAL] = difftool.specifiedSpec.Settings.Values[metadata.PipelineStatsIntervalKey]
+
+	difftool.setupStatsMgrMocks()
+	err = difftool.statsMgr.Attach(difftool.pipelineMock)
+	if err != nil {
+		return err
+	}
+
+	return difftool.statsMgr.Start(settingsMap)
 }
 
 func (difftool *xdcrDiffTool) monitorInterruptSignal() {

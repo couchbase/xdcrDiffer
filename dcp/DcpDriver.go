@@ -13,6 +13,7 @@ import (
 	"fmt"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	xdcrParts "github.com/couchbase/goxdcr/parts"
+	"github.com/couchbase/goxdcr/pipeline_svc"
 	"github.com/nelio2k/xdcrDiffer/base"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"github.com/nelio2k/xdcrDiffer/utils"
@@ -52,6 +53,8 @@ type DcpDriver struct {
 	finChan   chan bool
 	logger    *xdcrLog.CommonLogger
 	filter    xdcrParts.FilterIface
+
+	statsMgr pipeline_svc.StatsMgrIface
 }
 
 type VBStateWithLock struct {
