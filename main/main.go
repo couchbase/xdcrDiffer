@@ -13,11 +13,14 @@ import (
 	"flag"
 	"fmt"
 	xdcrBase "github.com/couchbase/goxdcr/base"
+	"github.com/couchbase/goxdcr/common"
 	common_mock "github.com/couchbase/goxdcr/common/mocks"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/couchbase/goxdcr/metadata"
 	"github.com/couchbase/goxdcr/metadata_svc"
 	xdcrParts "github.com/couchbase/goxdcr/parts"
+	"github.com/couchbase/goxdcr/pipeline"
+	pipeline_manager "github.com/couchbase/goxdcr/pipeline_manager/mocks"
 	"github.com/couchbase/goxdcr/pipeline_svc"
 	"github.com/couchbase/goxdcr/service_def"
 	service_def_mock "github.com/couchbase/goxdcr/service_def/mocks"
@@ -235,6 +238,7 @@ type xdcrDiffTool struct {
 	remoteClusterSvc   service_def.RemoteClusterSvc
 	replicationSpecSvc service_def.ReplicationSpecSvc
 	logger             *xdcrLog.CommonLogger
+	throughSeqSvc      service_def.ThroughSeqnoTrackerSvc
 
 	specifiedRef  *metadata.RemoteClusterReference
 	specifiedSpec *metadata.ReplicationSpecification
@@ -247,23 +251,36 @@ type xdcrDiffTool struct {
 
 	curState difftoolState
 
+	replicationStatus *pipeline.ReplicationStatus
+
 	// Mocks
-	uiLogSvcMock     *service_def_mock.UILogSvc
-	xdcrTopologyMock *service_def_mock.XDCRCompTopologySvc
-	clusterInfoSvc   *service_impl.ClusterInfoSvc
-	seqnoTrackerSvc  *service_def_mock.ThroughSeqnoTrackerSvc
-	pipelineMock     *common_mock.Pipeline
-	runtimeCtx       *common_mock.PipelineRuntimeContext
+	uiLogSvcMock                *service_def_mock.UILogSvc
+	xdcrTopologyMock            *service_def_mock.XDCRCompTopologySvc
+	clusterInfoSvc              *service_impl.ClusterInfoSvc
+	pipelineMock                *common_mock.Pipeline
+	runtimeCtx                  *common_mock.PipelineRuntimeContext
+	sourceNozzle                *common_mock.Nozzle
+	asyncComponentEventListener *common_mock.AsyncComponentEventListener
+	listenerMap                 map[string]common.AsyncComponentEventListener
+	routerListenerMap           map[string]common.AsyncComponentEventListener
+	connector                   *common_mock.Connector
+	pipelineMgr                 *pipeline_manager.Pipeline_mgr_iface
 }
 
 func NewDiffTool() *xdcrDiffTool {
 	difftool := &xdcrDiffTool{
-		utils:            xdcrUtils.NewUtilities(),
-		uiLogSvcMock:     &service_def_mock.UILogSvc{},
-		xdcrTopologyMock: &service_def_mock.XDCRCompTopologySvc{},
-		seqnoTrackerSvc:  &service_def_mock.ThroughSeqnoTrackerSvc{},
-		pipelineMock:     &common_mock.Pipeline{},
-		runtimeCtx:       &common_mock.PipelineRuntimeContext{},
+		utils:                       xdcrUtils.NewUtilities(),
+		uiLogSvcMock:                &service_def_mock.UILogSvc{},
+		xdcrTopologyMock:            &service_def_mock.XDCRCompTopologySvc{},
+		pipelineMock:                &common_mock.Pipeline{},
+		runtimeCtx:                  &common_mock.PipelineRuntimeContext{},
+		sourceNozzle:                &common_mock.Nozzle{},
+		asyncComponentEventListener: &common_mock.AsyncComponentEventListener{},
+		listenerMap:                 make(map[string]common.AsyncComponentEventListener),
+		routerListenerMap:           make(map[string]common.AsyncComponentEventListener),
+		connector:                   &common_mock.Connector{},
+		pipelineMgr:                 &pipeline_manager.Pipeline_mgr_iface{},
+		replicationStatus:           &pipeline.ReplicationStatus{},
 	}
 	difftool.metadataSvc, _ = metadata_svc.NewMetaKVMetadataSvc(nil, difftool.utils)
 
@@ -278,6 +295,8 @@ func NewDiffTool() *xdcrDiffTool {
 	difftool.replicationSpecSvc, _ = metadata_svc.NewReplicationSpecService(difftool.uiLogSvcMock, difftool.remoteClusterSvc,
 		difftool.metadataSvc, difftool.xdcrTopologyMock, difftool.clusterInfoSvc,
 		nil, difftool.utils)
+
+	difftool.throughSeqSvc = service_impl.NewThroughSeqnoTrackerSvc(nil)
 
 	// Capture any Ctrl-C for continuing to next steps or cleanup
 	go difftool.monitorInterruptSignal()
@@ -307,14 +326,12 @@ func main() {
 	}
 
 	if options.runDataGeneration {
-		difftool.logger.Infof("Starting stats mgr")
 		err := difftool.startStatsMgr()
-		difftool.logger.Infof("Done Starting stats mgr")
 		if err != nil {
 			difftool.logger.Errorf("Error starting statsMgr. err=%v\n", err)
 			os.Exit(1)
 		}
-		//		err := difftool.generateDataFiles()
+		err = difftool.generateDataFiles()
 		if err != nil {
 			difftool.logger.Errorf("Error generating data files. err=%v\n", err)
 			os.Exit(1)
@@ -619,11 +636,39 @@ func (difftool *xdcrDiffTool) populateTemporarySpecAndRef() {
 
 func (difftool *xdcrDiffTool) setupStatsMgrMocks() {
 	difftool.setupContextMocks()
+	difftool.setupConnectorMocks()
+	difftool.setupNozzleMocks()
 	difftool.setupPipelineMock()
+	difftool.setupPipelineMgr()
+}
+
+func (difftool *xdcrDiffTool) setupPipelineMgr() {
+	difftool.pipelineMgr.On("ReplicationStatus", mock.Anything).Return(difftool.replicationStatus, nil)
 }
 
 func (difftool *xdcrDiffTool) setupContextMocks() {
 	difftool.runtimeCtx.On("Service", "CheckpointManager").Return(nil)
+}
+
+func (difftool *xdcrDiffTool) setupConnectorMocks() {
+	difftool.connector.On("Id").Return(base.ConnectorPartId)
+	difftool.connector.On("AsyncComponentEventListeners").Return(difftool.routerListenerMap)
+	difftool.connector.On("DownStreams").Return(nil)
+}
+
+func (difftool *xdcrDiffTool) setupNozzleMocks() {
+	// Single nozzle part (even though we have multiple DcpClients) taking care of DCPs
+	var vbList []uint16
+	for i := 0; i < base.NumberOfVbuckets; i++ {
+		vbList = append(vbList, uint16(i))
+	}
+	difftool.sourceNozzle.On("ResponsibleVBs").Return(vbList)
+	difftool.sourceNozzle.On("Id").Return(base.SourceNozzlePartId)
+	difftool.sourceNozzle.On("AsyncComponentEventListeners").Return(difftool.listenerMap)
+	difftool.sourceNozzle.On("Connector").Return(difftool.connector)
+	difftool.sourceNozzle.On("RegisterComponentEventListener", mock.Anything, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+		fmt.Printf("NEIL DEBUG got dcp: %v\n", args.Get(1))
+	})
 }
 
 func (difftool *xdcrDiffTool) setupXDCRCompTopologyMock() {
@@ -634,14 +679,18 @@ func (difftool *xdcrDiffTool) setupXDCRCompTopologyMock() {
 func (difftool *xdcrDiffTool) setupPipelineMock() {
 	difftool.pipelineMock.On("Specification").Return(difftool.specifiedSpec)
 	difftool.pipelineMock.On("Topic").Return("XdcrDifftoolTopic")
+	sourceMap := make(map[string]common.Nozzle)
+	sourceMap[base.SourceNozzlePartId] = difftool.sourceNozzle
+	difftool.pipelineMock.On("Sources").Return(sourceMap)
 	// Diff tool doesn't have any out nozzles
 	difftool.pipelineMock.On("Targets").Return(nil)
 	// TODO
 	difftool.pipelineMock.On("GetAsyncListenerMap").Return(nil)
-	difftool.pipelineMock.On("Sources").Return(nil)
 	difftool.pipelineMock.On("SetAsyncListenerMap", mock.Anything).Return(nil)
 	difftool.pipelineMock.On("RuntimeContext").Return(difftool.runtimeCtx)
 	difftool.pipelineMock.On("InstanceId").Return("XdcrDifftoolInstance")
+	difftool.pipelineMock.On("State").Return(common.Pipeline_Running)
+	difftool.pipelineMock.On("Settings").Return(nil)
 }
 
 func (difftool *xdcrDiffTool) startStatsMgr() error {
@@ -651,8 +700,8 @@ func (difftool *xdcrDiffTool) startStatsMgr() error {
 		return err
 	}
 
-	difftool.statsMgr = pipeline_svc.NewStatisticsManager(difftool.seqnoTrackerSvc, difftool.clusterInfoSvc, difftool.xdcrTopologyMock, nil,
-		kv_vb_map, difftool.specifiedSpec.SourceBucketName, difftool.utils)
+	difftool.statsMgr = pipeline_svc.NewStatisticsManager(difftool.throughSeqSvc, difftool.clusterInfoSvc, difftool.xdcrTopologyMock, nil,
+		kv_vb_map, difftool.specifiedSpec.SourceBucketName, difftool.utils, difftool.pipelineMgr)
 
 	// various settings needed for statsMgr
 	settingsMap := make(metadata.ReplicationSettingsMap)

@@ -72,3 +72,6 @@ var VersionForRBACSupport = []int{5, 0}
 var ClusterCompatibilityKey = "clusterCompatibility"
 var ClusterMembershipKey = "clusterMembership"
 var ClusterMembership_Active = "active"
+
+var SourceNozzlePartId = "xdcrDifftoolSourceNozzle"
+var ConnectorPartId = "xdcrDifftoolRouter"
