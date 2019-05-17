@@ -454,7 +454,6 @@ func (d *DcpDriver) startStatsMgr() error {
 	// Make it a long time
 	settingsMap[pipeline_svc.PUBLISH_INTERVAL] = 30000
 	settingsMap[pipeline_svc.XDCRDIFFTOOL_BYPASS_CLIENT] = true
-	//	settingsMap[pipeline_svc.PUBLISH_INTERVAL] = d.specifiedSpec.Settings.Values[metadata.PipelineStatsIntervalKey]
 
 	d.setupStatsMgrMocks()
 	err = d.statsMgr.Attach(d.pipelineMock)
