@@ -667,7 +667,7 @@ func (difftool *xdcrDiffTool) setupNozzleMocks() {
 	difftool.sourceNozzle.On("AsyncComponentEventListeners").Return(difftool.listenerMap)
 	difftool.sourceNozzle.On("Connector").Return(difftool.connector)
 	difftool.sourceNozzle.On("RegisterComponentEventListener", mock.Anything, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
-		fmt.Printf("NEIL DEBUG got dcp: %v\n", args.Get(1))
+		fmt.Printf("NEIL DEBUG dcp got: %v - %v\n", args.Get(0), args.Get(1))
 	})
 }
 
