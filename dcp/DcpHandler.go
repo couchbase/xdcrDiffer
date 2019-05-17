@@ -138,7 +138,7 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 	if dh.filter != nil {
 		matched, err, errStr, _ = dh.filter.FilterUprEvent(mut.ToUprEvent())
 		if !matched {
-			dh.logger.Infof("NEIL DEBUG filtered: %v\n", string(mut.key))
+			dh.logger.Infof("filtered: %v\n", string(mut.key))
 		}
 		if err != nil {
 			dh.logger.Warnf("Err %v - (%v) when filtering mutation %v", err, errStr, mut)
