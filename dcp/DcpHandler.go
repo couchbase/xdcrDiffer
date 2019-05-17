@@ -116,8 +116,8 @@ func (dh *DcpHandler) cleanup() {
 }
 
 func (dh *DcpHandler) processData() {
-	dh.logger.Infof("%v DcpHandler %v processData starts..........\n", dh.dcpClient.Name, dh.index)
-	defer dh.logger.Infof("%v DcpHandler %v processData exits..........\n", dh.dcpClient.Name, dh.index)
+	dh.logger.Debugf("%v DcpHandler %v processData starts..........\n", dh.dcpClient.Name, dh.index)
+	defer dh.logger.Debugf("%v DcpHandler %v processData exits..........\n", dh.dcpClient.Name, dh.index)
 	defer dh.waitGrp.Done()
 
 	for {

@@ -12,14 +12,11 @@ package main
 import (
 	"fmt"
 	xdcrBase "github.com/couchbase/goxdcr/base"
-	"github.com/couchbase/goxdcr/common"
-	common_mock "github.com/couchbase/goxdcr/common/mocks"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/couchbase/goxdcr/metadata"
 	"github.com/couchbase/goxdcr/metadata_svc"
 	xdcrParts "github.com/couchbase/goxdcr/parts"
 	"github.com/couchbase/goxdcr/pipeline"
-	pipeline_manager "github.com/couchbase/goxdcr/pipeline_manager/mocks"
 	"github.com/couchbase/goxdcr/pipeline_svc"
 	"github.com/couchbase/goxdcr/service_def"
 	service_def_mock "github.com/couchbase/goxdcr/service_def/mocks"
@@ -30,7 +27,6 @@ import (
 	"github.com/nelio2k/xdcrDiffer/differ"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"github.com/nelio2k/xdcrDiffer/utils"
-	mock "github.com/stretchr/testify/mock"
 	"os"
 	"os/signal"
 	"strings"
@@ -60,12 +56,13 @@ type xdcrDiffTool struct {
 	throughSeqSvc      service_def.ThroughSeqnoTrackerSvc
 
 	// XDCR related
-	specifiedRef      *metadata.RemoteClusterReference
-	specifiedSpec     *metadata.ReplicationSpecification
-	filter            xdcrParts.FilterIface
-	statsMgr          pipeline_svc.StatsMgrIface
-	replicationStatus *pipeline.ReplicationStatus
-	eventHandlers     map[string]common.AsyncComponentEventHandler
+	specifiedRef           *metadata.RemoteClusterReference
+	specifiedSpec          *metadata.ReplicationSpecification
+	filter                 xdcrParts.FilterIface
+	statsMgr               pipeline_svc.StatsMgrIface
+	replicationStatus      *pipeline.ReplicationStatus
+	targetXdcrTopologyMock *service_def_mock.XDCRCompTopologySvc
+	clusterInfoSvc         *service_impl.ClusterInfoSvc
 
 	sourceDcpDriver *dcp.DcpDriver
 	targetDcpDriver *dcp.DcpDriver
@@ -75,40 +72,21 @@ type xdcrDiffTool struct {
 	// Mocks
 	uiLogSvcMock     *service_def_mock.UILogSvc
 	xdcrTopologyMock *service_def_mock.XDCRCompTopologySvc
-	clusterInfoSvc   *service_impl.ClusterInfoSvc
-	pipelineMock     *common_mock.Pipeline
-	runtimeCtx       *common_mock.PipelineRuntimeContext
-	sourceNozzle     *common_mock.Nozzle
-	dcpListener      *common_mock.AsyncComponentEventListener
-	routerListener   *common_mock.AsyncComponentEventListener
-	listenerMap      map[string]common.AsyncComponentEventListener
-	connector        *common_mock.Connector
-	pipelineMgr      *pipeline_manager.Pipeline_mgr_iface
 }
 
 func NewDiffTool() *xdcrDiffTool {
 	difftool := &xdcrDiffTool{
-		utils:             xdcrUtils.NewUtilities(),
-		uiLogSvcMock:      &service_def_mock.UILogSvc{},
-		xdcrTopologyMock:  &service_def_mock.XDCRCompTopologySvc{},
-		pipelineMock:      &common_mock.Pipeline{},
-		runtimeCtx:        &common_mock.PipelineRuntimeContext{},
-		sourceNozzle:      &common_mock.Nozzle{},
-		dcpListener:       &common_mock.AsyncComponentEventListener{},
-		routerListener:    &common_mock.AsyncComponentEventListener{},
-		listenerMap:       make(map[string]common.AsyncComponentEventListener),
-		eventHandlers:     make(map[string]common.AsyncComponentEventHandler),
-		connector:         &common_mock.Connector{},
-		pipelineMgr:       &pipeline_manager.Pipeline_mgr_iface{},
-		replicationStatus: &pipeline.ReplicationStatus{},
+		utils:                  xdcrUtils.NewUtilities(),
+		uiLogSvcMock:           &service_def_mock.UILogSvc{},
+		xdcrTopologyMock:       &service_def_mock.XDCRCompTopologySvc{},
+		targetXdcrTopologyMock: &service_def_mock.XDCRCompTopologySvc{},
+		replicationStatus:      &pipeline.ReplicationStatus{},
 	}
 	difftool.metadataSvc, _ = metadata_svc.NewMetaKVMetadataSvc(nil, difftool.utils)
 
 	difftool.logger = xdcrLog.NewLogger("xdcrDiffTool", nil)
 
-	difftool.setupXDCRCompTopologyMock()
 	difftool.clusterInfoSvc = service_impl.NewClusterInfoSvc(nil, difftool.utils)
-
 	difftool.remoteClusterSvc, _ = metadata_svc.NewRemoteClusterService(difftool.uiLogSvcMock, difftool.metadataSvc, difftool.xdcrTopologyMock,
 		difftool.clusterInfoSvc, xdcrLog.DefaultLoggerContext, difftool.utils)
 
@@ -121,6 +99,7 @@ func NewDiffTool() *xdcrDiffTool {
 	// Capture any Ctrl-C for continuing to next steps or cleanup
 	go difftool.monitorInterruptSignal()
 
+	difftool.retrieveReplicationSpecInfo()
 	return difftool
 }
 
@@ -182,7 +161,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.numberOfWorkersPerSourceDcpClient, options.numberOfBins, options.sourceDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
-		difftool.eventHandlers, difftool.statsMgr)
+		difftool.xdcrTopologyMock, difftool.specifiedSpec, difftool.clusterInfoSvc)
 
 	delayDurationBetweenSourceAndTarget := time.Duration(options.delayBetweenSourceAndTarget) * time.Second
 	difftool.logger.Infof("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
@@ -195,7 +174,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.numberOfWorkersPerTargetDcpClient, options.numberOfBins, options.targetDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
-		difftool.eventHandlers, difftool.statsMgr)
+		difftool.targetXdcrTopologyMock, difftool.specifiedSpec /*TODO REVERSE*/, difftool.clusterInfoSvc)
 
 	difftool.curState.mtx.Lock()
 	difftool.curState.state = dcpDriving
@@ -263,14 +242,15 @@ func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userNam
 	newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins,
 	dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff,
 	checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool,
-	fdPool fdp.FdPoolIface, filter xdcrParts.FilterIface, eventHandlers map[string]common.AsyncComponentEventHandler,
-	statsMgr pipeline_svc.StatsMgrIface) *dcp.DcpDriver {
+	fdPool fdp.FdPoolIface, filter xdcrParts.FilterIface, xdcrTopology service_def.XDCRCompTopologySvc, spec *metadata.ReplicationSpecification,
+	clusterInfoSvc service_def.ClusterInfoSvc) *dcp.DcpDriver {
 	waitGroup.Add(1)
 	dcpDriver := dcp.NewDcpDriver(logger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBins),
 		int(dcpHandlerChanSize), time.Duration(bucketOpTimeout)*time.Second, int(maxNumOfGetStatsRetry),
 		time.Duration(getStatsRetryInterval)*time.Second, time.Duration(getStatsMaxBackoff)*time.Second,
-		int(checkpointInterval), errChan, waitGroup, completeBySeqno, fdPool, filter, eventHandlers, statsMgr)
+		int(checkpointInterval), errChan, waitGroup, completeBySeqno, fdPool, filter, xdcrTopology, spec,
+		clusterInfoSvc)
 	// dcp driver startup may take some time. Do it asynchronously
 	go startDcpDriverAysnc(dcpDriver, errChan, logger)
 	return dcpDriver
@@ -387,112 +367,6 @@ func (difftool *xdcrDiffTool) populateTemporarySpecAndRef() {
 
 }
 
-func (difftool *xdcrDiffTool) setupStatsMgrMocks() {
-	difftool.setupContextMocks()
-	difftool.setupAsyncComponentHandler()
-	difftool.setupConnectorMocks()
-	difftool.setupNozzleMocks()
-	difftool.setupPipelineMock()
-	difftool.setupPipelineMgr()
-}
-
-func (difftool *xdcrDiffTool) setupPipelineMgr() {
-	difftool.pipelineMgr.On("ReplicationStatus", mock.Anything).Return(difftool.replicationStatus, nil)
-}
-
-func (difftool *xdcrDiffTool) setupContextMocks() {
-	difftool.runtimeCtx.On("Service", mock.Anything).Return(nil)
-}
-
-func (difftool *xdcrDiffTool) setupConnectorMocks() {
-	difftool.connector.On("Id").Return(base.ConnectorPartId)
-	difftool.connector.On("AsyncComponentEventListeners").Return(difftool.listenerMap)
-	difftool.connector.On("DownStreams").Return(nil)
-}
-
-func (difftool *xdcrDiffTool) setupAsyncComponentHandler() {
-	difftool.dcpListener.On("RegisterComponentEventHandler", mock.Anything).Return(nil).Run(func(args mock.Arguments) {
-		handler := args.Get(0).(common.AsyncComponentEventHandler)
-		difftool.logger.Infof("Received register event for dcp collector: %v\n", handler.Id())
-		difftool.eventHandlers[handler.Id()] = handler
-	})
-
-	difftool.routerListener.On("RegisterComponentEventHandler", mock.Anything).Return(nil).Run(func(args mock.Arguments) {
-		handler := args.Get(0).(common.AsyncComponentEventHandler)
-		difftool.logger.Infof("Received register event for router collector: %v\n", handler.Id())
-		difftool.eventHandlers[handler.Id()] = handler
-	})
-
-	difftool.dcpListener.On("PrintStatusSummary").Return(nil)
-	difftool.routerListener.On("PrintStatusSummary").Return(nil)
-}
-
-func (difftool *xdcrDiffTool) setupNozzleMocks() {
-	// Single nozzle part (even though we have multiple DcpClients) taking care of DCPs
-	var vbList []uint16
-	for i := 0; i < base.NumberOfVbuckets; i++ {
-		vbList = append(vbList, uint16(i))
-	}
-	difftool.sourceNozzle.On("ResponsibleVBs").Return(vbList)
-	difftool.sourceNozzle.On("Id").Return(base.SourceNozzlePartId)
-
-	difftool.listenerMap["1_DataReceivedEventListener_something"] = difftool.dcpListener
-	difftool.listenerMap["2_DataFilteredEventListener_something"] = difftool.routerListener
-	difftool.sourceNozzle.On("AsyncComponentEventListeners").Return(difftool.listenerMap)
-	difftool.sourceNozzle.On("Connector").Return(difftool.connector)
-	difftool.sourceNozzle.On("RegisterComponentEventListener", mock.Anything, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
-		difftool.logger.Debugf("dcp got: %v - %v\n", args.Get(0), args.Get(1))
-	})
-	difftool.sourceNozzle.On("PrintStatusSummary").Return(nil)
-}
-
-func (difftool *xdcrDiffTool) setupXDCRCompTopologyMock() {
-	difftool.xdcrTopologyMock.On("MyConnectionStr").Return(options.sourceUrl, nil)
-	difftool.xdcrTopologyMock.On("MyCredentials").Return(options.sourceUsername, options.sourcePassword, xdcrBase.HttpAuthMechPlain, nil, false, nil, nil, nil)
-}
-
-func (difftool *xdcrDiffTool) setupPipelineMock() {
-	difftool.pipelineMock.On("Specification").Return(difftool.specifiedSpec)
-	difftool.pipelineMock.On("Topic").Return("XdcrDifftoolTopic")
-	sourceMap := make(map[string]common.Nozzle)
-	sourceMap[base.SourceNozzlePartId] = difftool.sourceNozzle
-	difftool.pipelineMock.On("Sources").Return(sourceMap)
-	// Diff tool doesn't have any out nozzles
-	difftool.pipelineMock.On("Targets").Return(nil)
-	// TODO
-	difftool.pipelineMock.On("GetAsyncListenerMap").Return(nil)
-	difftool.pipelineMock.On("SetAsyncListenerMap", mock.Anything).Return(nil)
-	difftool.pipelineMock.On("RuntimeContext").Return(difftool.runtimeCtx)
-	difftool.pipelineMock.On("InstanceId").Return("XdcrDifftoolInstance")
-	difftool.pipelineMock.On("State").Return(common.Pipeline_Running)
-	difftool.pipelineMock.On("Settings").Return(nil)
-}
-
-func (difftool *xdcrDiffTool) startStatsMgr() error {
-	// Assuming running on a data node
-	kv_vb_map, err := difftool.clusterInfoSvc.GetLocalServerVBucketsMap(difftool.xdcrTopologyMock, difftool.specifiedSpec.SourceBucketName)
-	if err != nil {
-		return err
-	}
-
-	difftool.statsMgr = pipeline_svc.NewStatisticsManager(difftool.throughSeqSvc, difftool.clusterInfoSvc, difftool.xdcrTopologyMock, nil,
-		kv_vb_map, difftool.specifiedSpec.SourceBucketName, difftool.utils, difftool.pipelineMgr)
-
-	// various settings needed for statsMgr
-	settingsMap := make(metadata.ReplicationSettingsMap)
-	// Make it a long time
-	settingsMap[pipeline_svc.PUBLISH_INTERVAL] = 30000
-	//	settingsMap[pipeline_svc.PUBLISH_INTERVAL] = difftool.specifiedSpec.Settings.Values[metadata.PipelineStatsIntervalKey]
-
-	difftool.setupStatsMgrMocks()
-	err = difftool.statsMgr.Attach(difftool.pipelineMock)
-	if err != nil {
-		return err
-	}
-
-	return difftool.statsMgr.Start(settingsMap)
-}
-
 func (difftool *xdcrDiffTool) monitorInterruptSignal() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
@@ -515,4 +389,14 @@ func (difftool *xdcrDiffTool) monitorInterruptSignal() {
 			}
 		}
 	}()
+}
+
+func (d *xdcrDiffTool) setupXDCRCompTopologyMock() {
+	d.xdcrTopologyMock.On("MyConnectionStr").Return(options.sourceUrl, nil)
+	d.xdcrTopologyMock.On("MyCredentials").Return(options.sourceUsername, options.sourcePassword, xdcrBase.HttpAuthMechPlain, nil, false, nil, nil, nil)
+	d.logger.Infof("Local XDCR Topology returns url: %v username: %v pw: %v\n", options.sourceUrl, options.sourceUsername, options.sourcePassword)
+
+	d.targetXdcrTopologyMock.On("MyConnectionStr").Return(d.specifiedRef.HostName(), nil)
+	d.targetXdcrTopologyMock.On("MyCredentials").Return(d.specifiedRef.UserName(), d.specifiedRef.Password(), xdcrBase.HttpAuthMechPlain, nil, false, nil, nil, nil)
+	d.logger.Infof("Target XDCR Topology returns url: %v username: %v pw: %v\n", d.specifiedRef.HostName(), d.specifiedRef.UserName(), d.specifiedRef.Password())
 }

@@ -209,14 +209,15 @@ func main() {
 	} else {
 		difftool.populateTemporarySpecAndRef()
 	}
+	difftool.setupXDCRCompTopologyMock()
 
 	if options.runDataGeneration {
-		err := difftool.startStatsMgr()
-		if err != nil {
-			difftool.logger.Errorf("Error starting statsMgr. err=%v\n", err)
-			os.Exit(1)
-		}
-		err = difftool.generateDataFiles()
+		//		err := difftool.startStatsMgr()
+		//		if err != nil {
+		//			difftool.logger.Errorf("Error starting statsMgr. err=%v\n", err)
+		//			os.Exit(1)
+		//		}
+		err := difftool.generateDataFiles()
 		if err != nil {
 			difftool.logger.Errorf("Error generating data files. err=%v\n", err)
 			os.Exit(1)

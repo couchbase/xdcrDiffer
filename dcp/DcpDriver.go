@@ -12,12 +12,20 @@ package dcp
 import (
 	"fmt"
 	"github.com/couchbase/goxdcr/common"
+	common_mock "github.com/couchbase/goxdcr/common/mocks"
 	xdcrLog "github.com/couchbase/goxdcr/log"
+	"github.com/couchbase/goxdcr/metadata"
 	xdcrParts "github.com/couchbase/goxdcr/parts"
+	"github.com/couchbase/goxdcr/pipeline"
+	pipeline_manager "github.com/couchbase/goxdcr/pipeline_manager/mocks"
 	"github.com/couchbase/goxdcr/pipeline_svc"
+	"github.com/couchbase/goxdcr/service_def"
+	"github.com/couchbase/goxdcr/service_impl"
+	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"github.com/nelio2k/xdcrDiffer/base"
 	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
 	"github.com/nelio2k/xdcrDiffer/utils"
+	mock "github.com/stretchr/testify/mock"
 	"strings"
 	"sync"
 	"time"
@@ -54,10 +62,24 @@ type DcpDriver struct {
 	finChan   chan bool
 
 	// XDCR related
-	statsMgr      pipeline_svc.StatsMgrIface
-	logger        *xdcrLog.CommonLogger
-	filter        xdcrParts.FilterIface
-	eventHandlers map[string]common.AsyncComponentEventHandler
+	utils             xdcrUtils.UtilsIface
+	statsMgr          pipeline_svc.StatsMgrIface
+	logger            *xdcrLog.CommonLogger
+	filter            xdcrParts.FilterIface
+	eventHandlers     map[string]common.AsyncComponentEventHandler
+	xdcrTopology      service_def.XDCRCompTopologySvc
+	clusterInfoSvc    service_def.ClusterInfoSvc
+	runtimeCtx        *common_mock.PipelineRuntimeContext
+	sourceNozzle      *common_mock.Nozzle
+	dcpListener       *common_mock.AsyncComponentEventListener
+	routerListener    *common_mock.AsyncComponentEventListener
+	listenerMap       map[string]common.AsyncComponentEventListener
+	connector         *common_mock.Connector
+	pipelineMgr       *pipeline_manager.Pipeline_mgr_iface
+	replicationStatus *pipeline.ReplicationStatus
+	spec              *metadata.ReplicationSpecification
+	pipelineMock      *common_mock.Pipeline
+	throughSeqSvc     service_def.ThroughSeqnoTrackerSvc
 }
 
 type VBStateWithLock struct {
@@ -85,8 +107,8 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName,
 	newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int,
 	bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration,
 	checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool,
-	fdPool fdp.FdPoolIface, filter xdcrParts.FilterIface, eventHandlers map[string]common.AsyncComponentEventHandler,
-	statsMgr pipeline_svc.StatsMgrIface) *DcpDriver {
+	fdPool fdp.FdPoolIface, filter xdcrParts.FilterIface, xdcrTopology service_def.XDCRCompTopologySvc,
+	spec *metadata.ReplicationSpecification, clusterInfoSvc service_def.ClusterInfoSvc) *DcpDriver {
 	dcpDriver := &DcpDriver{
 		Name:               name,
 		url:                url,
@@ -110,8 +132,21 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName,
 		startVbtsDoneChan:  make(chan bool),
 		logger:             logger,
 		filter:             filter,
-		eventHandlers:      eventHandlers,
-		statsMgr:           statsMgr,
+		eventHandlers:      make(map[string]common.AsyncComponentEventHandler),
+		xdcrTopology:       xdcrTopology,
+		utils:              xdcrUtils.NewUtilities(),
+		replicationStatus:  &pipeline.ReplicationStatus{},
+		spec:               spec,
+		pipelineMock:       &common_mock.Pipeline{},
+		throughSeqSvc:      service_impl.NewThroughSeqnoTrackerSvc(nil),
+		runtimeCtx:         &common_mock.PipelineRuntimeContext{},
+		sourceNozzle:       &common_mock.Nozzle{},
+		dcpListener:        &common_mock.AsyncComponentEventListener{},
+		routerListener:     &common_mock.AsyncComponentEventListener{},
+		listenerMap:        make(map[string]common.AsyncComponentEventListener),
+		connector:          &common_mock.Connector{},
+		pipelineMgr:        &pipeline_manager.Pipeline_mgr_iface{},
+		clusterInfoSvc:     clusterInfoSvc,
 	}
 
 	var vbno uint16
@@ -137,6 +172,12 @@ func (d *DcpDriver) Start() error {
 	err := d.populateCredentials()
 	if err != nil {
 		d.logger.Errorf("%v error populating credentials. err=%v\n", d.Name, err)
+		return err
+	}
+
+	err = d.startStatsMgr()
+	if err != nil {
+		d.logger.Errorf("%v error starting statsMgr. err=%v\n", d.Name, err)
 		return err
 	}
 
@@ -321,4 +362,105 @@ func (d *DcpDriver) setVbState(vbno uint16, vbState VBState) {
 	vbStateWithLock.lock.Lock()
 	defer vbStateWithLock.lock.Unlock()
 	vbStateWithLock.vbState = vbState
+}
+
+func (d *DcpDriver) setupStatsMgrMocks() {
+	d.setupContextMocks()
+	d.setupAsyncComponentHandler()
+	d.setupConnectorMocks()
+	d.setupNozzleMocks()
+	d.setupPipelineMock()
+	d.setupPipelineMgr()
+}
+
+func (d *DcpDriver) setupPipelineMgr() {
+	d.pipelineMgr.On("ReplicationStatus", mock.Anything).Return(d.replicationStatus, nil)
+}
+
+func (d *DcpDriver) setupContextMocks() {
+	d.runtimeCtx.On("Service", mock.Anything).Return(nil)
+}
+
+func (d *DcpDriver) setupConnectorMocks() {
+	d.connector.On("Id").Return(base.ConnectorPartId)
+	d.connector.On("AsyncComponentEventListeners").Return(d.listenerMap)
+	d.connector.On("DownStreams").Return(nil)
+}
+
+func (d *DcpDriver) setupAsyncComponentHandler() {
+	d.dcpListener.On("RegisterComponentEventHandler", mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+		handler := args.Get(0).(common.AsyncComponentEventHandler)
+		d.logger.Infof("Received register event for dcp collector: %v\n", handler.Id())
+		d.eventHandlers[handler.Id()] = handler
+	})
+
+	d.routerListener.On("RegisterComponentEventHandler", mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+		handler := args.Get(0).(common.AsyncComponentEventHandler)
+		d.logger.Infof("Received register event for router collector: %v\n", handler.Id())
+		d.eventHandlers[handler.Id()] = handler
+	})
+
+	d.dcpListener.On("PrintStatusSummary").Return(nil)
+	d.routerListener.On("PrintStatusSummary").Return(nil)
+}
+
+func (d *DcpDriver) setupNozzleMocks() {
+	// Single nozzle part (even though we have multiple DcpClients) taking care of DCPs
+	var vbList []uint16
+	for i := 0; i < base.NumberOfVbuckets; i++ {
+		vbList = append(vbList, uint16(i))
+	}
+	d.sourceNozzle.On("ResponsibleVBs").Return(vbList)
+	d.sourceNozzle.On("Id").Return(base.SourceNozzlePartId)
+
+	d.listenerMap["1_DataReceivedEventListener_something"] = d.dcpListener
+	d.listenerMap["2_DataFilteredEventListener_something"] = d.routerListener
+	d.sourceNozzle.On("AsyncComponentEventListeners").Return(d.listenerMap)
+	d.sourceNozzle.On("Connector").Return(d.connector)
+	d.sourceNozzle.On("RegisterComponentEventListener", mock.Anything, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
+		d.logger.Debugf("dcp got: %v - %v\n", args.Get(0), args.Get(1))
+	})
+	d.sourceNozzle.On("PrintStatusSummary").Return(nil)
+}
+
+func (d *DcpDriver) setupPipelineMock() {
+	d.pipelineMock.On("Specification").Return(d.spec)
+	d.pipelineMock.On("Topic").Return("XdcrDifftoolTopic")
+	sourceMap := make(map[string]common.Nozzle)
+	sourceMap[base.SourceNozzlePartId] = d.sourceNozzle
+	d.pipelineMock.On("Sources").Return(sourceMap)
+	// Diff tool doesn't have any out nozzles
+	d.pipelineMock.On("Targets").Return(nil)
+	// TODO
+	d.pipelineMock.On("GetAsyncListenerMap").Return(nil)
+	d.pipelineMock.On("SetAsyncListenerMap", mock.Anything).Return(nil)
+	d.pipelineMock.On("RuntimeContext").Return(d.runtimeCtx)
+	d.pipelineMock.On("InstanceId").Return("XdcrDifftoolInstance")
+	d.pipelineMock.On("State").Return(common.Pipeline_Running)
+	d.pipelineMock.On("Settings").Return(nil)
+}
+
+func (d *DcpDriver) startStatsMgr() error {
+	// Assuming running on a data node
+	kv_vb_map, err := d.clusterInfoSvc.GetLocalServerVBucketsMap(d.xdcrTopology, d.bucketName)
+	if err != nil {
+		return err
+	}
+	d.statsMgr = pipeline_svc.NewStatisticsManager(d.throughSeqSvc, d.clusterInfoSvc, d.xdcrTopology, nil,
+		kv_vb_map, d.bucketName, d.utils, d.pipelineMgr)
+
+	// various settings needed for statsMgr
+	settingsMap := make(metadata.ReplicationSettingsMap)
+	// Make it a long time
+	settingsMap[pipeline_svc.PUBLISH_INTERVAL] = 30000
+	settingsMap[pipeline_svc.XDCRDIFFTOOL_BYPASS_CLIENT] = true
+	//	settingsMap[pipeline_svc.PUBLISH_INTERVAL] = d.specifiedSpec.Settings.Values[metadata.PipelineStatsIntervalKey]
+
+	d.setupStatsMgrMocks()
+	err = d.statsMgr.Attach(d.pipelineMock)
+	if err != nil {
+		return err
+	}
+
+	return d.statsMgr.Start(settingsMap)
 }
