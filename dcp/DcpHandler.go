@@ -141,7 +141,7 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 			dh.logger.Infof("filtered: %v\n", string(mut.key))
 		}
 		if err != nil {
-			dh.logger.Warnf("Err %v - (%v) when filtering mutation %v", err, errStr, mut)
+			dh.logger.Warnf("Err %v - (%v) when filtering mutation key: %v value: %v", err, errStr, string(mut.key), string(mut.value))
 		}
 	}
 

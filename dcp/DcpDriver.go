@@ -57,7 +57,7 @@ type DcpDriver struct {
 	statsMgr      pipeline_svc.StatsMgrIface
 	logger        *xdcrLog.CommonLogger
 	filter        xdcrParts.FilterIface
-	eventHandlers map[string]common.AsyncEventHandler
+	eventHandlers map[string]common.AsyncComponentEventHandler
 }
 
 type VBStateWithLock struct {
@@ -85,7 +85,7 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName,
 	newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int,
 	bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration,
 	checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool,
-	fdPool fdp.FdPoolIface, filter xdcrParts.FilterIface, eventHandlers map[string]common.AsyncEventHandler,
+	fdPool fdp.FdPoolIface, filter xdcrParts.FilterIface, eventHandlers map[string]common.AsyncComponentEventHandler,
 	statsMgr pipeline_svc.StatsMgrIface) *DcpDriver {
 	dcpDriver := &DcpDriver{
 		Name:               name,

@@ -182,7 +182,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.numberOfWorkersPerSourceDcpClient, options.numberOfBins, options.sourceDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
-		difftool.eventHandlers)
+		difftool.eventHandlers, difftool.statsMgr)
 
 	delayDurationBetweenSourceAndTarget := time.Duration(options.delayBetweenSourceAndTarget) * time.Second
 	difftool.logger.Infof("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
@@ -195,7 +195,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.numberOfWorkersPerTargetDcpClient, options.numberOfBins, options.targetDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
-		difftool.eventHandlers)
+		difftool.eventHandlers, difftool.statsMgr)
 
 	difftool.curState.mtx.Lock()
 	difftool.curState.state = dcpDriving
@@ -263,7 +263,7 @@ func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userNam
 	newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins,
 	dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff,
 	checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool,
-	fdPool fdp.FdPoolIface, filter xdcrParts.FilterIface, eventHandlers map[string]common.AsyncEventHandler,
+	fdPool fdp.FdPoolIface, filter xdcrParts.FilterIface, eventHandlers map[string]common.AsyncComponentEventHandler,
 	statsMgr pipeline_svc.StatsMgrIface) *dcp.DcpDriver {
 	waitGroup.Add(1)
 	dcpDriver := dcp.NewDcpDriver(logger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
@@ -401,7 +401,7 @@ func (difftool *xdcrDiffTool) setupPipelineMgr() {
 }
 
 func (difftool *xdcrDiffTool) setupContextMocks() {
-	difftool.runtimeCtx.On("Service", "CheckpointManager").Return(nil)
+	difftool.runtimeCtx.On("Service", mock.Anything).Return(nil)
 }
 
 func (difftool *xdcrDiffTool) setupConnectorMocks() {
@@ -422,6 +422,9 @@ func (difftool *xdcrDiffTool) setupAsyncComponentHandler() {
 		difftool.logger.Infof("Received register event for router collector: %v\n", handler.Id())
 		difftool.eventHandlers[handler.Id()] = handler
 	})
+
+	difftool.dcpListener.On("PrintStatusSummary").Return(nil)
+	difftool.routerListener.On("PrintStatusSummary").Return(nil)
 }
 
 func (difftool *xdcrDiffTool) setupNozzleMocks() {
@@ -440,6 +443,7 @@ func (difftool *xdcrDiffTool) setupNozzleMocks() {
 	difftool.sourceNozzle.On("RegisterComponentEventListener", mock.Anything, mock.Anything).Return(nil).Run(func(args mock.Arguments) {
 		difftool.logger.Debugf("dcp got: %v - %v\n", args.Get(0), args.Get(1))
 	})
+	difftool.sourceNozzle.On("PrintStatusSummary").Return(nil)
 }
 
 func (difftool *xdcrDiffTool) setupXDCRCompTopologyMock() {
@@ -476,7 +480,9 @@ func (difftool *xdcrDiffTool) startStatsMgr() error {
 
 	// various settings needed for statsMgr
 	settingsMap := make(metadata.ReplicationSettingsMap)
-	settingsMap[pipeline_svc.PUBLISH_INTERVAL] = difftool.specifiedSpec.Settings.Values[metadata.PipelineStatsIntervalKey]
+	// Make it a long time
+	settingsMap[pipeline_svc.PUBLISH_INTERVAL] = 30000
+	//	settingsMap[pipeline_svc.PUBLISH_INTERVAL] = difftool.specifiedSpec.Settings.Values[metadata.PipelineStatsIntervalKey]
 
 	difftool.setupStatsMgrMocks()
 	err = difftool.statsMgr.Attach(difftool.pipelineMock)
