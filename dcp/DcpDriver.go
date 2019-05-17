@@ -11,6 +11,7 @@ package dcp
 
 import (
 	"fmt"
+	"github.com/couchbase/goxdcr/common"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	xdcrParts "github.com/couchbase/goxdcr/parts"
 	"github.com/couchbase/goxdcr/pipeline_svc"
@@ -51,10 +52,12 @@ type DcpDriver struct {
 	state     DriverState
 	stateLock sync.RWMutex
 	finChan   chan bool
-	logger    *xdcrLog.CommonLogger
-	filter    xdcrParts.FilterIface
 
-	statsMgr pipeline_svc.StatsMgrIface
+	// XDCR related
+	statsMgr      pipeline_svc.StatsMgrIface
+	logger        *xdcrLog.CommonLogger
+	filter        xdcrParts.FilterIface
+	eventHandlers map[string]common.AsyncEventHandler
 }
 
 type VBStateWithLock struct {
@@ -82,7 +85,8 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName,
 	newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int,
 	bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration,
 	checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool,
-	fdPool fdp.FdPoolIface, filter xdcrParts.FilterIface) *DcpDriver {
+	fdPool fdp.FdPoolIface, filter xdcrParts.FilterIface, eventHandlers map[string]common.AsyncEventHandler,
+	statsMgr pipeline_svc.StatsMgrIface) *DcpDriver {
 	dcpDriver := &DcpDriver{
 		Name:               name,
 		url:                url,
@@ -106,6 +110,8 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName,
 		startVbtsDoneChan:  make(chan bool),
 		logger:             logger,
 		filter:             filter,
+		eventHandlers:      eventHandlers,
+		statsMgr:           statsMgr,
 	}
 
 	var vbno uint16
