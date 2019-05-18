@@ -7,7 +7,7 @@ execGo="./main"
 function printHelp() {
 cat << EOF
 Usage: $0 -n <username> -p <password> -h <hostname:port> -r <remoteClusterName> -s <sourceBucket> -t <targetBucket>
-Example: $0 -n Administrator -p password -u 127.0.0.1:9000
+Example: $0 -n Administrator -p password -h 127.0.0.1:9000 -r remoteClusterName -s sourceBucketName -t targetBucketName
 EOF
 }
 
