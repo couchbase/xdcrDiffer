@@ -301,6 +301,8 @@ func (cm *CheckpointManager) getStatsWithRetry(statsBucket *gocb.Bucket) (map[st
 func (cm *CheckpointManager) setStartVBTS() error {
 
 	var sum uint64 = 0
+	var totalFiltered uint64
+	var totalFailedFilter uint64
 
 	if cm.oldCheckpointFileName != "" {
 		checkpointDoc, err := cm.loadCheckpoints()
@@ -320,6 +322,8 @@ func (cm *CheckpointManager) setStartVBTS() error {
 			// update start seqno as that in checkpoint doc
 			cm.seqnoMap[vbno].setSeqno(checkpoint.Seqno)
 			sum += checkpoint.Seqno
+			totalFiltered += int64(checkpoint.FilteredCnt)
+			totalFailedFilter += int64(checkpoint.FailedFilterCnt)
 
 			// Resume previous counters
 			cm.filteredCnt[vbno].Inc(int64(checkpoint.FilteredCnt))
@@ -336,7 +340,7 @@ func (cm *CheckpointManager) setStartVBTS() error {
 		}
 	}
 
-	cm.logger.Infof("%v starting from %v\n", cm.clusterName, sum)
+	cm.logger.Infof("%v starting from %v filtered %v unableToFilter %v\n", cm.clusterName, sum, totalFiltered, totalFailedFilter)
 
 	close(cm.startVbtsDoneChan)
 
