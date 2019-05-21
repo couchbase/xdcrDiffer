@@ -76,7 +76,7 @@ var ClusterMembership_Active = "active"
 type FilterResultType int
 
 const (
-	NoFilter       FilterResultType = iota
+	NotFilter      FilterResultType = iota
 	Filtered       FilterResultType = iota
 	UnableToFilter FilterResultType = iota
 )
