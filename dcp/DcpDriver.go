@@ -170,7 +170,7 @@ func (d *DcpDriver) checkForCompletion() {
 				}
 			}
 			if numOfCompletedVb == base.NumberOfVbuckets {
-				d.logger.Infof("%v all vbuckets have completed for dcp driver %v\n", d.Name)
+				d.logger.Infof("%v all vbuckets have completed for dcp driver\n", d.Name)
 				d.Stop()
 				return
 			}

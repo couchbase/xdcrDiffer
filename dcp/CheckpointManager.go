@@ -322,8 +322,8 @@ func (cm *CheckpointManager) setStartVBTS() error {
 			// update start seqno as that in checkpoint doc
 			cm.seqnoMap[vbno].setSeqno(checkpoint.Seqno)
 			sum += checkpoint.Seqno
-			totalFiltered += int64(checkpoint.FilteredCnt)
-			totalFailedFilter += int64(checkpoint.FailedFilterCnt)
+			totalFiltered += checkpoint.FilteredCnt
+			totalFailedFilter += checkpoint.FailedFilterCnt
 
 			// Resume previous counters
 			cm.filteredCnt[vbno].Inc(int64(checkpoint.FilteredCnt))

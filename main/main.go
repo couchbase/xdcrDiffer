@@ -27,7 +27,6 @@ import (
 	"github.com/nelio2k/xdcrDiffer/utils"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"time"
 )
@@ -215,9 +214,9 @@ func usage() {
 type diffToolStateType int
 
 const (
-	finStateInitial diffToolStateType = iota
-	dcpDriving      diffToolStateType = iota
-	finStateFinal   diffToolStateType = iota
+	StateInitial    diffToolStateType = iota
+	StateDcpStarted diffToolStateType = iota
+	StateFinal      diffToolStateType = iota
 )
 
 type difftoolState struct {
@@ -242,12 +241,15 @@ type xdcrDiffTool struct {
 	curState difftoolState
 }
 
-func NewDiffTool() *xdcrDiffTool {
-
+func NewDiffTool() (*xdcrDiffTool, error) {
+	var err error
 	difftool := &xdcrDiffTool{
 		utils: xdcrUtils.NewUtilities(),
 	}
-	difftool.metadataSvc, _ = metadata_svc.NewMetaKVMetadataSvc(nil, difftool.utils)
+	difftool.metadataSvc, err = metadata_svc.NewMetaKVMetadataSvc(nil, difftool.utils, true /*readOnly*/)
+	if err != nil {
+		return nil, err
+	}
 
 	uiLogSvcMock := &service_def_mock.UILogSvc{}
 	xdcrTopologyMock := &service_def_mock.XDCRCompTopologySvc{}
@@ -265,7 +267,7 @@ func NewDiffTool() *xdcrDiffTool {
 	// Capture any Ctrl-C for continuing to next steps or cleanup
 	go difftool.monitorInterruptSignal()
 
-	return difftool
+	return difftool, err
 }
 
 func maybeSetEnv(key, value string) {
@@ -278,7 +280,11 @@ func maybeSetEnv(key, value string) {
 func main() {
 	argParse()
 
-	difftool := NewDiffTool()
+	difftool, err := NewDiffTool()
+	if err != nil {
+		fmt.Printf("Error creating difftool: %v\n", err)
+		os.Exit(1)
+	}
 
 	if len(options.remoteClusterName) > 0 {
 		err := difftool.retrieveReplicationSpecInfo()
@@ -286,6 +292,7 @@ func main() {
 			os.Exit(1)
 		}
 	} else {
+		// OK to ignore metakv err in manual mode
 		difftool.populateTemporarySpecAndRef()
 	}
 
@@ -336,7 +343,8 @@ func cleanUpAndSetup() error {
 func (difftool *xdcrDiffTool) createFilterIfNecessary() error {
 	var ok bool
 	var expr string
-	if expr, ok = difftool.specifiedSpec.Settings.Values[metadata.FilterExpressionKey].(string); !ok {
+	expr, ok = difftool.specifiedSpec.Settings.Values[metadata.FilterExpressionKey].(string)
+	if !ok || len(expr) == 0 {
 		return nil
 	}
 
@@ -406,7 +414,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter)
 
 	difftool.curState.mtx.Lock()
-	difftool.curState.state = dcpDriving
+	difftool.curState.state = StateDcpStarted
 	difftool.curState.mtx.Unlock()
 
 	var err error
@@ -542,46 +550,44 @@ func (difftool *xdcrDiffTool) waitForDuration(sourceDcpDriver, targetDcpDriver *
 
 func (difftool *xdcrDiffTool) retrieveReplicationSpecInfo() error {
 	// CBAUTH has already been setup
-	rcMap, err := difftool.remoteClusterSvc.RemoteClusters()
+	var err error
+	difftool.specifiedRef, err = difftool.remoteClusterSvc.RemoteClusterByRefName(options.remoteClusterName, false /*refresh*/)
 	if err != nil {
 		difftool.logger.Errorf("Error retrieving remote clusters: %v\n", err)
 		return err
 	}
 
+	if options.targetUsername != "" && options.targetPassword != "" {
+		difftool.logger.Infof("Target username and password were specified. Overriding them in the retrieved remote cluster reference")
+		difftool.specifiedRef.UserName_ = options.targetUsername
+		difftool.specifiedRef.Password_ = options.targetPassword
+		difftool.specifiedRef.HttpAuthMech_ = xdcrBase.HttpAuthMechPlain
+	}
+
 	specMap, err := difftool.replicationSpecSvc.AllReplicationSpecs()
 	if err != nil {
 		difftool.logger.Errorf("Error retrieving specs: %v\n", err)
-	}
-
-	for _, ref := range rcMap {
-		if ref.Name_ == options.remoteClusterName {
-			difftool.specifiedRef = ref
-			break
-		}
+		return err
 	}
 
 	for _, spec := range specMap {
-		if spec.SourceBucketName == options.sourceBucketName && spec.TargetBucketName == options.targetBucketName {
+		if spec.SourceBucketName == options.sourceBucketName && spec.TargetBucketName == options.targetBucketName && spec.TargetClusterUUID == difftool.specifiedRef.Uuid() {
 			difftool.specifiedSpec = spec
 			break
 		}
 	}
 
-	var errStrs []string
-	if difftool.specifiedRef == nil {
-		errStrs = append(errStrs, fmt.Sprintf("Unable to find Remote cluster %v\n", options.remoteClusterName))
-	}
 	if difftool.specifiedSpec == nil {
-		errStrs = append(errStrs, fmt.Sprintf("Unable to find Replication Spec with source %v target %v\n", options.sourceBucketName, options.targetBucketName))
-	}
-	if len(errStrs) > 0 {
-		err := fmt.Errorf(strings.Join(errStrs, " and "))
-		difftool.logger.Errorf(err.Error())
+		difftool.logger.Warnf("Unable to find Replication Spec with source %v target %v, attempting to create a temporary one\n", options.sourceBucketName, options.targetBucketName)
+		// Create a dummy spec
+		difftool.specifiedSpec, err = metadata.NewReplicationSpecification(options.sourceBucketName, "" /*sourceBucketUUID*/, difftool.specifiedRef.Uuid(), options.targetBucketName, "" /*targetBucketUUID*/)
+		if err != nil {
+			difftool.logger.Errorf(err.Error())
+		}
 		return err
 	}
 
 	difftool.logger.Infof("Found Remote Cluster: %v and Replication Spec: %v\n", difftool.specifiedRef.String(), difftool.specifiedSpec.String())
-
 	return nil
 }
 
@@ -596,23 +602,21 @@ func (difftool *xdcrDiffTool) populateTemporarySpecAndRef() {
 func (difftool *xdcrDiffTool) monitorInterruptSignal() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
-	go func() {
-		for sig := range c {
-			if sig.String() == "interrupt" {
-				difftool.curState.mtx.Lock()
-				switch difftool.curState.state {
-				case finStateInitial:
-					os.Exit(0)
-				case dcpDriving:
-					difftool.logger.Warnf("Received interrupt. Closing DCP drivers")
-					difftool.sourceDcpDriver.Stop()
-					difftool.targetDcpDriver.Stop()
-					difftool.curState.state = finStateFinal
-				case finStateFinal:
-					os.Exit(0)
-				}
-				difftool.curState.mtx.Unlock()
+	for sig := range c {
+		if sig.String() == "interrupt" {
+			difftool.curState.mtx.Lock()
+			switch difftool.curState.state {
+			case StateInitial:
+				os.Exit(0)
+			case StateDcpStarted:
+				difftool.logger.Warnf("Received interrupt. Closing DCP drivers")
+				difftool.sourceDcpDriver.Stop()
+				difftool.targetDcpDriver.Stop()
+				difftool.curState.state = StateFinal
+			case StateFinal:
+				os.Exit(0)
 			}
+			difftool.curState.mtx.Unlock()
 		}
-	}()
+	}
 }
