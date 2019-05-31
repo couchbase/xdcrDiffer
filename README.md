@@ -6,24 +6,39 @@ If an XDCR is ongoing, it is quite possible that the tool will show documents as
 
 ## Getting Started
 
-The tool can be built using golang into a single executable, and then run from the command line.
-
 
 ### Prerequisites
 
 Golang version 1.8 or above.
 
-### Compiling
-
-First, clone the repository. Ensure that with respective to the defined GOPATH variable, that this directory is in, and execute go build under the main directory.
+First, clone the repository. Ensure that with respective to the defined GOPATH variable. For example, given the `GOPATH` environment variable:
 
 ```
-~/go/src/github.com/nelio2k/xdcrDiffer/main$ go build -o xdcrDiffer
+neil.huang@NeilsMacbookPro:~$ env | grep GOPATH
+GOPATH=/Users/neil.huang/go
+```
+
+The xdcrDiffer should be cloned as follows:
+
+```
+neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs$ git clone git@github.com:couchbaselabs/xdcrDiffer.git
 ```
 
 ### Running
+#### runDiffer
 
-To run the tool, use the options provided that can be found using "-h"
+The `runDiffer.sh` shell script will ask for the minimum required information to compile and run the difftool, and can be edited to add or modify detailed settings that are to be passed to the difftool itself. This is the *preferred* method.
+
+The script also sets up the shell environment to allow the tool binary to be able to contact the source cluster's metakv given the user specified credentials to retrieve the `remote cluster reference` and `replication specification` in order to simulate the existing replication scenario (i.e. filtering).
+
+For example:
+```
+neil.huang@NeilsMacbookPro:~/go/src/github.com/nelio2k/xdcrDiffer$ ./runDiffer.sh -u Administrator -p password -h 127.0.0.1:9000 -r backupCluster -s beer-sample -t backupDumpster
+```
+
+#### Tool binary
+The legacy method is to run the tool binary natively by using the options provided that can be found using "-h".
+Note that running the tool natively will bypass the `remote cluster reference` and `replication specification` retrieval from the source node's metakv.
 
 ```
 Usage of ./xdcrDiffer:
@@ -82,6 +97,28 @@ A few options worth noting:
 - numberOfBins - Each Couchbase bucket contains 1024 vbuckets. For optimizing sorting, each vbucket is also sub-divided into bins as the data are streamed before the diff operation.
 - numberOfFileDesc - If the tool has exhausted all system file descriptors, this option allows the tool to limit the max number of concurently open file descriptors.
 
+## DiffTool Process Flow
+The difftool performs the following in order:
+1. Data Retrieval from source and target buckets via DCP (can press Ctrl-C to move onto next phase)
+2. Diff files retrieved from DCP to find differences
+3. Verify differences from above using async Get (verifyDiffKeys) to rule out transitional mutations
+
+## Output
+Results from file diffing can be viewed as a summary file under `diffKeys`:
+```
+neil.huang@NeilsMacbookPro:~/go/src/github.com/nelio2k/xdcrDiffer$ cat fileDiff/diffKeys
+null
+```
+
+Results from verifyDiffKeys can be viewed as JSON summary files under `mutationDiff`:
+```
+neil.huang@NeilsMacbookPro:~/go/src/github.com/nelio2k/xdcrDiffer/mutationDiff$ ls
+diffKeysWithError	mutationBodyDiffDetails	mutationBodyDiffKeys	mutationDiffDetails	mutationDiffKeys
+
+neil.huang@NeilsMacbookPro:~/go/src/github.com/nelio2k/xdcrDiffer/mutationDiff$ cat mutationDiffDetails
+{"Mismatch":{},"MissingFromSource":{},"MissingFromTarget":{}}
+```
+
 ## License
 
-Copyright 2018 Couchbase, Inc. All rights reserved.
+Copyright 2018-2019 Couchbase, Inc. All rights reserved.
