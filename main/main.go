@@ -252,7 +252,10 @@ func NewDiffTool() (*xdcrDiffTool, error) {
 	}
 
 	uiLogSvcMock := &service_def_mock.UILogSvc{}
+
 	xdcrTopologyMock := &service_def_mock.XDCRCompTopologySvc{}
+	xdcrTopologyMock.On("IsMyClusterEnterprise").Return(true, nil)
+
 	clusterInfoSvcMock := &service_def_mock.ClusterInfoSvc{}
 
 	difftool.logger = xdcrLog.NewLogger("xdcrDiffTool", nil)
