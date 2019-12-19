@@ -12,9 +12,9 @@ package differ
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/nelio2k/xdcrDiffer/base"
-	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
-	"github.com/nelio2k/xdcrDiffer/utils"
+	"github.com/couchbaselabs/xdcrDiffer/base"
+	fdp "github.com/couchbaselabs/xdcrDiffer/fileDescriptorPool"
+	"github.com/couchbaselabs/xdcrDiffer/utils"
 	"os"
 	"sync"
 	"sync/atomic"
