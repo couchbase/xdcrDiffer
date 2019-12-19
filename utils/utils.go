@@ -14,7 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/nelio2k/xdcrDiffer/base"
+	"github.com/couchbaselabs/xdcrDiffer/base"
 	"hash/crc32"
 	"io"
 	"io/ioutil"

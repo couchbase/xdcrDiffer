@@ -13,9 +13,10 @@ import (
 	"fmt"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	xdcrParts "github.com/couchbase/goxdcr/parts"
-	"github.com/nelio2k/xdcrDiffer/base"
-	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
-	"github.com/nelio2k/xdcrDiffer/utils"
+	"github.com/couchbaselabs/xdcrDiffer/base"
+	fdp "github.com/couchbaselabs/xdcrDiffer/fileDescriptorPool"
+	"github.com/couchbaselabs/xdcrDiffer/utils"
+	gocbcore "gopkg.in/couchbase/gocbcore.v7"
 	"strings"
 	"sync"
 	"time"
@@ -114,7 +115,7 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName,
 
 	dcpDriver.checkpointManager = NewCheckpointManager(dcpDriver, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, name, bucketOpTimeout, maxNumOfGetStatsRetry,
-		getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval, dcpDriver.startVbtsDoneChan, logger)
+		getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval, dcpDriver.startVbtsDoneChan, logger, completeBySeqno)
 
 	if !strings.HasPrefix(dcpDriver.url, "http") {
 		dcpDriver.url = fmt.Sprintf("http://%v", dcpDriver.url)
@@ -285,9 +286,19 @@ func (d *DcpDriver) reportError(err error) {
 	utils.AddToErrorChan(d.errChan, err)
 }
 
+func allowedCompletionError(err error) bool {
+	switch err {
+	case gocbcore.ErrStreamClosed:
+		return true
+	default:
+		return false
+	}
+}
+
 func (d *DcpDriver) handleVbucketCompletion(vbno uint16, err error, reason string) {
-	if err != nil {
-		d.reportError(err)
+	if err != nil && !allowedCompletionError(err) {
+		wrappedErr := fmt.Errorf("%v vbno %v vbucket completed with err %v - %v", d.Name, vbno, err, reason)
+		d.reportError(wrappedErr)
 	} else {
 		if d.completeBySeqno {
 			vbStateWithLock := d.vbStateMap[vbno]

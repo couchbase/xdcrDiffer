@@ -11,10 +11,10 @@ package dcp
 
 import (
 	"fmt"
-	"github.com/couchbase/gocb"
 	xdcrLog "github.com/couchbase/goxdcr/log"
-	"github.com/nelio2k/xdcrDiffer/base"
-	"github.com/nelio2k/xdcrDiffer/utils"
+	"github.com/couchbaselabs/xdcrDiffer/base"
+	"github.com/couchbaselabs/xdcrDiffer/utils"
+	gocb "gopkg.in/couchbase/gocb.v1"
 	gocbcore "gopkg.in/couchbase/gocbcore.v7"
 	"math"
 	"sync"
@@ -256,7 +256,8 @@ func (c *DcpClient) handleDcpStreams() {
 
 	err := c.openDcpStreams()
 	if err != nil {
-		c.reportError(err)
+		wrappedErr := fmt.Errorf("%v: %v", c.Name, err.Error())
+		c.reportError(wrappedErr)
 		return
 	}
 
@@ -304,7 +305,8 @@ func (c *DcpClient) closeStream(vbno uint16) error {
 
 func (c *DcpClient) openStreamFunc(f []gocbcore.FailoverEntry, err error) {
 	if err != nil {
-		c.reportError(err)
+		wrappedErr := fmt.Errorf("%v openStreamCallback reported err: %v", c.Name, err)
+		c.reportError(wrappedErr)
 	} else {
 		atomic.AddUint32(&c.activeStreams, 1)
 	}

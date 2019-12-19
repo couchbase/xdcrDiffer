@@ -33,7 +33,7 @@ The script also sets up the shell environment to allow the tool binary to be abl
 
 For example:
 ```
-neil.huang@NeilsMacbookPro:~/go/src/github.com/nelio2k/xdcrDiffer$ ./runDiffer.sh -u Administrator -p password -h 127.0.0.1:9000 -r backupCluster -s beer-sample -t backupDumpster
+neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer$ ./runDiffer.sh -u Administrator -p password -h 127.0.0.1:9000 -r backupCluster -s beer-sample -t backupDumpster
 ```
 
 #### Tool binary
@@ -106,16 +106,16 @@ The difftool performs the following in order:
 ## Output
 Results from file diffing can be viewed as a summary file under `diffKeys`:
 ```
-neil.huang@NeilsMacbookPro:~/go/src/github.com/nelio2k/xdcrDiffer$ cat fileDiff/diffKeys
+neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer$ cat fileDiff/diffKeys
 null
 ```
 
 Results from verifyDiffKeys can be viewed as JSON summary files under `mutationDiff`:
 ```
-neil.huang@NeilsMacbookPro:~/go/src/github.com/nelio2k/xdcrDiffer/mutationDiff$ ls
+neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer/mutationDiff$ ls
 diffKeysWithError	mutationBodyDiffDetails	mutationBodyDiffKeys	mutationDiffDetails	mutationDiffKeys
 
-neil.huang@NeilsMacbookPro:~/go/src/github.com/nelio2k/xdcrDiffer/mutationDiff$ cat mutationDiffDetails
+neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer/mutationDiff$ cat mutationDiffDetails
 {"Mismatch":{},"MissingFromSource":{},"MissingFromTarget":{}}
 ```
 

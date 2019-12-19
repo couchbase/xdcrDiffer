@@ -12,10 +12,10 @@ package differ
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/couchbase/gocb"
 	xdcrLog "github.com/couchbase/goxdcr/log"
-	"github.com/nelio2k/xdcrDiffer/base"
-	"github.com/nelio2k/xdcrDiffer/utils"
+	"github.com/couchbaselabs/xdcrDiffer/base"
+	"github.com/couchbaselabs/xdcrDiffer/utils"
+	gocb "gopkg.in/couchbase/gocb.v1"
 	gocbcore "gopkg.in/couchbase/gocbcore.v7"
 	"io/ioutil"
 	"math"

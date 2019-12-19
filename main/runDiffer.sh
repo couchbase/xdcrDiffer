@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Copyright (c) 2013-2019 Couchbase, Inc.
+#build Copyright (c) 2013-2019 Couchbase, Inc.
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
 # except in compliance with the License. You may obtain a copy of the License at
 #   http://www.apache.org/licenses/LICENSE-2.0
@@ -11,13 +11,20 @@
 
 run_args=$@
 
-mainDir="main"
-toolName="xdcrDiffer"
-execGo="$mainDir/$toolName"
+execGo="xdcrDiffer"
+
+function findExec() {
+   if [[ ! -f "$execGo" ]];then
+      echo "Unable to find xdcr diff tool. Did you run make?"
+      exit 1
+   fi
+}
 
 function printHelp() {
+findExec
+
 cat << EOF
-Usage: $0 -u <username> -p <password> -h <hostname:port> -r <remoteClusterName> -s <sourceBucket> -t <targetBucket> [-n <remoteClusterUsername> -q <remoteClusterPassword>]
+Usage: $0 -u <username> -p <password> -h <hostname:port> -r <remoteClusterName> -s <sourceBucket> -t <targetBucket> [-n <remoteClusterUsername> -q <remoteClusterPassword>] [-c clean]
 
 This script will set up the necessary environment variable to allow the XDCR diff tool to connect to the metakv service in the
 specified source cluster (NOTE: over http://) and retrieve the specified replication spec and run the difftool on it.
@@ -26,7 +33,7 @@ reference only contains certificate, then specify the remoteClusterUsername and 
 EOF
 }
 
-while getopts ":h:p:u:r:s:t:n:q:" opt; do
+while getopts ":h:p:u:r:s:t:n:q:c" opt; do
   case ${opt} in
     u )
       username=$OPTARG
@@ -51,6 +58,9 @@ while getopts ":h:p:u:r:s:t:n:q:" opt; do
       ;;
     q )
       remoteClusterPassword=$OPTARG
+      ;;
+    c )
+      cleanBeforeRun=1
       ;;
     \? )
       echo "Invalid option: $OPTARG" 1>&2
@@ -88,14 +98,22 @@ elif [[ -z "$remoteClusterName" ]];then
 	exit 1
 fi
 
-cd $mainDir && go build -o $toolName && cd ..
-if (( $? != 0 ));then
-	echo "Unable to build xdcr diff tool"
-	exit 1
-fi
+findExec
 
 export CBAUTH_REVRPC_URL="http://$username:$password@$hostname"
 echo "Exporting $CBAUTH_REVRPC_URL"
+
+if [[ ! -z "$cleanBeforeRun" ]];then
+	echo "Cleaning up before run..."
+	for directory in "source target fileDiff mutationDiff checkpoint"
+	do
+		cd $directory 2> /dev/null
+		if (( $? == 0 ));then
+			rm *
+			cd ..
+		fi
+	done
+fi
 
 if [[ ! -z "$remoteClusterUsername" ]] && [[ ! -z "$remoteClusterPassword" ]];then
 	./$execGo -sourceUrl "$hostname" -sourceUsername $username -sourcePassword $password -sourceBucketName $sourceBucketName -targetBucketName $targetBucketName -remoteClusterName $remoteClusterName -targetUsername $remoteClusterUsername -targetPassword $remoteClusterPassword

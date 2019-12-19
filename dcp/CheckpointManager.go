@@ -3,11 +3,12 @@ package dcp
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/couchbase/gocb"
+	xdcrBase "github.com/couchbase/goxdcr/base"
 	xdcrLog "github.com/couchbase/goxdcr/log"
-	"github.com/nelio2k/xdcrDiffer/base"
-	"github.com/nelio2k/xdcrDiffer/utils"
+	"github.com/couchbaselabs/xdcrDiffer/base"
+	"github.com/couchbaselabs/xdcrDiffer/utils"
 	"github.com/rcrowley/go-metrics"
+	gocb "gopkg.in/couchbase/gocb.v1"
 	"io/ioutil"
 	"math"
 	"os"
@@ -39,11 +40,14 @@ type CheckpointManager struct {
 	started               bool
 	stateLock             sync.RWMutex
 	logger                *xdcrLog.CommonLogger
+	completeBySeqno       bool
+	logOnceCount          uint64
+	lastRemainingMap      map[uint16]uint64
 }
 
 func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, clusterName string,
 	bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration,
-	checkpointInterval int, startVbtsDoneChan chan bool, logger *xdcrLog.CommonLogger) *CheckpointManager {
+	checkpointInterval int, startVbtsDoneChan chan bool, logger *xdcrLog.CommonLogger, completeBySeqno bool) *CheckpointManager {
 	cm := &CheckpointManager{
 		dcpDriver:             dcpDriver,
 		clusterName:           clusterName,
@@ -61,6 +65,7 @@ func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpoint
 		checkpointInterval:    checkpointInterval,
 		startVbtsDoneChan:     startVbtsDoneChan,
 		logger:                logger,
+		completeBySeqno:       completeBySeqno,
 	}
 
 	if checkpointFileDir != "" {
@@ -82,6 +87,32 @@ func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpoint
 	}
 
 	return cm
+}
+
+func (cm *CheckpointManager) CloneSeqnoMap() map[uint16]uint64 {
+	clonedMap := make(map[uint16]uint64)
+	for k, v := range cm.seqnoMap {
+		clonedMap[k] = v.getSeqno()
+	}
+	return clonedMap
+}
+
+func (cm *CheckpointManager) OutputEndSeqnoMapDiff() map[uint16]uint64 {
+	currentSeqnoMap := cm.CloneSeqnoMap()
+	endSeqnoMap := cm.endSeqnoMap
+	diffMap := make(map[uint16]uint64)
+
+	for vb, curSeqno := range currentSeqnoMap {
+		endSeqno, ok := endSeqnoMap[vb]
+		if ok {
+			diff := endSeqno - curSeqno
+			if diff > 0 {
+				diffMap[vb] = diff
+			}
+		}
+	}
+
+	return diffMap
 }
 
 func (cm *CheckpointManager) Start() error {
@@ -180,6 +211,7 @@ func (cm *CheckpointManager) reportStatusOnce(prevSum uint64) uint64 {
 	var sum uint64
 	var filtered int64
 	var failedFilter int64
+	cm.logOnceCount++
 	for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
 		sum += cm.seqnoMap[vbno].getSeqno()
 		filtered += cm.filteredCnt[vbno].Count()
@@ -191,6 +223,20 @@ func (cm *CheckpointManager) reportStatusOnce(prevSum uint64) uint64 {
 	} else {
 		cm.logger.Infof("%v %v processed %v mutations, filtered %v mutations, %v failed filtering.\n",
 			time.Now(), cm.clusterName, sum, filtered, failedFilter)
+	}
+	if cm.completeBySeqno && cm.logOnceCount%10 == 0 {
+		diffMap := cm.OutputEndSeqnoMapDiff()
+		cm.logger.Infof("%v remaining seqnomap: %v\n", cm.clusterName, diffMap)
+		var stuckVBs []uint16
+		for vb, seqnoLeft := range diffMap {
+			if lastSeqnoLeft, ok := cm.lastRemainingMap[vb]; ok && lastSeqnoLeft == seqnoLeft {
+				stuckVBs = append(stuckVBs, vb)
+			}
+		}
+		if len(stuckVBs) > 0 {
+			cm.logger.Warnf("These VBs have not move since last time: %v", xdcrBase.SortUint16List(stuckVBs))
+		}
+		cm.lastRemainingMap = diffMap
 	}
 	return sum
 }
@@ -206,7 +252,11 @@ func (cm *CheckpointManager) initialize() error {
 		return err
 	}
 
-	cm.logger.Infof("%v endSeqno map retrieved.\n", cm.clusterName)
+	if cm.completeBySeqno {
+		cm.logger.Infof("%v endSeqno map retrieved %v\n", cm.clusterName, cm.endSeqnoMap)
+	} else {
+		cm.logger.Infof("%v endSeqno map retrieved\n", cm.clusterName)
+	}
 
 	return cm.setStartVBTS()
 }
@@ -268,6 +318,12 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() error {
 
 	if cm.dcpDriver.completeBySeqno {
 		cm.endSeqnoMap = endSeqnoMap
+		// For end seqno 0's, mark them as completed
+		for vb, seqno := range endSeqnoMap {
+			if seqno == 0 {
+				cm.dcpDriver.handleVbucketCompletion(vb, nil, "end seqno reached")
+			}
+		}
 	} else {
 		cm.endSeqnoMap = make(map[uint16]uint64)
 		// set endSeqno to maxInt

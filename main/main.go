@@ -20,11 +20,11 @@ import (
 	"github.com/couchbase/goxdcr/service_def"
 	service_def_mock "github.com/couchbase/goxdcr/service_def/mocks"
 	xdcrUtils "github.com/couchbase/goxdcr/utils"
-	"github.com/nelio2k/xdcrDiffer/base"
-	"github.com/nelio2k/xdcrDiffer/dcp"
-	"github.com/nelio2k/xdcrDiffer/differ"
-	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
-	"github.com/nelio2k/xdcrDiffer/utils"
+	"github.com/couchbaselabs/xdcrDiffer/base"
+	"github.com/couchbaselabs/xdcrDiffer/dcp"
+	"github.com/couchbaselabs/xdcrDiffer/differ"
+	fdp "github.com/couchbaselabs/xdcrDiffer/fileDescriptorPool"
+	"github.com/couchbaselabs/xdcrDiffer/utils"
 	"os"
 	"os/signal"
 	"sync"
@@ -239,33 +239,37 @@ type xdcrDiffTool struct {
 	targetDcpDriver *dcp.DcpDriver
 
 	curState difftoolState
+
+	legacyMode bool
 }
 
-func NewDiffTool() (*xdcrDiffTool, error) {
+func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 	var err error
 	difftool := &xdcrDiffTool{
-		utils: xdcrUtils.NewUtilities(),
+		utils:      xdcrUtils.NewUtilities(),
+		legacyMode: legacyMode,
 	}
-	difftool.metadataSvc, err = metadata_svc.NewMetaKVMetadataSvc(nil, difftool.utils, true /*readOnly*/)
-	if err != nil {
-		return nil, err
-	}
-
-	uiLogSvcMock := &service_def_mock.UILogSvc{}
-
-	xdcrTopologyMock := &service_def_mock.XDCRCompTopologySvc{}
-	xdcrTopologyMock.On("IsMyClusterEnterprise").Return(true, nil)
-
-	clusterInfoSvcMock := &service_def_mock.ClusterInfoSvc{}
 
 	difftool.logger = xdcrLog.NewLogger("xdcrDiffTool", nil)
 
-	difftool.remoteClusterSvc, _ = metadata_svc.NewRemoteClusterService(uiLogSvcMock, difftool.metadataSvc, xdcrTopologyMock,
-		clusterInfoSvcMock, xdcrLog.DefaultLoggerContext, difftool.utils)
+	if !legacyMode {
+		difftool.metadataSvc, err = metadata_svc.NewMetaKVMetadataSvc(nil, difftool.utils, true /*readOnly*/)
+		if err != nil {
+			return nil, err
+		}
 
-	difftool.replicationSpecSvc, _ = metadata_svc.NewReplicationSpecService(uiLogSvcMock, difftool.remoteClusterSvc,
-		difftool.metadataSvc, xdcrTopologyMock, clusterInfoSvcMock,
-		nil, difftool.utils)
+		uiLogSvcMock := &service_def_mock.UILogSvc{}
+		xdcrTopologyMock := &service_def_mock.XDCRCompTopologySvc{}
+		xdcrTopologyMock.On("IsMyClusterEnterprise").Return(true, nil)
+		clusterInfoSvcMock := &service_def_mock.ClusterInfoSvc{}
+
+		difftool.remoteClusterSvc, _ = metadata_svc.NewRemoteClusterService(uiLogSvcMock, difftool.metadataSvc, xdcrTopologyMock,
+			clusterInfoSvcMock, xdcrLog.DefaultLoggerContext, difftool.utils)
+
+		difftool.replicationSpecSvc, _ = metadata_svc.NewReplicationSpecService(uiLogSvcMock, difftool.remoteClusterSvc,
+			difftool.metadataSvc, xdcrTopologyMock, clusterInfoSvcMock,
+			nil, difftool.utils)
+	}
 
 	// Capture any Ctrl-C for continuing to next steps or cleanup
 	go difftool.monitorInterruptSignal()
@@ -283,13 +287,15 @@ func maybeSetEnv(key, value string) {
 func main() {
 	argParse()
 
-	difftool, err := NewDiffTool()
+	legacyMode := len(options.targetUsername) > 0
+
+	difftool, err := NewDiffTool(legacyMode)
 	if err != nil {
 		fmt.Printf("Error creating difftool: %v\n", err)
 		os.Exit(1)
 	}
 
-	if len(options.remoteClusterName) > 0 {
+	if !legacyMode {
 		err := difftool.retrieveReplicationSpecInfo()
 		if err != nil {
 			os.Exit(1)
@@ -598,7 +604,7 @@ func (difftool *xdcrDiffTool) populateTemporarySpecAndRef() {
 	difftool.specifiedSpec, _ = metadata.NewReplicationSpecification(options.sourceBucketName, "", /*sourceBucketUUID*/
 		"" /*targetClusterUUID*/, options.targetBucketName, "" /*targetBucketUUID*/)
 
-	difftool.specifiedRef, _ = metadata.NewRemoteClusterReference("" /*uuid*/, "" /*name*/, options.targetUrl, options.targetUsername, options.targetPassword,
+	difftool.specifiedRef, _ = metadata.NewRemoteClusterReference("" /*uuid*/, options.remoteClusterName /*name*/, options.targetUrl, options.targetUsername, options.targetPassword,
 		false /*demandEncryption*/, "" /*encryptionType*/, nil, nil, nil)
 }
 
