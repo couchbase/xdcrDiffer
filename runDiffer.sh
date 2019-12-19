@@ -11,7 +11,9 @@
 
 run_args=$@
 
-execGo="xdcrDiffer"
+mainDir="main"
+toolName="xdcrDiffer"
+execGo="$mainDir/$toolName"
 
 function printHelp() {
 cat << EOF
@@ -86,7 +88,7 @@ elif [[ -z "$remoteClusterName" ]];then
 	exit 1
 fi
 
-go build -o $execGo
+cd $mainDir && go build -o $toolName && cd ..
 if (( $? != 0 ));then
 	echo "Unable to build xdcr diff tool"
 	exit 1
