@@ -16,7 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/couchbase/gomemcached"
-	fdp "github.com/nelio2k/xdcrDiffer/fileDescriptorPool"
+	fdp "github.com/couchbaselabs/xdcrDiffer/fileDescriptorPool"
 	"io"
 	"os"
 	"sort"
