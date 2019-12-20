@@ -24,10 +24,24 @@ The xdcrDiffer should be cloned as follows:
 neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs$ git clone git@github.com:couchbaselabs/xdcrDiffer.git
 ```
 
+### Compiling
+
+It can be compiled using the accompanied make file. If necessary, the `make deps` can accomplish that.
+
+```
+neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer/main$ make deps
+```
+
+Then simply run make once the dependencies are satisfied:
+
+```
+neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer/main$ make
+```
+
 ### Running
 #### runDiffer
 
-The `runDiffer.sh` shell script will ask for the minimum required information to compile and run the difftool, and can be edited to add or modify detailed settings that are to be passed to the difftool itself. This is the *preferred* method.
+The `runDiffer.sh` shell script will ask for the minimum required information to run the difftool, and can be edited to add or modify detailed settings that are to be passed to the difftool itself. This is the *preferred* method.
 
 The script also sets up the shell environment to allow the tool binary to be able to contact the source cluster's metakv given the user specified credentials to retrieve the `remote cluster reference` and `replication specification` in order to simulate the existing replication scenario (i.e. filtering).
 
