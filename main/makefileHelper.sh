@@ -23,6 +23,7 @@ do
 			continue
 		elif [[ ! -d "$path/$gojsonsmSymlink" ]] && [[ ! -f "$path/$gojsonsmSymlink" ]];then
 		echo  "Creating symlink of $gopath/$gojsonsmSymlink linking to $path/$gojsonsmBase"
+			mkdir -p `dirname $path/$gojsonsmSymlink`
 			ln -s "$path/$gojsonsmBase/" "$path/$gojsonsmSymlink"
 		fi
 	fi
