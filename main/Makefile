@@ -1,4 +1,4 @@
-# build Copyright (c) 2013-2019 Couchbase, Inc.
+# build Copyright (c) 2013-2020 Couchbase, Inc.
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
 # except in compliance with the License. You may obtain a copy of the License at
 #   http://www.apache.org/licenses/LICENSE-2.0
@@ -21,6 +21,8 @@ clean:
 	$(GOCLEAN)
 	rm -f $(BINARY_NAME)
 deps:
+	$(GOGET) github.com/couchbaselabs/gojsonsm
+	./makefileHelper.sh
 	$(GOGET) github.com/couchbase/goxdcr/base
 	$(GOGET) github.com/couchbase/goxdcr/log
 	$(GOGET) github.com/couchbase/goxdcr/metadata
@@ -32,3 +34,4 @@ deps:
 	$(GOGET) gopkg.in/couchbase/gocb.v1
 	$(GOGET) gopkg.in/couchbase/gocbcore.v7
 	$(GOGET) github.com/couchbase/gomemcached
+	$(GOGET) github.com/rcrowley/go-metrics
