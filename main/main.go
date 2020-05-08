@@ -560,10 +560,17 @@ func (difftool *xdcrDiffTool) waitForDuration(sourceDcpDriver, targetDcpDriver *
 func (difftool *xdcrDiffTool) retrieveReplicationSpecInfo() error {
 	// CBAUTH has already been setup
 	var err error
-	difftool.specifiedRef, err = difftool.remoteClusterSvc.RemoteClusterByRefName(options.remoteClusterName, false /*refresh*/)
+	difftool.specifiedRef, err = difftool.remoteClusterSvc.RemoteClusterByRefName(options.remoteClusterName, true /*refresh*/)
 	if err != nil {
-		difftool.logger.Errorf("Error retrieving remote clusters: %v\n", err)
-		return err
+		for err != nil && err == metadata_svc.RefreshNotEnabledYet {
+			difftool.logger.Infof("Difftool hasn't finished reaching out to remote cluster. Sleeping 5 seconds and retrying...")
+			time.Sleep(5 * time.Second)
+			difftool.specifiedRef, err = difftool.remoteClusterSvc.RemoteClusterByRefName(options.remoteClusterName, true /*refresh*/)
+		}
+		if err != nil {
+			difftool.logger.Errorf("Error retrieving remote clusters: %v\n", err)
+			return err
+		}
 	}
 
 	if options.targetUsername != "" && options.targetPassword != "" {
