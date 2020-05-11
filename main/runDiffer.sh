@@ -115,10 +115,41 @@ if [[ ! -z "$cleanBeforeRun" ]];then
 	done
 fi
 
-if [[ ! -z "$remoteClusterUsername" ]] && [[ ! -z "$remoteClusterPassword" ]];then
-	./$execGo -sourceUrl "$hostname" -sourceUsername $username -sourcePassword $password -sourceBucketName $sourceBucketName -targetBucketName $targetBucketName -remoteClusterName $remoteClusterName -targetUsername $remoteClusterUsername -targetPassword $remoteClusterPassword
-else
-	./$execGo -sourceUrl "$hostname" -sourceUsername $username -sourcePassword $password -sourceBucketName $sourceBucketName -targetBucketName $targetBucketName -remoteClusterName $remoteClusterName
+unameOut=`uname`
+maxFileDescs=""
+
+if [[ "$unameOut" == "Linux" ]] || [[ "$unameOut" == "Darwin" ]];then
+	maxFileDescs=`ulimit -n`
+	if (( $? == 0 )) && [[ "$maxFileDescs" =~ ^[[:digit:]]+$ ]] && (( $maxFileDescs > 4 ));then
+		# use 3/4 to prevent overrun
+		maxFileDescs=`echo $(( $maxFileDescs / 4 * 3 ))`
+	fi
 fi
+
+execString="./$execGo"
+execString="${execString} -sourceUrl"
+execString="${execString} $hostname"
+execString="${execString} -sourceUsername"
+execString="${execString} $username"
+execString="${execString} -sourcePassword"
+execString="${execString} $password"
+execString="${execString} -sourceBucketName"
+execString="${execString} $sourceBucketName"
+execString="${execString} -targetBucketName"
+execString="${execString} $targetBucketName"
+execString="${execString} -remoteClusterName"
+execString="${execString} $remoteClusterName"
+if [[ ! -z "$remoteClusterUsername" ]] && [[ ! -z "$remoteClusterPassword" ]];then
+	execString="${execString} -targetUsername"
+	execString="${execString} $remoteClusterUsername"
+	execString="${execString} -targetPassword"
+	execString="${execString} $remoteClusterPassword"
+fi
+if [[ ! -z "$maxFileDescs" ]];then
+	execString="${execString} -numberOfFileDesc"
+	execString="${execString} $maxFileDescs"
+fi
+
+$execString
 
 unset CBAUTH_REVRPC_URL
