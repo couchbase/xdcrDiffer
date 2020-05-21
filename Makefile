@@ -12,26 +12,28 @@ GOCMD=go
 GOBUILD=$(GOCMD) build
 GOCLEAN=$(GOCMD) clean
 GOGET=$(GOCMD) get
+GOMOD=$(GOCMD) mod
 BINARY_NAME=xdcrDiffer
+GOMOD_FILE=go.mod
+GOMOD_SUM=go.sum
 
 all: build
 build: 
 	$(GOBUILD) -o $(BINARY_NAME) -v
 clean: 
-	$(GOCLEAN)
+	rm $(GOMOD_FILE)
+	rm $(GOMOD_SUM)
 	rm -f $(BINARY_NAME)
+	$(GOCLEAN) -modcache
 deps:
-	$(GOGET) github.com/couchbaselabs/gojsonsm
-	./makefileHelper.sh
-	$(GOGET) github.com/couchbase/goxdcr/base
-	$(GOGET) github.com/couchbase/goxdcr/log
-	$(GOGET) github.com/couchbase/goxdcr/metadata
-	$(GOGET) github.com/couchbase/goxdcr/metadata_svc
-	$(GOGET) github.com/couchbase/goxdcr/parts
-	$(GOGET) github.com/couchbase/goxdcr/service_def
-	$(GOGET) github.com/couchbase/goxdcr/service_def/mocks
-	$(GOGET) github.com/couchbase/goxdcr/utils
-	$(GOGET) gopkg.in/couchbase/gocb.v1
-	$(GOGET) gopkg.in/couchbase/gocbcore.v7
-	$(GOGET) github.com/couchbase/gomemcached
+	$(GOMOD) init
+	$(GOGET) github.com/couchbaselabs/gojsonsm@v1.0.0
+	$(GOGET) github.com/couchbase/goxdcr@v7.0.0-1785
 	$(GOGET) github.com/rcrowley/go-metrics
+	$(GOGET) github.com/couchbase/cbauth
+	$(GOGET) github.com/couchbase/gomemcached
+	$(GOGET) github.com/couchbase/go-couchbase
+	$(GOGET) github.com/couchbase/goutils
+	$(GOGET) golang.org/x/crypto
+	$(GOGET) golang.org/x/net
+	$(GOGET) github.com/couchbase/clog
