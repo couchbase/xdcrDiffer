@@ -1,5 +1,6 @@
-main/source/
-main/target/
-main/fileDiff/
-main/mutationDiff/
-main/xdcrDiffer
+.DS_Store
+.project
+fileDiff/
+mutationDiff/
+source/
+target/

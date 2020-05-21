@@ -9,16 +9,10 @@ If an XDCR is ongoing, it is quite possible that the tool will show documents as
 
 ### Prerequisites
 
-Golang version 1.8 or above.
+Golang version 1.11 or above.
 
-First, clone the repository. Ensure that with respective to the defined GOPATH variable. For example, given the `GOPATH` environment variable:
-
-```
-neil.huang@NeilsMacbookPro:~$ env | grep GOPATH
-GOPATH=/Users/neil.huang/go
-```
-
-The xdcrDiffer should be cloned as follows:
+First, clone the repository to any preferred destination.
+The build system will be using go modules, so it does not require special GOPATH configurations.
 
 ```
 neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs$ git clone git@github.com:couchbaselabs/xdcrDiffer.git
@@ -26,16 +20,16 @@ neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs$ git clone git@gith
 
 ### Compiling
 
-It can be compiled using the accompanied make file. If necessary, the `make deps` can accomplish that.
+It can be compiled using the accompanied make file. If necessary, the `make deps` can accomplish that. It uses go modules and gathers the necessary dependencies.
 
 ```
-neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer/main$ make deps
+neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer$ make deps
 ```
 
 Then simply run make once the dependencies are satisfied:
 
 ```
-neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer/main$ make
+neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer$ make
 ```
 
 ### Running
@@ -43,7 +37,7 @@ neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer/main$ ma
 
 The `runDiffer.sh` shell script will ask for the minimum required information to run the difftool, and can be edited to add or modify detailed settings that are to be passed to the difftool itself. This is the *preferred* method.
 
-The script also sets up the shell environment to allow the tool binary to be able to contact the source cluster's metakv given the user specified credentials to retrieve the `remote cluster reference` and `replication specification` in order to simulate the existing replication scenario (i.e. filtering).
+The script also sets up the shell environment to allow the tool binary to be able to contact the source cluster's metakv given the user specified credentials to retrieve the `remote cluster reference` and `replication specification` in order to simulate the existing replication scenario (i.e. filtering). Note that credentials are sent unencrypted for now.
 
 For example:
 ```
@@ -135,4 +129,4 @@ neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer/mutation
 
 ## License
 
-Copyright 2018-2019 Couchbase, Inc. All rights reserved.
+Copyright 2018-2020 Couchbase, Inc. All rights reserved.
