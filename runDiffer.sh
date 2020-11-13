@@ -107,11 +107,7 @@ if [[ ! -z "$cleanBeforeRun" ]];then
 	echo "Cleaning up before run..."
 	for directory in "source target fileDiff mutationDiff checkpoint"
 	do
-		cd $directory 2> /dev/null
-		if (( $? == 0 ));then
-			rm *
-			cd ..
-		fi
+		rm -rf $directory
 	done
 fi
 
