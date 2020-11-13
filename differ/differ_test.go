@@ -14,7 +14,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/couchbase/gomemcached"
-	fdp "github.com/couchbaselabs/xdcrDiffer/fileDescriptorPool"
+	fdp "xdcrDiffer/fileDescriptorPool"
 	"github.com/stretchr/testify/assert"
 	"io/ioutil"
 	"math/rand"

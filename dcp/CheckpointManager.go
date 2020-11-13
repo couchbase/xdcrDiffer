@@ -3,17 +3,17 @@ package dcp
 import (
 	"encoding/json"
 	"fmt"
+	gocb "github.com/couchbase/gocb"
 	xdcrBase "github.com/couchbase/goxdcr/base"
 	xdcrLog "github.com/couchbase/goxdcr/log"
-	"github.com/couchbaselabs/xdcrDiffer/base"
-	"github.com/couchbaselabs/xdcrDiffer/utils"
 	"github.com/rcrowley/go-metrics"
-	gocb "gopkg.in/couchbase/gocb.v1"
 	"io/ioutil"
 	"math"
 	"os"
 	"sync"
 	"time"
+	"xdcrDiffer/base"
+	"xdcrDiffer/utils"
 )
 
 type CheckpointManager struct {
@@ -167,7 +167,7 @@ func (cm *CheckpointManager) periodicalCheckpointing() {
 	defer ticker.Stop()
 
 	// periodical checkpointing iteration
-	// it is appended to checkpoint file name to make file name unique
+	// it is appended to checkpoint file Name to make file Name unique
 	iter := 0
 
 	for {
@@ -281,7 +281,6 @@ func (cm *CheckpointManager) initializeCluster() error {
 	}
 
 	cm.cluster = cluster
-
 	return nil
 }
 

@@ -15,12 +15,12 @@ import (
 	"fmt"
 	"github.com/couchbase/gomemcached"
 	mcc "github.com/couchbase/gomemcached/client"
+	xdcrParts "github.com/couchbase/goxdcr/base/filter"
 	xdcrLog "github.com/couchbase/goxdcr/log"
-	xdcrParts "github.com/couchbase/goxdcr/parts"
-	"github.com/couchbaselabs/xdcrDiffer/base"
-	fdp "github.com/couchbaselabs/xdcrDiffer/fileDescriptorPool"
-	"github.com/couchbaselabs/xdcrDiffer/utils"
-	gocbcore "gopkg.in/couchbase/gocbcore.v7"
+	"xdcrDiffer/base"
+	fdp "xdcrDiffer/fileDescriptorPool"
+	"xdcrDiffer/utils"
+	gocbcore "github.com/couchbase/gocbcore/v9"
 	"os"
 	"sync"
 )
@@ -38,7 +38,7 @@ type DcpHandler struct {
 	bucketMap    map[uint16]map[int]*Bucket
 	fdPool       fdp.FdPoolIface
 	logger       *xdcrLog.CommonLogger
-	filter       xdcrParts.FilterIface
+	filter       xdcrParts.Filter
 }
 
 func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface) (*DcpHandler, error) {
@@ -173,24 +173,59 @@ func (dh *DcpHandler) writeToDataChan(mut *Mutation) {
 	}
 }
 
-func (dh *DcpHandler) SnapshotMarker(startSeqno, endSeqno uint64, vbno uint16, snapshotType gocbcore.SnapshotState) {
+func (dh *DcpHandler) SnapshotMarker(startSeqno, endSeqno uint64, vbno uint16, streamID uint16, snapshotType gocbcore.SnapshotState) {
 	dh.dcpClient.dcpDriver.checkpointManager.updateSnapshot(vbno, startSeqno, endSeqno)
 }
 
-func (dh *DcpHandler) Mutation(seqno, revId uint64, flags, expiry, lockTime uint32, cas uint64, datatype uint8, vbno uint16, key, value []byte) {
+func (dh *DcpHandler) Mutation(seqno, revId uint64, flags, expiry, lockTime uint32, cas uint64, datatype uint8, vbno uint16, collectionID uint32, streamID uint16, key, value []byte) {
+	// TODO - collectionID
 	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, flags, expiry, gomemcached.UPR_MUTATION, value, datatype))
 }
 
-func (dh *DcpHandler) Deletion(seqno, revId, cas uint64, datatype uint8, vbno uint16, key, value []byte) {
+func (dh *DcpHandler) Deletion(seqno, revId uint64, deleteTime uint32, cas uint64, datatype uint8, vbno uint16, collectionID uint32, streamID uint16, key, value []byte) {
+	// TODO - collectionID
 	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, 0, 0, gomemcached.UPR_DELETION, value, datatype))
 }
 
-func (dh *DcpHandler) Expiration(seqno, revId, cas uint64, vbno uint16, key []byte) {
+func (dh *DcpHandler) Expiration(seqno, revId uint64, deleteTime uint32, cas uint64, vbno uint16, collectionID uint32, streamID uint16, key []byte) {
+	// TODO - collectionID
 	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, 0, 0, gomemcached.UPR_EXPIRATION, nil, 0 /*dataType*/))
 }
 
-func (dh *DcpHandler) End(vbno uint16, err error) {
+func (dh *DcpHandler) End(vbno uint16, streamID uint16, err error) {
 	dh.dcpClient.dcpDriver.handleVbucketCompletion(vbno, err, "dcp stream ended")
+}
+
+func (dh *DcpHandler) CreateCollection(seqNo uint64, version uint8, vbID uint16, manifestUID uint64, scopeID uint32, collectionID uint32, ttl uint32, streamID uint16, key []byte) {
+	// Don't care
+}
+
+func (dh *DcpHandler) DeleteCollection(seqNo uint64, version uint8, vbID uint16, manifestUID uint64, scopeID uint32, collectionID uint32, streamID uint16) {
+	// Don't care
+}
+
+func (dh *DcpHandler) FlushCollection(seqNo uint64, version uint8, vbID uint16, manifestUID uint64, collectionID uint32) {
+	// Don't care
+}
+
+func (dh *DcpHandler) CreateScope(seqNo uint64, version uint8, vbID uint16, manifestUID uint64, scopeID uint32, streamID uint16, key []byte) {
+	// Don't care
+}
+
+func (dh *DcpHandler) DeleteScope(seqNo uint64, version uint8, vbID uint16, manifestUID uint64, scopeID uint32, streamID uint16) {
+	// Don't care
+}
+
+func (dh *DcpHandler) ModifyCollection(seqNo uint64, version uint8, vbID uint16, manifestUID uint64, collectionID uint32, ttl uint32, streamID uint16) {
+	// Don't care
+}
+
+func (dh *DcpHandler) OSOSnapshot(vbID uint16, snapshotType uint32, streamID uint16) {
+	// Don't care
+}
+
+func (dh *DcpHandler) SeqNoAdvanced(vbID uint16, bySeqno uint64, streamID uint16) {
+	// Don't care
 }
 
 type Bucket struct {

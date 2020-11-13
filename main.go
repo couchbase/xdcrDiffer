@@ -13,18 +13,18 @@ import (
 	"flag"
 	"fmt"
 	xdcrBase "github.com/couchbase/goxdcr/base"
+	xdcrParts "github.com/couchbase/goxdcr/base/filter"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/couchbase/goxdcr/metadata"
 	"github.com/couchbase/goxdcr/metadata_svc"
-	xdcrParts "github.com/couchbase/goxdcr/parts"
 	"github.com/couchbase/goxdcr/service_def"
 	service_def_mock "github.com/couchbase/goxdcr/service_def/mocks"
 	xdcrUtils "github.com/couchbase/goxdcr/utils"
-	"github.com/couchbaselabs/xdcrDiffer/base"
-	"github.com/couchbaselabs/xdcrDiffer/dcp"
-	"github.com/couchbaselabs/xdcrDiffer/differ"
-	fdp "github.com/couchbaselabs/xdcrDiffer/fileDescriptorPool"
-	"github.com/couchbaselabs/xdcrDiffer/utils"
+	"xdcrDiffer/base"
+	"xdcrDiffer/dcp"
+	"xdcrDiffer/differ"
+	fdp "xdcrDiffer/fileDescriptorPool"
+	"xdcrDiffer/utils"
 	"os"
 	"os/signal"
 	"sync"
@@ -233,7 +233,7 @@ type xdcrDiffTool struct {
 
 	specifiedRef  *metadata.RemoteClusterReference
 	specifiedSpec *metadata.ReplicationSpecification
-	filter        xdcrParts.FilterIface
+	filter        xdcrParts.Filter
 
 	sourceDcpDriver *dcp.DcpDriver
 	targetDcpDriver *dcp.DcpDriver
@@ -262,13 +262,14 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 		xdcrTopologyMock := &service_def_mock.XDCRCompTopologySvc{}
 		xdcrTopologyMock.On("IsMyClusterEnterprise").Return(true, nil)
 		clusterInfoSvcMock := &service_def_mock.ClusterInfoSvc{}
+		resolverSvc := &service_def_mock.ResolverSvcIface{}
 
 		difftool.remoteClusterSvc, _ = metadata_svc.NewRemoteClusterService(uiLogSvcMock, difftool.metadataSvc, xdcrTopologyMock,
 			clusterInfoSvcMock, xdcrLog.DefaultLoggerContext, difftool.utils)
 
 		difftool.replicationSpecSvc, _ = metadata_svc.NewReplicationSpecService(uiLogSvcMock, difftool.remoteClusterSvc,
 			difftool.metadataSvc, xdcrTopologyMock, clusterInfoSvcMock,
-			nil, difftool.utils)
+			resolverSvc, difftool.logger.LoggerContext(), difftool.utils)
 	}
 
 	// Capture any Ctrl-C for continuing to next steps or cleanup
@@ -488,7 +489,7 @@ func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userNam
 	newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins,
 	dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff,
 	checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool,
-	fdPool fdp.FdPoolIface, filter xdcrParts.FilterIface) *dcp.DcpDriver {
+	fdPool fdp.FdPoolIface, filter xdcrParts.Filter) *dcp.DcpDriver {
 	waitGroup.Add(1)
 	dcpDriver := dcp.NewDcpDriver(logger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBins),
@@ -612,7 +613,7 @@ func (difftool *xdcrDiffTool) populateTemporarySpecAndRef() {
 		"" /*targetClusterUUID*/, options.targetBucketName, "" /*targetBucketUUID*/)
 
 	difftool.specifiedRef, _ = metadata.NewRemoteClusterReference("" /*uuid*/, options.remoteClusterName /*name*/, options.targetUrl, options.targetUsername, options.targetPassword,
-		false /*demandEncryption*/, "" /*encryptionType*/, nil, nil, nil)
+		"", false, "", nil, nil, nil, nil)
 }
 
 func (difftool *xdcrDiffTool) monitorInterruptSignal() {

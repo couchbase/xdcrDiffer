@@ -11,13 +11,12 @@ package dcp
 
 import (
 	"fmt"
+	xdcrParts "github.com/couchbase/goxdcr/base/filter"
 	xdcrLog "github.com/couchbase/goxdcr/log"
-	xdcrParts "github.com/couchbase/goxdcr/parts"
-	"github.com/couchbaselabs/xdcrDiffer/base"
-	fdp "github.com/couchbaselabs/xdcrDiffer/fileDescriptorPool"
-	"github.com/couchbaselabs/xdcrDiffer/utils"
-	gocbcore "gopkg.in/couchbase/gocbcore.v7"
-	"strings"
+	"xdcrDiffer/base"
+	fdp "xdcrDiffer/fileDescriptorPool"
+	"xdcrDiffer/utils"
+	gocbcore "github.com/couchbase/gocbcore/v9"
 	"sync"
 	"time"
 )
@@ -52,7 +51,7 @@ type DcpDriver struct {
 	stateLock sync.RWMutex
 	finChan   chan bool
 	logger    *xdcrLog.CommonLogger
-	filter    xdcrParts.FilterIface
+	filter    xdcrParts.Filter
 }
 
 type VBStateWithLock struct {
@@ -80,7 +79,7 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName,
 	newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int,
 	bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration,
 	checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool,
-	fdPool fdp.FdPoolIface, filter xdcrParts.FilterIface) *DcpDriver {
+	fdPool fdp.FdPoolIface, filter xdcrParts.Filter) *DcpDriver {
 	dcpDriver := &DcpDriver{
 		Name:               name,
 		url:                url,
@@ -117,9 +116,7 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName,
 		newCheckpointFileName, name, bucketOpTimeout, maxNumOfGetStatsRetry,
 		getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval, dcpDriver.startVbtsDoneChan, logger, completeBySeqno)
 
-	if !strings.HasPrefix(dcpDriver.url, "http") {
-		dcpDriver.url = fmt.Sprintf("http://%v", dcpDriver.url)
-	}
+	base.TagHttpPrefix(&dcpDriver.url)
 
 	return dcpDriver
 
@@ -288,7 +285,7 @@ func (d *DcpDriver) reportError(err error) {
 
 func allowedCompletionError(err error) bool {
 	switch err {
-	case gocbcore.ErrStreamClosed:
+	case gocbcore.ErrDCPStreamClosed:
 		return true
 	default:
 		return false

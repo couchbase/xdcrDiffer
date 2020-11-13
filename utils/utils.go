@@ -14,7 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/couchbaselabs/xdcrDiffer/base"
+	"xdcrDiffer/base"
 	"hash/crc32"
 	"io"
 	"io/ioutil"
@@ -22,6 +22,7 @@ import (
 	mrand "math/rand"
 	"net/http"
 	"reflect"
+	"strings"
 	"strconv"
 	"sync"
 	"time"
@@ -371,4 +372,22 @@ func EncodeVersionToEffectiveVersion(version []int) int {
 
 	effectiveVersion := majorVersion*0x10000 + minorVersion
 	return effectiveVersion
+}
+
+// Diff tool by default allow users to enter "http://<addr>:<ns_serverPort>"
+const httpPrefix = "http://"
+const couchbasePrefix = "couchbase://"
+func PopulateCCCPConnectString(url string) string {
+	var cccpUrl string
+	if strings.HasPrefix(url, httpPrefix) {
+		cccpUrl = strings.TrimPrefix(url, httpPrefix)
+	} else {
+		cccpUrl = url
+	}
+
+	if !strings.HasPrefix(cccpUrl, couchbasePrefix) {
+		cccpUrl = fmt.Sprintf("%v%v", couchbasePrefix, cccpUrl)
+	}
+
+	return cccpUrl
 }

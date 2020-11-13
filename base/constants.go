@@ -9,8 +9,6 @@
 
 package base
 
-import ()
-
 const NumberOfVbuckets = 1024
 const DcpHandlerChanSize = 100000
 const FileNamePrefix = "diffTool"

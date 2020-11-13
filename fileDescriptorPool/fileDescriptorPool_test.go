@@ -1,7 +1,6 @@
 package fileDescriptorPool
 
 import (
-	//	"fmt"
 	"github.com/stretchr/testify/assert"
 	"os"
 	"testing"
