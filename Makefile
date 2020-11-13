@@ -27,13 +27,17 @@ clean:
 	$(GOCLEAN) -modcache
 deps:
 	$(GOMOD) init xdcrDiffer
+	$(GOGET) github.com/couchbase/gocbcore/v9
+	$(GOGET) github.com/couchbase/gocb
+	$(GOGET) github.com/couchbase/gocb/v2
 	$(GOGET) github.com/couchbaselabs/gojsonsm@v1.0.0
-	$(GOGET) github.com/couchbase/goxdcr@v7.0.0-1785
+	$(GOGET) github.com/couchbase/goxdcr@v7.0.0-3723
 	$(GOGET) github.com/rcrowley/go-metrics
 	$(GOGET) github.com/couchbase/cbauth
-	$(GOGET) github.com/couchbase/gomemcached@v0.1.0
+	$(GOGET) github.com/couchbase/gomemcached@v0.1.1
 	$(GOGET) github.com/couchbase/go-couchbase
 	$(GOGET) github.com/couchbase/goutils
 	$(GOGET) golang.org/x/crypto
 	$(GOGET) golang.org/x/net
 	$(GOGET) github.com/couchbase/clog
+	$(GOGET) github.com/stretchr/testify/assert

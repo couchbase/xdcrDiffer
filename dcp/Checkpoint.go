@@ -1,7 +1,5 @@
 package dcp
 
-import ()
-
 type Checkpoint struct {
 	Vbuuid             uint64
 	Seqno              uint64
