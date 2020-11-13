@@ -9,7 +9,7 @@ If an XDCR is ongoing, it is quite possible that the tool will show documents as
 
 ### Prerequisites
 
-Golang version 1.11 or above.
+Golang version 1.13 or above.
 
 First, clone the repository to any preferred destination.
 The build system will be using go modules, so it does not require special GOPATH configurations.
