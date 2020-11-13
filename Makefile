@@ -26,7 +26,7 @@ clean:
 	rm -f $(BINARY_NAME)
 	$(GOCLEAN) -modcache
 deps:
-	$(GOMOD) init
+	$(GOMOD) init xdcrDiffer
 	$(GOGET) github.com/couchbaselabs/gojsonsm@v1.0.0
 	$(GOGET) github.com/couchbase/goxdcr@v7.0.0-1785
 	$(GOGET) github.com/rcrowley/go-metrics
