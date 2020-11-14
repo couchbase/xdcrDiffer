@@ -14,16 +14,16 @@ run_args=$@
 execGo="xdcrDiffer"
 
 function findExec() {
-   if [[ ! -f "$execGo" ]];then
-      echo "Unable to find xdcr diff tool. Did you run make?"
-      exit 1
-   fi
+	if [[ ! -f "$execGo" ]]; then
+		echo "Unable to find xdcr diff tool. Did you run make?"
+		exit 1
+	fi
 }
 
 function printHelp() {
-findExec
+	findExec
 
-cat << EOF
+	cat <<EOF
 Usage: $0 -u <username> -p <password> -h <hostname:port> -r <remoteClusterName> -s <sourceBucket> -t <targetBucket> [-n <remoteClusterUsername> -q <remoteClusterPassword>] [-c clean]
 
 This script will set up the necessary environment variable to allow the XDCR diff tool to connect to the metakv service in the
@@ -34,65 +34,65 @@ EOF
 }
 
 while getopts ":h:p:u:r:s:t:n:q:c" opt; do
-  case ${opt} in
-    u )
-      username=$OPTARG
-      ;;
-    p )
-      password=$OPTARG
-      ;;
-    h )
-      hostname=$OPTARG
-      ;;
-    r )
-      remoteClusterName=$OPTARG
-      ;;
-    s )
-      sourceBucketName=$OPTARG
-      ;;
-    t )
-      targetBucketName=$OPTARG
-      ;;
-    n )
-      remoteClusterUsername=$OPTARG
-      ;;
-    q )
-      remoteClusterPassword=$OPTARG
-      ;;
-    c )
-      cleanBeforeRun=1
-      ;;
-    \? )
-      echo "Invalid option: $OPTARG" 1>&2
-      ;;
-    : )
-      echo "Invalid option: $OPTARG requires an argument" 1>&2
-      ;;
-  esac
+	case ${opt} in
+	u)
+		username=$OPTARG
+		;;
+	p)
+		password=$OPTARG
+		;;
+	h)
+		hostname=$OPTARG
+		;;
+	r)
+		remoteClusterName=$OPTARG
+		;;
+	s)
+		sourceBucketName=$OPTARG
+		;;
+	t)
+		targetBucketName=$OPTARG
+		;;
+	n)
+		remoteClusterUsername=$OPTARG
+		;;
+	q)
+		remoteClusterPassword=$OPTARG
+		;;
+	c)
+		cleanBeforeRun=1
+		;;
+	\?)
+		echo "Invalid option: $OPTARG" 1>&2
+		;;
+	:)
+		echo "Invalid option: $OPTARG requires an argument" 1>&2
+		;;
+	esac
 done
-shift $((OPTIND -1))
+shift $((OPTIND - 1))
 
-if [[ -z "$username" ]];then
+if [[ -z "$username" ]]; then
 	echo "Missing username"
 	printHelp
 	exit 1
-elif [[ -z "$password" ]];then
+elif [[ -z "$password" ]]; then
 	echo "Missing password"
 	printHelp
 	exit 1
-elif [[ -z "$hostname" ]];then
+elif [[ -z "$hostname" ]]; then
 	echo "Missing hostname and port"
 	printHelp
 	exit 1
-elif [[ -z "$sourceBucketName" ]];then
+elif [[ -z "$sourceBucketName" ]]; then
 	echo "Missing sourceBucket"
 	printHelp
 	exit 1
-elif [[ -z "$targetBucketName" ]];then
+elif [[ -z "$targetBucketName" ]]; then
 	echo "Missing targetBucket"
 	printHelp
 	exit 1
-elif [[ -z "$remoteClusterName" ]];then
+elif [[ -z "$remoteClusterName" ]]; then
 	echo "Missing remoteCluster"
 	printHelp
 	exit 1
@@ -103,26 +103,26 @@ findExec
 export CBAUTH_REVRPC_URL="http://$username:$password@$hostname"
 echo "Exporting $CBAUTH_REVRPC_URL"
 
-if [[ ! -z "$cleanBeforeRun" ]];then
+if [[ ! -z "$cleanBeforeRun" ]]; then
 	echo "Cleaning up before run..."
-	for directory in "source target fileDiff mutationDiff checkpoint"
-	do
+	for directory in "source target fileDiff mutationDiff checkpoint"; do
 		rm -rf $directory
 	done
 fi
 
-unameOut=`uname`
+unameOut=$(uname)
 maxFileDescs=""
 
-if [[ "$unameOut" == "Linux" ]] || [[ "$unameOut" == "Darwin" ]];then
-	maxFileDescs=`ulimit -n`
-	if (( $? == 0 )) && [[ "$maxFileDescs" =~ ^[[:digit:]]+$ ]] && (( $maxFileDescs > 4 ));then
+if [[ "$unameOut" == "Linux" ]] || [[ "$unameOut" == "Darwin" ]]; then
+	maxFileDescs=$(ulimit -n)
+	if (($? == 0)) && [[ "$maxFileDescs" =~ ^[[:digit:]]+$ ]] && (($maxFileDescs > 4)); then
 		# use 3/4 to prevent overrun
-		maxFileDescs=`echo $(( $maxFileDescs / 4 * 3 ))`
+		maxFileDescs=$(echo $(($maxFileDescs / 4 * 3)))
 	fi
 fi
 
-execString="./$execGo"
+currentPwd=$(pwd)
+execString="$currentPwd/$execGo"
 execString="${execString} -sourceUrl"
 execString="${execString} $hostname"
 execString="${execString} -sourceUsername"
@@ -135,13 +135,13 @@ execString="${execString} -targetBucketName"
 execString="${execString} $targetBucketName"
 execString="${execString} -remoteClusterName"
 execString="${execString} $remoteClusterName"
-if [[ ! -z "$remoteClusterUsername" ]] && [[ ! -z "$remoteClusterPassword" ]];then
+if [[ ! -z "$remoteClusterUsername" ]] && [[ ! -z "$remoteClusterPassword" ]]; then
 	execString="${execString} -targetUsername"
 	execString="${execString} $remoteClusterUsername"
 	execString="${execString} -targetPassword"
 	execString="${execString} $remoteClusterPassword"
 fi
-if [[ ! -z "$maxFileDescs" ]];then
+if [[ ! -z "$maxFileDescs" ]]; then
 	execString="${execString} -numberOfFileDesc"
 	execString="${execString} $maxFileDescs"
 fi
