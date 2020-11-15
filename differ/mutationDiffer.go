@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	xdcrLog "github.com/couchbase/goxdcr/log"
+	"strings"
 	"xdcrDiffer/base"
 	"xdcrDiffer/utils"
 	gocbcore "github.com/couchbase/gocbcore/v9"
@@ -24,8 +25,6 @@ import (
 	"sync/atomic"
 	"time"
 )
-
-const KeyNotFoundErrMsg = "key not found"
 
 type MutationDiffer struct {
 	sourceUrl             string
@@ -597,7 +596,7 @@ func (b *batch) get(key string, isSource bool) {
 }
 
 func isKeyNotFoundError(err error) bool {
-	return err != nil && err.Error() == KeyNotFoundErrMsg
+	return err != nil && strings.Contains(err.Error(),  gocbcore.ErrDocumentNotFound.Error())
 }
 
 func areGetResultsTheSame(result1, result2 *gocbcore.GetResult) bool {
