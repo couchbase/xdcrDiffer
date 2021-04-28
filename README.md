@@ -126,6 +126,25 @@ diffKeysWithError	mutationBodyDiffDetails	mutationBodyDiffKeys	mutationDiffDetai
 neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer/mutationDiff$ cat mutationDiffDetails
 {"Mismatch":{},"MissingFromSource":{},"MissingFromTarget":{}}
 ```
+## Detailed Q&A's
+> Does the tool just match keys or the values of documents as well?
+
+Each mutation from DCP is captured with the metadata as follows https://github.com/couchbaselabs/xdcrDiffer/blob/bc4b08afee4ff33424c8c8dfeab9d7cd3137be81/dcp/DcpHandler.go#L391
+Essentially, it captures the metadata and translates a document’s value into a SHA-512 digest, which is 64 bytes.
+Once all the data are captured from source and target, then it compares between the documents using document ID/Key, to figure out if a doc is missing from one of the two clusters. If none is missing, then it compares the metadata + body hash to see if they are the same.
+
+> What is the largest data size that this tool can practically run on?
+
+The limiting space factor here is the actual machine that is running the diff tool, since the diff tool receives data from the source and target clusters and then capture them for comparison. Each mutation the diff tool stores currently would be 102 bytes + key size. So, depending on how the customer’s docIDs are set up, the space could vary, but is calculable per situation.
+
+> Does the tool always begin from sequence number 0? 
+
+The diff tool has checkpointing mechanism built in in case of interruptions. The checkpointing mechanism is pretty much the same concept as XDCR checkpoints - that it knows where in the DCP stream it was last stopped and will try to resume from that point in time.
+
+## Known Limitations
+1. No collections support. Diffing on Couchbase 7.0 will only diff between default collections.
+2. No SSL support. Data being transferred will be visible. This includes credentials information and also user data.
+3. No dynamic topology change support. If VBs are moved during runtime, the tool does not handle it well.
 
 ## License
 
