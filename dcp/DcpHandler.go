@@ -13,16 +13,16 @@ import (
 	"crypto/sha512"
 	"encoding/binary"
 	"fmt"
+	gocbcore "github.com/couchbase/gocbcore/v9"
 	"github.com/couchbase/gomemcached"
 	mcc "github.com/couchbase/gomemcached/client"
 	xdcrParts "github.com/couchbase/goxdcr/base/filter"
 	xdcrLog "github.com/couchbase/goxdcr/log"
+	"os"
+	"sync"
 	"xdcrDiffer/base"
 	fdp "xdcrDiffer/fileDescriptorPool"
 	"xdcrDiffer/utils"
-	gocbcore "github.com/couchbase/gocbcore/v9"
-	"os"
-	"sync"
 )
 
 // implements StreamObserver
@@ -152,6 +152,16 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 		// if mutation is out of range, ignore it
 		return
 	}
+
+	// Ignore system events - we only care about actual data
+	if mut.IsSystemEvent() {
+		vbno := mut.vbno
+		if vbno == 0 {
+			fmt.Printf("NEIL DEBUG got system event for vb0\n")
+		}
+		return
+	}
+
 	vbno := mut.vbno
 	index := utils.GetBucketIndexFromKey(mut.key, dh.numberOfBins)
 	innerMap := dh.bucketMap[vbno]
@@ -178,18 +188,15 @@ func (dh *DcpHandler) SnapshotMarker(startSeqno, endSeqno uint64, vbno uint16, s
 }
 
 func (dh *DcpHandler) Mutation(seqno, revId uint64, flags, expiry, lockTime uint32, cas uint64, datatype uint8, vbno uint16, collectionID uint32, streamID uint16, key, value []byte) {
-	// TODO - collectionID
-	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, flags, expiry, gomemcached.UPR_MUTATION, value, datatype))
+	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, flags, expiry, gomemcached.UPR_MUTATION, value, datatype, collectionID))
 }
 
 func (dh *DcpHandler) Deletion(seqno, revId uint64, deleteTime uint32, cas uint64, datatype uint8, vbno uint16, collectionID uint32, streamID uint16, key, value []byte) {
-	// TODO - collectionID
-	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, 0, 0, gomemcached.UPR_DELETION, value, datatype))
+	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, 0, 0, gomemcached.UPR_DELETION, value, datatype, collectionID))
 }
 
 func (dh *DcpHandler) Expiration(seqno, revId uint64, deleteTime uint32, cas uint64, vbno uint16, collectionID uint32, streamID uint16, key []byte) {
-	// TODO - collectionID
-	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, 0, 0, gomemcached.UPR_EXPIRATION, nil, 0 /*dataType*/))
+	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, 0, 0, gomemcached.UPR_EXPIRATION, nil, 0, collectionID))
 }
 
 func (dh *DcpHandler) End(vbno uint16, streamID uint16, err error) {
@@ -197,27 +204,30 @@ func (dh *DcpHandler) End(vbno uint16, streamID uint16, err error) {
 }
 
 func (dh *DcpHandler) CreateCollection(seqNo uint64, version uint8, vbID uint16, manifestUID uint64, scopeID uint32, collectionID uint32, ttl uint32, streamID uint16, key []byte) {
-	// Don't care
+	dh.writeToDataChan(CreateMutation(vbID, key, seqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, collectionID))
 }
 
 func (dh *DcpHandler) DeleteCollection(seqNo uint64, version uint8, vbID uint16, manifestUID uint64, scopeID uint32, collectionID uint32, streamID uint16) {
-	// Don't care
+	dh.writeToDataChan(CreateMutation(vbID, nil, seqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, collectionID))
 }
 
 func (dh *DcpHandler) FlushCollection(seqNo uint64, version uint8, vbID uint16, manifestUID uint64, collectionID uint32) {
-	// Don't care
+	// Don't care - not implemented anyway
 }
 
 func (dh *DcpHandler) CreateScope(seqNo uint64, version uint8, vbID uint16, manifestUID uint64, scopeID uint32, streamID uint16, key []byte) {
-	// Don't care
+	// Overloading collectionID field for scopeID because differ doesn't care
+	dh.writeToDataChan(CreateMutation(vbID, nil, seqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, scopeID))
 }
 
 func (dh *DcpHandler) DeleteScope(seqNo uint64, version uint8, vbID uint16, manifestUID uint64, scopeID uint32, streamID uint16) {
-	// Don't care
+	// Overloading collectionID field for scopeID because differ doesn't care
+	dh.writeToDataChan(CreateMutation(vbID, nil, seqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, scopeID))
 }
 
 func (dh *DcpHandler) ModifyCollection(seqNo uint64, version uint8, vbID uint16, manifestUID uint64, collectionID uint32, ttl uint32, streamID uint16) {
-	// Don't care
+	// Overloading collectionID field for scopeID because differ doesn't care
+	dh.writeToDataChan(CreateMutation(vbID, nil, seqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, collectionID))
 }
 
 func (dh *DcpHandler) OSOSnapshot(vbID uint16, snapshotType uint32, streamID uint16) {
@@ -334,9 +344,10 @@ type Mutation struct {
 	opCode   gomemcached.CommandCode
 	value    []byte
 	datatype uint8
+	colId    uint32
 }
 
-func CreateMutation(vbno uint16, key []byte, seqno, revId, cas uint64, flags, expiry uint32, opCode gomemcached.CommandCode, value []byte, datatype uint8) *Mutation {
+func CreateMutation(vbno uint16, key []byte, seqno, revId, cas uint64, flags, expiry uint32, opCode gomemcached.CommandCode, value []byte, datatype uint8, collectionId uint32) *Mutation {
 	return &Mutation{
 		vbno:   vbno,
 		key:    key,
@@ -347,6 +358,7 @@ func CreateMutation(vbno uint16, key []byte, seqno, revId, cas uint64, flags, ex
 		expiry: expiry,
 		opCode: opCode,
 		value:  value,
+		colId:  collectionId,
 	}
 }
 
@@ -362,17 +374,22 @@ func (m *Mutation) IsMutation() bool {
 	return m.opCode == gomemcached.UPR_MUTATION
 }
 
+func (m *Mutation) IsSystemEvent() bool {
+	return m.opCode == gomemcached.DCP_SYSTEM_EVENT
+}
+
 func (m *Mutation) ToUprEvent() *mcc.UprEvent {
 	return &mcc.UprEvent{
-		Opcode:   m.opCode,
-		VBucket:  m.vbno,
-		DataType: m.datatype,
-		Flags:    m.flags,
-		Expiry:   m.expiry,
-		Key:      m.key,
-		Value:    m.value,
-		Cas:      m.cas,
-		Seqno:    m.seqno,
+		Opcode:       m.opCode,
+		VBucket:      m.vbno,
+		DataType:     m.datatype,
+		Flags:        m.flags,
+		Expiry:       m.expiry,
+		Key:          m.key,
+		Value:        m.value,
+		Cas:          m.cas,
+		Seqno:        m.seqno,
+		CollectionId: m.colId,
 	}
 }
 
@@ -388,6 +405,7 @@ func (m *Mutation) ToUprEvent() *mcc.UprEvent {
 //  opType   - 2 byte
 //  datatype - 2 byte
 //  hash     - 64 bytes
+//  collectionId - 4 bytes
 func (mut *Mutation) Serialize() []byte {
 	keyLen := len(mut.key)
 	ret := make([]byte, keyLen+base.BodyLength+2)
@@ -413,6 +431,8 @@ func (mut *Mutation) Serialize() []byte {
 	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(mut.datatype))
 	pos += 2
 	copy(ret[pos:], bodyHash[:])
+	pos += 64
+	binary.BigEndian.PutUint32(ret[pos:pos+4], mut.colId)
 
 	return ret
 }
