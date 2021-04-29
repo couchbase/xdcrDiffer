@@ -224,7 +224,8 @@ func (c *DcpClient) initializeDcpHandlers() error {
 			vbList[j-lowIndex] = c.vbList[j]
 		}
 
-		dcpHandler, err := NewDcpHandler(c, c.dcpDriver.fileDir, i, vbList, c.dcpDriver.numberOfBins, c.dcpDriver.dcpHandlerChanSize, c.dcpDriver.fdPool, c.dcpDriver.IncrementDocReceived)
+		dcpHandler, err := NewDcpHandler(c, c.dcpDriver.fileDir, i, vbList, c.dcpDriver.numberOfBins, c.dcpDriver.dcpHandlerChanSize,
+			c.dcpDriver.fdPool, c.dcpDriver.IncrementDocReceived, c.dcpDriver.IncrementSysEventReceived)
 		if err != nil {
 			c.logger.Errorf("Error constructing dcp handler. err=%v\n", err)
 			return err

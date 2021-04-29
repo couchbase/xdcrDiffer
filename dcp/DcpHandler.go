@@ -27,38 +27,41 @@ import (
 
 // implements StreamObserver
 type DcpHandler struct {
-	dcpClient        *DcpClient
-	fileDir          string
-	index            int
-	vbList           []uint16
-	numberOfBins     int
-	dataChan         chan *Mutation
-	waitGrp          sync.WaitGroup
-	finChan          chan bool
-	bucketMap        map[uint16]map[int]*Bucket
-	fdPool           fdp.FdPoolIface
-	logger           *xdcrLog.CommonLogger
-	filter           xdcrParts.Filter
-	incrementCounter func()
+	dcpClient           *DcpClient
+	fileDir             string
+	index               int
+	vbList              []uint16
+	numberOfBins        int
+	dataChan            chan *Mutation
+	waitGrp             sync.WaitGroup
+	finChan             chan bool
+	bucketMap           map[uint16]map[int]*Bucket
+	fdPool              fdp.FdPoolIface
+	logger              *xdcrLog.CommonLogger
+	filter              xdcrParts.Filter
+	incrementCounter    func()
+	incrementSysCounter func()
 }
 
-func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface, incReceivedCounter func()) (*DcpHandler, error) {
+func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface,
+	incReceivedCounter, incSysEvtReceived func()) (*DcpHandler, error) {
 	if len(vbList) == 0 {
 		return nil, fmt.Errorf("vbList is empty for handler %v", index)
 	}
 	return &DcpHandler{
-		dcpClient:        dcpClient,
-		fileDir:          fileDir,
-		index:            index,
-		vbList:           vbList,
-		numberOfBins:     numberOfBins,
-		dataChan:         make(chan *Mutation, dataChanSize),
-		finChan:          make(chan bool),
-		bucketMap:        make(map[uint16]map[int]*Bucket),
-		fdPool:           fdPool,
-		logger:           dcpClient.logger,
-		filter:           dcpClient.dcpDriver.filter,
-		incrementCounter: incReceivedCounter,
+		dcpClient:           dcpClient,
+		fileDir:             fileDir,
+		index:               index,
+		vbList:              vbList,
+		numberOfBins:        numberOfBins,
+		dataChan:            make(chan *Mutation, dataChanSize),
+		finChan:             make(chan bool),
+		bucketMap:           make(map[uint16]map[int]*Bucket),
+		fdPool:              fdPool,
+		logger:              dcpClient.logger,
+		filter:              dcpClient.dcpDriver.filter,
+		incrementCounter:    incReceivedCounter,
+		incrementSysCounter: incSysEvtReceived,
 	}, nil
 }
 
@@ -159,10 +162,7 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 
 	// Ignore system events - we only care about actual data
 	if mut.IsSystemEvent() {
-		vbno := mut.vbno
-		if vbno == 0 {
-			fmt.Printf("NEIL DEBUG got system event for vb0\n")
-		}
+		dh.incrementSysCounter()
 		return
 	}
 

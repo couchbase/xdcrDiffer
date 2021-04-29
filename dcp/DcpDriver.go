@@ -48,12 +48,15 @@ type DcpDriver struct {
 	// 0 - not started
 	// 1 - started
 	// 2 - stopped
-	state                   DriverState
-	stateLock               sync.RWMutex
-	finChan                 chan bool
-	logger                  *xdcrLog.CommonLogger
-	filter                  xdcrParts.Filter
-	totalNumReceivedFromDCP uint64
+	state     DriverState
+	stateLock sync.RWMutex
+	finChan   chan bool
+	logger    *xdcrLog.CommonLogger
+	filter    xdcrParts.Filter
+
+	// various counters
+	totalNumReceivedFromDCP      uint64
+	totalSysEventReceivedFromDCP uint64
 }
 
 type VBStateWithLock struct {
@@ -197,7 +200,8 @@ func (d *DcpDriver) Stop() error {
 		return nil
 	}
 
-	d.logger.Infof("Dcp driver %v stopping after receiving %v mutations\n", d.Name, atomic.LoadUint64(&d.totalNumReceivedFromDCP))
+	d.logger.Infof("Dcp driver %v stopping after receiving %v mutations (%v system events)\n", d.Name,
+		atomic.LoadUint64(&d.totalNumReceivedFromDCP), atomic.LoadUint64(&d.totalSysEventReceivedFromDCP))
 	defer d.logger.Infof("Dcp driver %v stopped\n", d.Name)
 	defer d.waitGroup.Done()
 
@@ -326,4 +330,8 @@ func (d *DcpDriver) setVbState(vbno uint16, vbState VBState) {
 
 func (d *DcpDriver) IncrementDocReceived() {
 	atomic.AddUint64(&d.totalNumReceivedFromDCP, 1)
+}
+
+func (d *DcpDriver) IncrementSysEventReceived() {
+	atomic.AddUint64(&d.totalSysEventReceivedFromDCP, 1)
 }
