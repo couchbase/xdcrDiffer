@@ -20,15 +20,17 @@ import (
 	"github.com/couchbase/goxdcr/service_def"
 	service_def_mock "github.com/couchbase/goxdcr/service_def/mocks"
 	xdcrUtils "github.com/couchbase/goxdcr/utils"
+	"github.com/stretchr/testify/mock"
+	"os"
+	"os/signal"
+	"sync"
+	"sync/atomic"
+	"time"
 	"xdcrDiffer/base"
 	"xdcrDiffer/dcp"
 	"xdcrDiffer/differ"
 	fdp "xdcrDiffer/fileDescriptorPool"
 	"xdcrDiffer/utils"
-	"os"
-	"os/signal"
-	"sync"
-	"time"
 )
 
 var done = make(chan bool)
@@ -225,15 +227,26 @@ type difftoolState struct {
 }
 
 type xdcrDiffTool struct {
-	utils              xdcrUtils.UtilsIface
-	metadataSvc        service_def.MetadataSvc
-	remoteClusterSvc   service_def.RemoteClusterSvc
-	replicationSpecSvc service_def.ReplicationSpecSvc
-	logger             *xdcrLog.CommonLogger
+	utils                   xdcrUtils.UtilsIface
+	metadataSvc             service_def.MetadataSvc
+	remoteClusterSvc        service_def.RemoteClusterSvc
+	replicationSpecSvc      service_def.ReplicationSpecSvc
+	collectionsManifestsSvc service_def.CollectionsManifestSvc
+	logger                  *xdcrLog.CommonLogger
 
-	specifiedRef  *metadata.RemoteClusterReference
-	specifiedSpec *metadata.ReplicationSpecification
-	filter        xdcrParts.Filter
+	xdcrTopologySvc service_def.XDCRCompTopologySvc
+
+	selfRef          *metadata.RemoteClusterReference
+	selfRefPopulated uint32
+	specifiedRef     *metadata.RemoteClusterReference
+	specifiedSpec    *metadata.ReplicationSpecification
+	filter           xdcrParts.Filter
+
+	srcCapabilities metadata.Capability
+	tgtCapabilities metadata.Capability
+
+	srcBucketManifest *metadata.CollectionsManifest
+	tgtBucketManifest *metadata.CollectionsManifest
 
 	sourceDcpDriver *dcp.DcpDriver
 	targetDcpDriver *dcp.DcpDriver
@@ -259,23 +272,93 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 		}
 
 		uiLogSvcMock := &service_def_mock.UILogSvc{}
+		uiLogSvcMock.On("Write", mock.Anything).Run(func(args mock.Arguments) { fmt.Printf("%v", args.Get(0).(string)) }).Return(nil)
 		xdcrTopologyMock := &service_def_mock.XDCRCompTopologySvc{}
-		xdcrTopologyMock.On("IsMyClusterEnterprise").Return(true, nil)
+		setupXdcrToplogyMock(xdcrTopologyMock, difftool)
 		clusterInfoSvcMock := &service_def_mock.ClusterInfoSvc{}
-		resolverSvc := &service_def_mock.ResolverSvcIface{}
+		resolverSvcMock := &service_def_mock.ResolverSvcIface{}
+		checkpointSvcMock := &service_def_mock.CheckpointsService{}
+		manifestsSvcMock := &service_def_mock.ManifestsService{}
+		manifestsSvcMock.On("GetSourceManifests", mock.Anything).Return(nil, service_def.MetadataNotFoundErr)
+		manifestsSvcMock.On("GetTargetManifests", mock.Anything).Return(nil, service_def.MetadataNotFoundErr)
 
-		difftool.remoteClusterSvc, _ = metadata_svc.NewRemoteClusterService(uiLogSvcMock, difftool.metadataSvc, xdcrTopologyMock,
+		difftool.remoteClusterSvc, err = metadata_svc.NewRemoteClusterService(uiLogSvcMock, difftool.metadataSvc, xdcrTopologyMock,
 			clusterInfoSvcMock, xdcrLog.DefaultLoggerContext, difftool.utils)
+		if err != nil {
+			return nil, err
+		}
 
-		difftool.replicationSpecSvc, _ = metadata_svc.NewReplicationSpecService(uiLogSvcMock, difftool.remoteClusterSvc,
+		difftool.replicationSpecSvc, err = metadata_svc.NewReplicationSpecService(uiLogSvcMock, difftool.remoteClusterSvc,
 			difftool.metadataSvc, xdcrTopologyMock, clusterInfoSvcMock,
-			resolverSvc, difftool.logger.LoggerContext(), difftool.utils)
+			resolverSvcMock, difftool.logger.LoggerContext(), difftool.utils)
+		if err != nil {
+			return nil, err
+		}
+
+		difftool.collectionsManifestsSvc, err = metadata_svc.NewCollectionsManifestService(difftool.remoteClusterSvc,
+			difftool.replicationSpecSvc, uiLogSvcMock, difftool.logger.LoggerContext(), difftool.utils, checkpointSvcMock,
+			xdcrTopologyMock, manifestsSvcMock)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Capture any Ctrl-C for continuing to next steps or cleanup
 	go difftool.monitorInterruptSignal()
 
 	return difftool, err
+}
+
+// This may be re-set up once self-reference is populated
+func setupXdcrToplogyMock(xdcrTopologyMock *service_def_mock.XDCRCompTopologySvc, diffTool *xdcrDiffTool) {
+	xdcrTopologyMock.On("IsMyClusterEnterprise").Return(true, nil)
+	setupTopologyMockCredentials(xdcrTopologyMock, diffTool)
+	setupTopologyMockConnectionString(xdcrTopologyMock, diffTool)
+}
+
+func setupTopologyMockConnectionString(xdcrTopologyMock *service_def_mock.XDCRCompTopologySvc, diffTool *xdcrDiffTool) {
+	var connectionStr *string = new(string)
+	var retErr = new(error)
+	*retErr = fmt.Errorf("Not initialized yet")
+	rePopulateFunc := func() {
+		if atomic.LoadUint32(&diffTool.selfRefPopulated) == 0 {
+			return
+		}
+		newConnectionStr, connErr := diffTool.selfRef.MyConnectionStr()
+		connectionStr = &newConnectionStr
+		retErr = &connErr
+	}
+	xdcrTopologyMock.On("MyConnectionStr").Run(func(args mock.Arguments) {
+		rePopulateFunc()
+	}).Return(*connectionStr, *retErr)
+}
+
+func setupTopologyMockCredentials(xdcrTopologyMock *service_def_mock.XDCRCompTopologySvc, diffTool *xdcrDiffTool) {
+	var selfUserName *string = new(string)
+	var selfPw *string = new(string)
+	var selfAuthMech *xdcrBase.HttpAuthMech = new(xdcrBase.HttpAuthMech)
+	var selfCert *[]byte = new([]byte)
+	var selfSanCert *bool = new(bool)
+	var selfClientCert *[]byte = new([]byte)
+	var selfClientKey *[]byte = new([]byte)
+	var retErr *error = new(error)
+	*retErr = fmt.Errorf("Not initialized yet")
+	rePopulateFunc := func() {
+		if atomic.LoadUint32(&diffTool.selfRefPopulated) == 0 {
+			return
+		}
+		selfUserName = &diffTool.selfRef.UserName_
+		selfPw = &diffTool.selfRef.Password_
+		selfAuthMech = &diffTool.selfRef.HttpAuthMech_
+		selfCert = &diffTool.selfRef.Certificate_
+		selfSanCert = &diffTool.selfRef.SANInCertificate_
+		selfClientCert = &diffTool.selfRef.ClientCertificate_
+		selfClientKey = &diffTool.selfRef.ClientKey_
+		*retErr = nil
+	}
+	xdcrTopologyMock.On("MyCredentials").Run(func(args mock.Arguments) {
+		rePopulateFunc()
+	}).Return(*selfUserName, *selfPw, *selfAuthMech, *selfCert, *selfSanCert, *selfClientCert, *selfClientKey, *retErr)
 }
 
 func maybeSetEnv(key, value string) {
@@ -297,13 +380,21 @@ func main() {
 	}
 
 	if !legacyMode {
-		err := difftool.retrieveReplicationSpecInfo()
-		if err != nil {
+		if err := difftool.retrieveReplicationSpecInfo(); err != nil {
+			fmt.Printf("%v\n", err)
 			os.Exit(1)
 		}
 	} else {
 		// OK to ignore metakv err in manual mode
-		difftool.populateTemporarySpecAndRef()
+		if err := difftool.populateTemporarySpecAndRef(); err != nil {
+			fmt.Printf("%v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	if err := difftool.retrieveClustersCapabilities(); err != nil {
+		fmt.Printf("%v\n", err)
+		os.Exit(1)
 	}
 
 	if options.runDataGeneration {
@@ -605,15 +696,29 @@ func (difftool *xdcrDiffTool) retrieveReplicationSpecInfo() error {
 	}
 
 	difftool.logger.Infof("Found Remote Cluster: %v and Replication Spec: %v\n", difftool.specifiedRef.String(), difftool.specifiedSpec.String())
-	return nil
+
+	return difftool.populateSelfRef()
 }
 
-func (difftool *xdcrDiffTool) populateTemporarySpecAndRef() {
-	difftool.specifiedSpec, _ = metadata.NewReplicationSpecification(options.sourceBucketName, "", /*sourceBucketUUID*/
+func (difftool *xdcrDiffTool) populateTemporarySpecAndRef() error {
+	var err error
+	difftool.specifiedSpec, err = metadata.NewReplicationSpecification(options.sourceBucketName, "", /*sourceBucketUUID*/
 		"" /*targetClusterUUID*/, options.targetBucketName, "" /*targetBucketUUID*/)
+	if err != nil {
+		return fmt.Errorf("populateTemporarySpecAndRef() - %v", err)
+	}
 
-	difftool.specifiedRef, _ = metadata.NewRemoteClusterReference("" /*uuid*/, options.remoteClusterName /*name*/, options.targetUrl, options.targetUsername, options.targetPassword,
+	difftool.specifiedRef, err = metadata.NewRemoteClusterReference("" /*uuid*/, options.remoteClusterName /*name*/, options.targetUrl, options.targetUsername, options.targetPassword,
 		"", false, "", nil, nil, nil, nil)
+	if err != nil {
+		return fmt.Errorf("populateTemporarySpecAndRef() - %v", err)
+	}
+
+	err = difftool.populateSelfRef()
+	if err != nil {
+		return fmt.Errorf("populateTemporarySpecAndRef() - %v", err)
+	}
+	return err
 }
 
 func (difftool *xdcrDiffTool) monitorInterruptSignal() {
@@ -636,4 +741,70 @@ func (difftool *xdcrDiffTool) monitorInterruptSignal() {
 			difftool.curState.mtx.Unlock()
 		}
 	}
+}
+
+func (difftool *xdcrDiffTool) populateSelfRef() error {
+	var err error
+	difftool.selfRef, err = metadata.NewRemoteClusterReference("", base.SelfReferenceName, options.sourceUrl, options.sourceUsername, options.sourcePassword,
+		"", false, "", nil, nil, nil, nil)
+	atomic.StoreUint32(&difftool.selfRefPopulated, 1)
+	if err != nil {
+		return fmt.Errorf("populateSelfRef() - %v", err)
+	}
+
+	return nil
+}
+
+func (difftool *xdcrDiffTool) retrieveClustersCapabilities() error {
+	ref, err := difftool.remoteClusterSvc.RemoteClusterByRefName(difftool.specifiedRef.Name(), false)
+	if err != nil {
+		return fmt.Errorf("retrieveClusterCapabilities.RemoteClusterByRefName(%v) - %v", difftool.specifiedRef.Name(), err)
+	}
+
+	difftool.tgtCapabilities, err = difftool.remoteClusterSvc.GetCapability(ref)
+	if err != nil {
+		return fmt.Errorf("retrieveClusterCapabilities.GetCapability(%v) - %v", difftool.specifiedRef.Name(), err)
+	}
+
+	// Self capabilities
+	connStr, err := difftool.selfRef.MyConnectionStr()
+	if err != nil {
+		return fmt.Errorf("retrieveClusterCapabilities.myConnStr(%v) - %v", difftool.specifiedRef.Name(), err)
+	}
+	defaultPoolInfo, err := difftool.utils.GetClusterInfo(connStr, xdcrBase.DefaultPoolPath, difftool.selfRef.UserName(),
+		difftool.selfRef.Password(), difftool.selfRef.HttpAuthMech(), difftool.selfRef.Certificate(),
+		difftool.selfRef.SANInCertificate(), difftool.selfRef.ClientCertificate(), difftool.selfRef.ClientKey(),
+		difftool.logger)
+	if err != nil {
+		return fmt.Errorf("retrieveClusterCapabilities.getClusterInfo(%v) - %v", difftool.specifiedRef.Name(), err)
+	}
+
+	err = difftool.srcCapabilities.LoadFromDefaultPoolInfo(defaultPoolInfo, difftool.logger)
+	if err != nil {
+		return fmt.Errorf("retrieveClusterCapabilities.LoadFromDefaultPoolInfo(%v) - %v", defaultPoolInfo, err)
+	}
+
+	fmt.Printf("Source cluster supports collections: %v Target cluster supports collections: %v\n",
+		difftool.srcCapabilities.HasCollectionSupport(), difftool.tgtCapabilities.HasCollectionSupport())
+
+	if difftool.srcCapabilities.HasCollectionSupport() && difftool.tgtCapabilities.HasCollectionSupport() {
+		if err := difftool.PopulateManifests(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (difftool *xdcrDiffTool) PopulateManifests() error {
+	var err error
+	difftool.srcBucketManifest, difftool.tgtBucketManifest, err = difftool.collectionsManifestsSvc.GetLatestManifests(difftool.specifiedSpec, true)
+
+	if err != nil {
+		fmt.Printf("PopulateManifests() - %v\n", err)
+		return err
+	}
+
+	fmt.Printf("NEIL DEBUG src manifests: %v\n tgt manifest: %v\n", difftool.srcBucketManifest, difftool.tgtBucketManifest)
+	return nil
 }
