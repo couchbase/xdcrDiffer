@@ -804,7 +804,5 @@ func (difftool *xdcrDiffTool) PopulateManifests() error {
 		fmt.Printf("PopulateManifests() - %v\n", err)
 		return err
 	}
-
-	fmt.Printf("NEIL DEBUG src manifests: %v\n tgt manifest: %v\n", difftool.srcBucketManifest, difftool.tgtBucketManifest)
 	return nil
 }
