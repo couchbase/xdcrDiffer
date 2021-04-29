@@ -16,12 +16,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/couchbase/gomemcached"
-	fdp "xdcrDiffer/fileDescriptorPool"
 	"io"
 	"os"
 	"sort"
 	"strings"
 	"sync"
+	fdp "xdcrDiffer/fileDescriptorPool"
 )
 
 // Given two DCP Dump files, perform necessary diffing task
@@ -70,6 +70,7 @@ type oneEntry struct {
 	OpCode   gomemcached.CommandCode
 	Datatype uint8
 	BodyHash [sha512.Size]byte
+	ColId    uint32
 }
 
 func (oneEntry *oneEntry) String() string {
@@ -117,6 +118,7 @@ func (entry oneEntry) Diff(other oneEntry) (int, bool) {
 		} else if entry.Datatype != other.Datatype {
 			return 0, false
 		}
+		// TODO NEIL - convert colId into namespace using manifest and then check against mapping
 	}
 	return 0, true
 }
@@ -224,6 +226,13 @@ func getOneEntry(readOp fdp.FileOp) (*oneEntry, error) {
 		return nil, fmt.Errorf("Unable to read hashBytes, bytes read: %v, err: %v", bytesRead, err)
 	}
 	copy(entry.BodyHash[:], hashBytes)
+
+	collectionIdBytes := make([]byte, 4)
+	bytesRead, err = readOp(collectionIdBytes)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to read collectionIdBytes, bytes read: %v, err: %v", bytesRead, err)
+	}
+	entry.ColId = binary.BigEndian.Uint32(collectionIdBytes)
 
 	return entry, nil
 }

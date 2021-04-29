@@ -12,18 +12,18 @@ package differ
 import (
 	"encoding/json"
 	"fmt"
-	xdcrLog "github.com/couchbase/goxdcr/log"
-	"strings"
-	"xdcrDiffer/base"
-	"xdcrDiffer/utils"
 	gocbcore "github.com/couchbase/gocbcore/v9"
+	xdcrLog "github.com/couchbase/goxdcr/log"
 	"io/ioutil"
 	"math"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"xdcrDiffer/base"
+	"xdcrDiffer/utils"
 )
 
 type MutationDiffer struct {
@@ -121,6 +121,7 @@ func NewMutationDiffer(sourceUrl string,
 	}
 }
 
+// TODO - NEIL figure out collection ID
 func (d *MutationDiffer) Run() error {
 	diffKeys, err := d.loadDiffKeys()
 	if err != nil {
@@ -596,7 +597,7 @@ func (b *batch) get(key string, isSource bool) {
 }
 
 func isKeyNotFoundError(err error) bool {
-	return err != nil && strings.Contains(err.Error(),  gocbcore.ErrDocumentNotFound.Error())
+	return err != nil && strings.Contains(err.Error(), gocbcore.ErrDocumentNotFound.Error())
 }
 
 func areGetResultsTheSame(result1, result2 *gocbcore.GetResult) bool {

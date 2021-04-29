@@ -63,7 +63,8 @@ const CheckpointInterval = 600
 //  opCode   - 2 bytes
 //  datatype - 2 byte
 //  hash     - 64 bytes
-const BodyLength = 100
+//  collectionId - 4 bytes
+const BodyLength = 104
 
 var VersionForRBACSupport = []int{5, 0}
 
