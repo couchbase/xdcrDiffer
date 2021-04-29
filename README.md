@@ -33,6 +33,9 @@ neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer$ make
 ```
 
 ### Running
+#### Preparing Couchbase Clusters
+Before running the differ to examine consistencies between two clusters, it is *highly recommended* to first set the Metadata Purge Interval to a low value, and then once that period has elapsed, run compaction on both clusters to ensure that tombstones are removed. Compaction will also ensure that the differ will only receive the minimum amount of data necessary, which will help minimize the storage requirement for the diff tool.
+
 #### runDiffer
 
 The `runDiffer.sh` shell script will ask for the minimum required information to run the difftool, and can be edited to add or modify detailed settings that are to be passed to the difftool itself. This is the *preferred* method.
