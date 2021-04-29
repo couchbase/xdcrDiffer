@@ -11,14 +11,15 @@ package dcp
 
 import (
 	"fmt"
+	gocbcore "github.com/couchbase/gocbcore/v9"
 	xdcrParts "github.com/couchbase/goxdcr/base/filter"
 	xdcrLog "github.com/couchbase/goxdcr/log"
+	"sync"
+	"sync/atomic"
+	"time"
 	"xdcrDiffer/base"
 	fdp "xdcrDiffer/fileDescriptorPool"
 	"xdcrDiffer/utils"
-	gocbcore "github.com/couchbase/gocbcore/v9"
-	"sync"
-	"time"
 )
 
 type DcpDriver struct {
@@ -47,11 +48,12 @@ type DcpDriver struct {
 	// 0 - not started
 	// 1 - started
 	// 2 - stopped
-	state     DriverState
-	stateLock sync.RWMutex
-	finChan   chan bool
-	logger    *xdcrLog.CommonLogger
-	filter    xdcrParts.Filter
+	state                   DriverState
+	stateLock               sync.RWMutex
+	finChan                 chan bool
+	logger                  *xdcrLog.CommonLogger
+	filter                  xdcrParts.Filter
+	totalNumReceivedFromDCP uint64
 }
 
 type VBStateWithLock struct {
@@ -195,7 +197,7 @@ func (d *DcpDriver) Stop() error {
 		return nil
 	}
 
-	d.logger.Infof("Dcp driver %v stopping\n", d.Name)
+	d.logger.Infof("Dcp driver %v stopping after receiving %v mutations\n", d.Name, atomic.LoadUint64(&d.totalNumReceivedFromDCP))
 	defer d.logger.Infof("Dcp driver %v stopped\n", d.Name)
 	defer d.waitGroup.Done()
 
@@ -320,4 +322,8 @@ func (d *DcpDriver) setVbState(vbno uint16, vbState VBState) {
 	vbStateWithLock.lock.Lock()
 	defer vbStateWithLock.lock.Unlock()
 	vbStateWithLock.vbState = vbState
+}
+
+func (d *DcpDriver) IncrementDocReceived() {
+	atomic.AddUint64(&d.totalNumReceivedFromDCP, 1)
 }

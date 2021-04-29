@@ -1,10 +1,10 @@
 package dcp
 
 import (
-	memd "github.com/couchbase/gocbcore/v9/memd"
-	"xdcrDiffer/base"
 	gocbcore "github.com/couchbase/gocbcore/v9"
+	memd "github.com/couchbase/gocbcore/v9/memd"
 	"time"
+	"xdcrDiffer/base"
 )
 
 type GocbcoreDCPFeed struct {
@@ -72,7 +72,7 @@ func (f *GocbcoreDCPFeed) setupDCPAgentConfig(pw *base.PasswordAuth) *gocbcore.D
 		Auth:             auth,
 		ConnectTimeout:   f.SetupTimeout,
 		KVConnectTimeout: f.SetupTimeout,
-		UseCollections:   false, /* for now*/
+		UseCollections:   true,
 		// DCPBufferSize
 	}
 }
