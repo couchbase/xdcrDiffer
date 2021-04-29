@@ -35,6 +35,7 @@ const DiffErrorKeysFileName = "diffKeysWithError"
 const StatsReportInterval = 5
 const SourceClusterName = "source"
 const TargetClusterName = "target"
+const SelfReferenceName = "xdcrDifftoolSelfRef"
 
 const NodesKey = "nodes"
 const PoolsDefaultBucketPath = "/pools/default/buckets/"
