@@ -11,15 +11,15 @@ package dcp
 
 import (
 	"fmt"
-	xdcrLog "github.com/couchbase/goxdcr/log"
-	"xdcrDiffer/utils"
-	"xdcrDiffer/base"
 	gocb "github.com/couchbase/gocb/v2"
 	gocbcore "github.com/couchbase/gocbcore/v9"
+	xdcrLog "github.com/couchbase/goxdcr/log"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
+	"xdcrDiffer/base"
+	"xdcrDiffer/utils"
 )
 
 type DcpClient struct {
@@ -141,7 +141,6 @@ func (c *DcpClient) Stop() error {
 		c.closeStreamIfOpen(i)
 	}
 
-
 	c.logger.Infof("Dcp client %v stopping handlers\n", c.Name)
 	for _, dcpHandler := range c.dcpHandlers {
 		if dcpHandler != nil {
@@ -225,7 +224,7 @@ func (c *DcpClient) initializeDcpHandlers() error {
 			vbList[j-lowIndex] = c.vbList[j]
 		}
 
-		dcpHandler, err := NewDcpHandler(c, c.dcpDriver.fileDir, i, vbList, c.dcpDriver.numberOfBins, c.dcpDriver.dcpHandlerChanSize, c.dcpDriver.fdPool)
+		dcpHandler, err := NewDcpHandler(c, c.dcpDriver.fileDir, i, vbList, c.dcpDriver.numberOfBins, c.dcpDriver.dcpHandlerChanSize, c.dcpDriver.fdPool, c.dcpDriver.IncrementDocReceived)
 		if err != nil {
 			c.logger.Errorf("Error constructing dcp handler. err=%v\n", err)
 			return err
