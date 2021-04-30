@@ -248,6 +248,10 @@ type xdcrDiffTool struct {
 	srcBucketManifest *metadata.CollectionsManifest
 	tgtBucketManifest *metadata.CollectionsManifest
 
+	// If non-empty, just stream these collection IDs from each side's DCP
+	srcCollectionIds []uint32
+	tgtCollectionIds []uint32
+
 	sourceDcpDriver *dcp.DcpDriver
 	targetDcpDriver *dcp.DcpDriver
 
@@ -501,7 +505,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.numberOfWorkersPerSourceDcpClient, options.numberOfBins, options.sourceDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
-		difftool.srcCapabilities, difftool.srcBucketManifest)
+		difftool.srcCapabilities, difftool.srcCollectionIds)
 
 	delayDurationBetweenSourceAndTarget := time.Duration(options.delayBetweenSourceAndTarget) * time.Second
 	difftool.logger.Infof("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
@@ -514,7 +518,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.numberOfWorkersPerTargetDcpClient, options.numberOfBins, options.targetDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
-		difftool.tgtCapabilities, difftool.tgtBucketManifest)
+		difftool.tgtCapabilities, difftool.tgtCollectionIds)
 
 	difftool.curState.mtx.Lock()
 	difftool.curState.state = StateDcpStarted
@@ -578,16 +582,13 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 	}
 }
 
-func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string,
-	numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64,
-	errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter,
-	capabilities metadata.Capability, manifest *metadata.CollectionsManifest) *dcp.DcpDriver {
+func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32) *dcp.DcpDriver {
 	waitGroup.Add(1)
 	dcpDriver := dcp.NewDcpDriver(logger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBins),
 		int(dcpHandlerChanSize), time.Duration(bucketOpTimeout)*time.Second, int(maxNumOfGetStatsRetry),
 		time.Duration(getStatsRetryInterval)*time.Second, time.Duration(getStatsMaxBackoff)*time.Second,
-		int(checkpointInterval), errChan, waitGroup, completeBySeqno, fdPool, filter, capabilities, manifest)
+		int(checkpointInterval), errChan, waitGroup, completeBySeqno, fdPool, filter, capabilities, collectionIDs)
 	// dcp driver startup may take some time. Do it asynchronously
 	go startDcpDriverAysnc(dcpDriver, errChan, logger)
 	return dcpDriver
@@ -788,12 +789,30 @@ func (difftool *xdcrDiffTool) retrieveClustersCapabilities() error {
 	fmt.Printf("Source cluster supports collections: %v Target cluster supports collections: %v\n",
 		difftool.srcCapabilities.HasCollectionSupport(), difftool.tgtCapabilities.HasCollectionSupport())
 
-	if difftool.srcCapabilities.HasCollectionSupport() && difftool.tgtCapabilities.HasCollectionSupport() {
-		if err := difftool.PopulateManifests(); err != nil {
+	if difftool.srcCapabilities.HasCollectionSupport() || difftool.tgtCapabilities.HasCollectionSupport() {
+		err = difftool.populateCollectionsPreReq()
+		if err != nil {
 			return err
 		}
 	}
+	return nil
+}
 
+func (difftool *xdcrDiffTool) populateCollectionsPreReq() error {
+	if difftool.srcCapabilities.HasCollectionSupport() && difftool.tgtCapabilities.HasCollectionSupport() {
+		// Both have collections support
+		if err := difftool.PopulateManifests(); err != nil {
+			return err
+		}
+	} else if difftool.srcCapabilities.HasCollectionSupport() && !difftool.tgtCapabilities.HasCollectionSupport() {
+		// Source has collections but target does not - stream only default collection from the source
+		difftool.srcCollectionIds = append(difftool.srcCollectionIds, 0)
+	} else if !difftool.srcCapabilities.HasCollectionSupport() && difftool.tgtCapabilities.HasCollectionSupport() {
+		// Source does not have collections but target does - stream only default collection from the target
+		difftool.tgtCollectionIds = append(difftool.tgtCollectionIds, 0)
+	} else {
+		// neither have collections - dont' do anything
+	}
 	return nil
 }
 
