@@ -14,6 +14,7 @@ import (
 	gocbcore "github.com/couchbase/gocbcore/v9"
 	xdcrParts "github.com/couchbase/goxdcr/base/filter"
 	xdcrLog "github.com/couchbase/goxdcr/log"
+	"github.com/couchbase/goxdcr/metadata"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,11 +49,13 @@ type DcpDriver struct {
 	// 0 - not started
 	// 1 - started
 	// 2 - stopped
-	state     DriverState
-	stateLock sync.RWMutex
-	finChan   chan bool
-	logger    *xdcrLog.CommonLogger
-	filter    xdcrParts.Filter
+	state        DriverState
+	stateLock    sync.RWMutex
+	finChan      chan bool
+	logger       *xdcrLog.CommonLogger
+	filter       xdcrParts.Filter
+	capabilities metadata.Capability
+	manifest     *metadata.CollectionsManifest
 
 	// various counters
 	totalNumReceivedFromDCP      uint64
@@ -80,11 +83,7 @@ const (
 	DriverStateStopped DriverState = iota
 )
 
-func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
-	newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int,
-	bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration,
-	checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool,
-	fdPool fdp.FdPoolIface, filter xdcrParts.Filter) *DcpDriver {
+func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration, checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, manifest *metadata.CollectionsManifest) *DcpDriver {
 	dcpDriver := &DcpDriver{
 		Name:               name,
 		url:                url,
@@ -108,6 +107,8 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName,
 		startVbtsDoneChan:  make(chan bool),
 		logger:             logger,
 		filter:             filter,
+		capabilities:       capabilities,
+		manifest:           manifest,
 	}
 
 	var vbno uint16
@@ -242,7 +243,7 @@ func (d *DcpDriver) initializeDcpClients() {
 		}
 
 		d.childWaitGroup.Add(1)
-		dcpClient := NewDcpClient(d, i, vbList, d.childWaitGroup, d.startVbtsDoneChan)
+		dcpClient := NewDcpClient(d, i, vbList, d.childWaitGroup, d.startVbtsDoneChan, d.capabilities)
 		d.clients[i] = dcpClient
 	}
 }

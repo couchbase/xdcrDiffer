@@ -14,6 +14,7 @@ import (
 	gocb "github.com/couchbase/gocb/v2"
 	gocbcore "github.com/couchbase/gocbcore/v9"
 	xdcrLog "github.com/couchbase/goxdcr/log"
+	"github.com/couchbase/goxdcr/metadata"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -37,11 +38,12 @@ type DcpClient struct {
 	finChan            chan bool
 	startVbtsDoneChan  chan bool
 	logger             *xdcrLog.CommonLogger
+	capabilities       metadata.Capability
 
 	gocbcoreDcpFeed *GocbcoreDCPFeed
 }
 
-func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.WaitGroup, startVbtsDoneChan chan bool) *DcpClient {
+func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.WaitGroup, startVbtsDoneChan chan bool, capabilities metadata.Capability) *DcpClient {
 	return &DcpClient{
 		Name:               fmt.Sprintf("%v_%v", dcpDriver.Name, i),
 		dcpDriver:          dcpDriver,
@@ -53,6 +55,7 @@ func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.
 		finChan:            make(chan bool),
 		startVbtsDoneChan:  startVbtsDoneChan,
 		logger:             dcpDriver.logger,
+		capabilities:       capabilities,
 	}
 }
 
@@ -188,19 +191,6 @@ func (c *DcpClient) initializeCluster() (err error) {
 		return
 	}
 
-	// TODO - use RBAC if needed
-	//if c.dcpDriver.rbacSupported {
-	//	err = cluster.Authenticate(gocb.PasswordAuthenticator{
-	//		Username: c.dcpDriver.userName,
-	//		Password: c.dcpDriver.password,
-	//	})
-	//
-	//	if err != nil {
-	//		c.logger.Errorf(err.Error())
-	//		return
-	//	}
-	//}
-
 	c.cluster = cluster
 	return nil
 }
@@ -210,7 +200,7 @@ func (c *DcpClient) initializeBucket() (err error) {
 		Username: c.dcpDriver.userName,
 		Password: c.dcpDriver.password,
 	}
-	c.gocbcoreDcpFeed, err = NewGocbcoreDCPFeed(c.Name, []string{c.dcpDriver.url}, c.dcpDriver.bucketName, pwAuth)
+	c.gocbcoreDcpFeed, err = NewGocbcoreDCPFeed(c.Name, []string{c.dcpDriver.url}, c.dcpDriver.bucketName, pwAuth, c.capabilities.HasCollectionSupport())
 	return
 }
 

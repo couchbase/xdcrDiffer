@@ -12,8 +12,8 @@ type GocbcoreDCPFeed struct {
 	dcpAgent *gocbcore.DCPAgent
 }
 
-func (f *GocbcoreDCPFeed) setupDCPAgent(pw *base.PasswordAuth) error {
-	agentConfig := f.setupDCPAgentConfig(pw)
+func (f *GocbcoreDCPFeed) setupDCPAgent(pw *base.PasswordAuth, collections bool) error {
+	agentConfig := f.setupDCPAgentConfig(pw, collections)
 
 	connStr := base.GetConnStr(f.Servers)
 
@@ -57,7 +57,7 @@ func NewDCPFeedParams() *DCPFeedParams {
 	return &DCPFeedParams{IncludeXAttrs: true}
 }
 
-func (f *GocbcoreDCPFeed) setupDCPAgentConfig(pw *base.PasswordAuth) *gocbcore.DCPAgentConfig {
+func (f *GocbcoreDCPFeed) setupDCPAgentConfig(pw *base.PasswordAuth, collections bool) *gocbcore.DCPAgentConfig {
 	var auth gocbcore.AuthProvider
 	if pw != nil {
 		auth = gocbcore.PasswordAuthProvider{
@@ -72,7 +72,7 @@ func (f *GocbcoreDCPFeed) setupDCPAgentConfig(pw *base.PasswordAuth) *gocbcore.D
 		Auth:             auth,
 		ConnectTimeout:   f.SetupTimeout,
 		KVConnectTimeout: f.SetupTimeout,
-		UseCollections:   true,
+		UseCollections:   collections,
 		// DCPBufferSize
 	}
 }
@@ -105,7 +105,7 @@ func (f *GocbcoreDCPFeed) setupGocbcoreDCPAgent(config *gocbcore.DCPAgentConfig,
 	return
 }
 
-func NewGocbcoreDCPFeed(id string, servers []string, bucketName string, passwordAuth *base.PasswordAuth) (*GocbcoreDCPFeed, error) {
+func NewGocbcoreDCPFeed(id string, servers []string, bucketName string, passwordAuth *base.PasswordAuth, collections bool) (*GocbcoreDCPFeed, error) {
 	gocbcoreDcpFeed := &GocbcoreDCPFeed{
 		GocbcoreAgentCommon: base.GocbcoreAgentCommon{
 			Name:         id,
@@ -116,6 +116,6 @@ func NewGocbcoreDCPFeed(id string, servers []string, bucketName string, password
 		dcpAgent: nil,
 	}
 
-	err := gocbcoreDcpFeed.setupDCPAgent(passwordAuth)
+	err := gocbcoreDcpFeed.setupDCPAgent(passwordAuth, collections)
 	return gocbcoreDcpFeed, err
 }
