@@ -39,11 +39,12 @@ type DcpClient struct {
 	startVbtsDoneChan  chan bool
 	logger             *xdcrLog.CommonLogger
 	capabilities       metadata.Capability
+	collectionIds      []uint32
 
 	gocbcoreDcpFeed *GocbcoreDCPFeed
 }
 
-func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.WaitGroup, startVbtsDoneChan chan bool, capabilities metadata.Capability) *DcpClient {
+func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.WaitGroup, startVbtsDoneChan chan bool, capabilities metadata.Capability, collectionIds []uint32) *DcpClient {
 	return &DcpClient{
 		Name:               fmt.Sprintf("%v_%v", dcpDriver.Name, i),
 		dcpDriver:          dcpDriver,
@@ -56,6 +57,7 @@ func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.
 		startVbtsDoneChan:  startVbtsDoneChan,
 		logger:             dcpDriver.logger,
 		capabilities:       capabilities,
+		collectionIds:      collectionIds,
 	}
 }
 
@@ -275,9 +277,10 @@ func (c *DcpClient) openDcpStreams() error {
 		if c.dcpAgent == nil {
 			c.dcpAgent = c.gocbcoreDcpFeed.dcpAgent
 		}
+
 		_, err := c.dcpAgent.OpenStream(vbno, 0, gocbcore.VbUUID(vbts.Checkpoint.Vbuuid), gocbcore.SeqNo(vbts.Checkpoint.Seqno),
 			gocbcore.SeqNo(math.MaxUint64 /*vbts.EndSeqno*/), gocbcore.SeqNo(snapshotStartSeqno), gocbcore.SeqNo(snapshotEndSeqno), c.vbHandlerMap[vbno],
-			gocbcore.OpenStreamOptions{} /* <-- TODO NEIL collections options */, c.openStreamFunc)
+			c.getOpenStreamOptions(), c.openStreamFunc)
 
 		if err != nil {
 			c.logger.Errorf("err opening dcp stream for vb %v. err=%v\n", vbno, err)
@@ -323,4 +326,12 @@ func (c *DcpClient) closeStreamFunc(err error) {
 	if streamsLeft == 0 {
 		c.closeStreamsDoneCh <- true
 	}
+}
+
+func (c *DcpClient) getOpenStreamOptions() (streamOpts gocbcore.OpenStreamOptions) {
+	if len(c.collectionIds) > 0 {
+		filterOpts := &gocbcore.OpenStreamFilterOptions{CollectionIDs: c.collectionIds}
+		streamOpts.FilterOptions = filterOpts
+	}
+	return
 }

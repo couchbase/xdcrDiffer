@@ -49,13 +49,13 @@ type DcpDriver struct {
 	// 0 - not started
 	// 1 - started
 	// 2 - stopped
-	state        DriverState
-	stateLock    sync.RWMutex
-	finChan      chan bool
-	logger       *xdcrLog.CommonLogger
-	filter       xdcrParts.Filter
-	capabilities metadata.Capability
-	manifest     *metadata.CollectionsManifest
+	state         DriverState
+	stateLock     sync.RWMutex
+	finChan       chan bool
+	logger        *xdcrLog.CommonLogger
+	filter        xdcrParts.Filter
+	capabilities  metadata.Capability
+	collectionIDs []uint32
 
 	// various counters
 	totalNumReceivedFromDCP      uint64
@@ -83,7 +83,7 @@ const (
 	DriverStateStopped DriverState = iota
 )
 
-func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration, checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, manifest *metadata.CollectionsManifest) *DcpDriver {
+func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration, checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIds []uint32) *DcpDriver {
 	dcpDriver := &DcpDriver{
 		Name:               name,
 		url:                url,
@@ -108,7 +108,7 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName,
 		logger:             logger,
 		filter:             filter,
 		capabilities:       capabilities,
-		manifest:           manifest,
+		collectionIDs:      collectionIds,
 	}
 
 	var vbno uint16
@@ -243,7 +243,7 @@ func (d *DcpDriver) initializeDcpClients() {
 		}
 
 		d.childWaitGroup.Add(1)
-		dcpClient := NewDcpClient(d, i, vbList, d.childWaitGroup, d.startVbtsDoneChan, d.capabilities)
+		dcpClient := NewDcpClient(d, i, vbList, d.childWaitGroup, d.startVbtsDoneChan, d.capabilities, d.collectionIDs)
 		d.clients[i] = dcpClient
 	}
 }
