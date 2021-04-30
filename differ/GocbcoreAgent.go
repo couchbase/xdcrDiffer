@@ -1,9 +1,9 @@
 package differ
 
 import (
-	"xdcrDiffer/base"
 	"github.com/couchbase/gocbcore/v9"
 	"time"
+	"xdcrDiffer/base"
 )
 
 type GocbcoreAgent struct {
@@ -11,8 +11,9 @@ type GocbcoreAgent struct {
 	agent *gocbcore.Agent
 }
 
-func (a *GocbcoreAgent) setupAgent(password *base.PasswordAuth) error {
+func (a *GocbcoreAgent) setupAgent(password *base.PasswordAuth, batchSize int) error {
 	agentConfig := a.setupAgentConfig(password)
+	agentConfig.MaxQueueSize = batchSize * 50 // Give SDK some breathing room
 
 	connStr := base.GetConnStr(a.Servers)
 
@@ -83,7 +84,7 @@ func (a *GocbcoreAgent) Get(key string, scopeName string, collectionName string,
 	return err
 }
 
-func NewGocbcoreAgent(id string, servers []string, bucketName string, password *base.PasswordAuth) (*GocbcoreAgent, error) {
+func NewGocbcoreAgent(id string, servers []string, bucketName string, password *base.PasswordAuth, batchSize int) (*GocbcoreAgent, error) {
 	gocbcoreAgent := &GocbcoreAgent{
 		GocbcoreAgentCommon: base.GocbcoreAgentCommon{
 			Name:         id,
@@ -94,6 +95,6 @@ func NewGocbcoreAgent(id string, servers []string, bucketName string, password *
 		agent: nil,
 	}
 
-	err := gocbcoreAgent.setupAgent(password)
+	err := gocbcoreAgent.setupAgent(password, batchSize)
 	return gocbcoreAgent, err
 }

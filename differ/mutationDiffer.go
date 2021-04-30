@@ -679,7 +679,7 @@ func (d *MutationDiffer) openBucket(url, bucketName, username, password string, 
 	agent, err := NewGocbcoreAgent(name, []string{url}, bucketName, &base.PasswordAuth{
 		Username: username,
 		Password: password,
-	})
+	}, d.batchSize)
 
 	if source {
 		d.sourceBucket = agent
