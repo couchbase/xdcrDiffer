@@ -12,48 +12,50 @@ package differ
 import (
 	"encoding/json"
 	"fmt"
-	"xdcrDiffer/base"
-	fdp "xdcrDiffer/fileDescriptorPool"
-	"xdcrDiffer/utils"
 	"os"
 	"sync"
 	"sync/atomic"
 	"time"
+	"xdcrDiffer/base"
+	fdp "xdcrDiffer/fileDescriptorPool"
+	"xdcrDiffer/utils"
 )
 
 type DifferDriver struct {
-	sourceFileDir    string
-	targetFileDir    string
-	diffFileDir      string
-	diffKeysFileName string
-	numberOfWorkers  int
-	numberOfBins     int
-	waitGroup        *sync.WaitGroup
-	diffKeys         []string
-	stateLock        *sync.RWMutex
-	fileDescPool     *fdp.FdPool
-	vbCompleted      uint32
-	finChan          chan bool
-	stopOnce         sync.Once
+	sourceFileDir     string
+	targetFileDir     string
+	diffFileDir       string
+	diffKeysFileName  string
+	numberOfWorkers   int
+	numberOfBins      int
+	waitGroup         *sync.WaitGroup
+	diffKeys          []string
+	stateLock         *sync.RWMutex
+	fileDescPool      *fdp.FdPool
+	vbCompleted       uint32
+	finChan           chan bool
+	stopOnce          sync.Once
+	collectionMapping map[uint32][]uint32
 }
 
-func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBins int, numberOfFds int) *DifferDriver {
+func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32) *DifferDriver {
 	var fdPool *fdp.FdPool
 	if numberOfFds > 0 {
 		fdPool = fdp.NewFileDescriptorPool(numberOfFds)
 	}
 
 	return &DifferDriver{
-		sourceFileDir:    sourceFileDir,
-		targetFileDir:    targetFileDir,
-		diffFileDir:      diffFileDir,
-		diffKeysFileName: diffKeysFileName,
-		numberOfWorkers:  numberOfWorkers,
-		numberOfBins:     numberOfBins,
-		waitGroup:        &sync.WaitGroup{},
-		stateLock:        &sync.RWMutex{},
-		fileDescPool:     fdPool,
-		finChan:          make(chan bool),
+		sourceFileDir:     sourceFileDir,
+		targetFileDir:     targetFileDir,
+		diffFileDir:       diffFileDir,
+		diffKeysFileName:  diffKeysFileName,
+		numberOfWorkers:   numberOfWorkers,
+		numberOfBins:      numberOfBins,
+		waitGroup:         &sync.WaitGroup{},
+		stateLock:         &sync.RWMutex{},
+		fileDescPool:      fdPool,
+		finChan:           make(chan bool),
+		collectionMapping: collectionMapping,
 	}
 }
 
@@ -71,7 +73,7 @@ func (dr *DifferDriver) Run() error {
 		}
 
 		dr.waitGroup.Add(1)
-		differHandler := NewDifferHandler(dr, i, dr.sourceFileDir, dr.targetFileDir, vbList, dr.numberOfBins, dr.waitGroup, dr.fileDescPool)
+		differHandler := NewDifferHandler(dr, i, dr.sourceFileDir, dr.targetFileDir, vbList, dr.numberOfBins, dr.waitGroup, dr.fileDescPool, dr.collectionMapping)
 		go differHandler.run()
 	}
 
@@ -140,27 +142,29 @@ func (dr *DifferDriver) writeDiffKeys() error {
 }
 
 type DifferHandler struct {
-	driver          *DifferDriver
-	index           int
-	sourceFileDir   string
-	targetFileDir   string
-	vbList          []uint16
-	diffDetailsFile *os.File
-	numberOfBins    int
-	waitGroup       *sync.WaitGroup
-	fileDescPool    *fdp.FdPool
+	driver            *DifferDriver
+	index             int
+	sourceFileDir     string
+	targetFileDir     string
+	vbList            []uint16
+	diffDetailsFile   *os.File
+	numberOfBins      int
+	waitGroup         *sync.WaitGroup
+	fileDescPool      *fdp.FdPool
+	collectionMapping map[uint32][]uint32
 }
 
-func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFileDir string, vbList []uint16, numberOfBins int, waitGroup *sync.WaitGroup, fdPool *fdp.FdPool) *DifferHandler {
+func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFileDir string, vbList []uint16, numberOfBins int, waitGroup *sync.WaitGroup, fdPool *fdp.FdPool, collectionMapping map[uint32][]uint32) *DifferHandler {
 	return &DifferHandler{
-		driver:        driver,
-		index:         index,
-		sourceFileDir: sourceFileDir,
-		targetFileDir: targetFileDir,
-		vbList:        vbList,
-		numberOfBins:  numberOfBins,
-		waitGroup:     waitGroup,
-		fileDescPool:  fdPool,
+		driver:            driver,
+		index:             index,
+		sourceFileDir:     sourceFileDir,
+		targetFileDir:     targetFileDir,
+		vbList:            vbList,
+		numberOfBins:      numberOfBins,
+		waitGroup:         waitGroup,
+		fileDescPool:      fdPool,
+		collectionMapping: collectionMapping,
 	}
 }
 

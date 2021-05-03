@@ -253,6 +253,8 @@ type xdcrDiffTool struct {
 	// If non-empty, just stream these collection IDs from each side's DCP
 	srcCollectionIds []uint32
 	tgtCollectionIds []uint32
+	// Logically there should only be 1-1 mapping, but make this flexible just in case
+	srcToTgtColIdsMap map[uint32][]uint32
 
 	sourceDcpDriver *dcp.DcpDriver
 	targetDcpDriver *dcp.DcpDriver
@@ -265,8 +267,9 @@ type xdcrDiffTool struct {
 func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 	var err error
 	difftool := &xdcrDiffTool{
-		utils:      xdcrUtils.NewUtilities(),
-		legacyMode: legacyMode,
+		utils:             xdcrUtils.NewUtilities(),
+		legacyMode:        legacyMode,
+		srcToTgtColIdsMap: make(map[uint32][]uint32),
 	}
 
 	difftool.logger = xdcrLog.NewLogger("xdcrDiffTool", nil)
@@ -412,9 +415,6 @@ func maybeSetEnv(key, value string) {
 
 func main() {
 	argParse()
-
-	fmt.Printf("NEIL DEBUG sleeping 20 seconds to run debug attach\n")
-	time.Sleep(20 * time.Second)
 
 	legacyMode := len(options.targetUsername) > 0
 
@@ -586,7 +586,7 @@ func (difftool *xdcrDiffTool) diffDataFiles() error {
 		return fmt.Errorf("Error mkdir fileDifferDir: %v\n", err)
 	}
 
-	difftoolDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.fileDifferDir, base.DiffKeysFileName, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBins), int(options.numberOfFileDesc))
+	difftoolDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.fileDifferDir, base.DiffKeysFileName, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBins), int(options.numberOfFileDesc), difftool.srcToTgtColIdsMap)
 	err = difftoolDriver.Run()
 	if err != nil {
 		difftool.logger.Errorf("Error from diffDataFiles = %v\n", err)
@@ -858,6 +858,7 @@ func (difftool *xdcrDiffTool) populateCollectionsPreReq() error {
 	return nil
 }
 
+// This is needed whenever source and tgt clusters are >= 7.0
 func (difftool *xdcrDiffTool) PopulateManifestsAndMappings() error {
 	var err error
 	fmt.Printf("Waiting 15 sec for manfiest service to initialize and then getting manifest for source Bucket %v target Bucket %v...\n", difftool.specifiedSpec.SourceBucketName, difftool.specifiedSpec.TargetBucketName)
@@ -875,6 +876,17 @@ func (difftool *xdcrDiffTool) PopulateManifestsAndMappings() error {
 	if err != nil {
 		return err
 	}
+
+	modes := difftool.specifiedSpec.Settings.GetCollectionModes()
+	if modes.IsImplicitMapping() {
+		fmt.Printf("Replication spec is using implicit mapping\n")
+		difftool.compileImplicitMapping()
+	} else {
+		return fmt.Errorf("Non-Implicit is not supported\n")
+	}
+
+	// Once hardcoded compilation map has been generated, just stream these Collection IDs from DCP to minimize other noise
+	difftool.generateSrcAndTgtColIds()
 
 	return nil
 }
@@ -904,4 +916,43 @@ func (difftool *xdcrDiffTool) outputManifestsToFiles(err error) error {
 		return err
 	}
 	return nil
+}
+
+func (difftool *xdcrDiffTool) compileImplicitMapping() {
+	implicitNamespaceMap, _, _ := difftool.srcBucketManifest.ImplicitMap(difftool.tgtBucketManifest)
+
+	// Implicit map means the namespaces must be the same
+	for srcNs, _ := range implicitNamespaceMap {
+		scopeName := srcNs.GetCollectionNamespace().ScopeName
+		collectionName := srcNs.GetCollectionNamespace().CollectionName
+		srcColId, srcErr := difftool.srcBucketManifest.GetCollectionId(scopeName, collectionName)
+		tgtColId, tgtErr := difftool.tgtBucketManifest.GetCollectionId(scopeName, collectionName)
+
+		if srcErr != nil {
+			difftool.logger.Errorf("Cannot find %v - %v from source manifest %v\n", scopeName, collectionName, srcErr)
+			continue
+		}
+		if tgtErr != nil {
+			difftool.logger.Errorf("Cannot find %v - %v from target manifest %v\n", scopeName, collectionName, tgtErr)
+			continue
+		}
+
+		tgtList := []uint32{tgtColId}
+		difftool.srcToTgtColIdsMap[srcColId] = tgtList
+	}
+}
+
+func (difftool *xdcrDiffTool) generateSrcAndTgtColIds() {
+	tgtColIdDedupMap := make(map[uint32]bool)
+
+	for srcColId, tgtColIds := range difftool.srcToTgtColIdsMap {
+		difftool.srcCollectionIds = append(difftool.srcCollectionIds, srcColId)
+		for _, tgtColId := range tgtColIds {
+			_, exists := tgtColIdDedupMap[tgtColId]
+			if !exists {
+				tgtColIdDedupMap[tgtColId] = true
+				difftool.tgtCollectionIds = append(difftool.tgtCollectionIds)
+			}
+		}
+	}
 }
