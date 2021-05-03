@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"xdcrDiffer/base"
 	"hash/crc32"
 	"io"
 	"io/ioutil"
@@ -22,10 +21,11 @@ import (
 	mrand "math/rand"
 	"net/http"
 	"reflect"
-	"strings"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+	"xdcrDiffer/base"
 )
 
 func GetFileName(fileDir string, vbno uint16, bucketIndex int) string {
@@ -37,6 +37,16 @@ func GetFileName(fileDir string, vbno uint16, bucketIndex int) string {
 	buffer.WriteString(fmt.Sprintf("%v", vbno))
 	buffer.WriteString(base.FileNameDelimiter)
 	buffer.WriteString(fmt.Sprintf("%v", bucketIndex))
+	return buffer.String()
+}
+
+func GetManifestFileName(fileDir string) string {
+	var buffer bytes.Buffer
+	buffer.WriteString(fileDir)
+	buffer.WriteString(base.FileDirDelimiter)
+	buffer.WriteString(base.FileNamePrefix)
+	buffer.WriteString(base.FileNameDelimiter)
+	buffer.WriteString(fmt.Sprintf("%v", base.ManifestFileName))
 	return buffer.String()
 }
 
@@ -377,6 +387,7 @@ func EncodeVersionToEffectiveVersion(version []int) int {
 // Diff tool by default allow users to enter "http://<addr>:<ns_serverPort>"
 const httpPrefix = "http://"
 const couchbasePrefix = "couchbase://"
+
 func PopulateCCCPConnectString(url string) string {
 	var cccpUrl string
 	if strings.HasPrefix(url, httpPrefix) {
