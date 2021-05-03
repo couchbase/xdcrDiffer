@@ -10,6 +10,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	xdcrBase "github.com/couchbase/goxdcr/base"
@@ -21,6 +22,7 @@ import (
 	service_def_mock "github.com/couchbase/goxdcr/service_def/mocks"
 	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"github.com/stretchr/testify/mock"
+	"io/ioutil"
 	"os"
 	"os/signal"
 	"sync"
@@ -321,48 +323,84 @@ func setupXdcrToplogyMock(xdcrTopologyMock *service_def_mock.XDCRCompTopologySvc
 }
 
 func setupTopologyMockConnectionString(xdcrTopologyMock *service_def_mock.XDCRCompTopologySvc, diffTool *xdcrDiffTool) {
-	var connectionStr *string = new(string)
-	var retErr = new(error)
-	*retErr = fmt.Errorf("Not initialized yet")
-	rePopulateFunc := func() {
-		if atomic.LoadUint32(&diffTool.selfRefPopulated) == 0 {
-			return
+	connFunc := func() string {
+		if atomic.LoadUint32(&diffTool.selfRefPopulated) == 1 {
+			connStr, _ := diffTool.selfRef.MyConnectionStr()
+			return connStr
+		} else {
+			return ""
 		}
-		newConnectionStr, connErr := diffTool.selfRef.MyConnectionStr()
-		connectionStr = &newConnectionStr
-		retErr = &connErr
 	}
-	xdcrTopologyMock.On("MyConnectionStr").Run(func(args mock.Arguments) {
-		rePopulateFunc()
-	}).Return(*connectionStr, *retErr)
+
+	errFunc := func() error {
+		if atomic.LoadUint32(&diffTool.selfRefPopulated) == 1 {
+			return nil
+		} else {
+			return fmt.Errorf("Not initialized yet")
+		}
+	}
+
+	xdcrTopologyMock.On("MyConnectionStr").Return(connFunc, errFunc)
 }
 
 func setupTopologyMockCredentials(xdcrTopologyMock *service_def_mock.XDCRCompTopologySvc, diffTool *xdcrDiffTool) {
-	var selfUserName *string = new(string)
-	var selfPw *string = new(string)
-	var selfAuthMech *xdcrBase.HttpAuthMech = new(xdcrBase.HttpAuthMech)
-	var selfCert *[]byte = new([]byte)
-	var selfSanCert *bool = new(bool)
-	var selfClientCert *[]byte = new([]byte)
-	var selfClientKey *[]byte = new([]byte)
-	var retErr *error = new(error)
-	*retErr = fmt.Errorf("Not initialized yet")
-	rePopulateFunc := func() {
-		if atomic.LoadUint32(&diffTool.selfRefPopulated) == 0 {
-			return
+	getUserName := func() string {
+		if atomic.LoadUint32(&diffTool.selfRefPopulated) == 1 {
+			return diffTool.selfRef.UserName()
+		} else {
+			return ""
 		}
-		selfUserName = &diffTool.selfRef.UserName_
-		selfPw = &diffTool.selfRef.Password_
-		selfAuthMech = &diffTool.selfRef.HttpAuthMech_
-		selfCert = &diffTool.selfRef.Certificate_
-		selfSanCert = &diffTool.selfRef.SANInCertificate_
-		selfClientCert = &diffTool.selfRef.ClientCertificate_
-		selfClientKey = &diffTool.selfRef.ClientKey_
-		*retErr = nil
 	}
-	xdcrTopologyMock.On("MyCredentials").Run(func(args mock.Arguments) {
-		rePopulateFunc()
-	}).Return(*selfUserName, *selfPw, *selfAuthMech, *selfCert, *selfSanCert, *selfClientCert, *selfClientKey, *retErr)
+	getPw := func() string {
+		if atomic.LoadUint32(&diffTool.selfRefPopulated) == 1 {
+			return diffTool.selfRef.Password()
+		} else {
+			return ""
+		}
+	}
+	getAuthMech := func() xdcrBase.HttpAuthMech {
+		if atomic.LoadUint32(&diffTool.selfRefPopulated) == 1 {
+			return diffTool.selfRef.HttpAuthMech()
+		} else {
+			return xdcrBase.HttpAuthMechPlain
+		}
+	}
+	getCert := func() []byte {
+		if atomic.LoadUint32(&diffTool.selfRefPopulated) == 1 {
+			return diffTool.selfRef.Certificate()
+		} else {
+			return nil
+		}
+	}
+	getSanCert := func() bool {
+		if atomic.LoadUint32(&diffTool.selfRefPopulated) == 1 {
+			return diffTool.selfRef.SANInCertificate()
+		} else {
+			return false
+		}
+	}
+	getClientCert := func() []byte {
+		if atomic.LoadUint32(&diffTool.selfRefPopulated) == 1 {
+			return diffTool.selfRef.ClientCertificate()
+		} else {
+			return nil
+		}
+	}
+	getClientKey := func() []byte {
+		if atomic.LoadUint32(&diffTool.selfRefPopulated) == 1 {
+			return diffTool.selfRef.ClientKey()
+		} else {
+			return nil
+		}
+	}
+	getErr := func() error {
+		if atomic.LoadUint32(&diffTool.selfRefPopulated) == 1 {
+			return nil
+		} else {
+			return fmt.Errorf("Not initialized yet")
+		}
+	}
+	xdcrTopologyMock.On("MyCredentials").Return(getUserName, getPw, getAuthMech, getCert, getSanCert, getClientCert, getClientKey, getErr)
 }
 
 func maybeSetEnv(key, value string) {
@@ -374,6 +412,9 @@ func maybeSetEnv(key, value string) {
 
 func main() {
 	argParse()
+
+	fmt.Printf("NEIL DEBUG sleeping 20 seconds to run debug attach\n")
+	time.Sleep(20 * time.Second)
 
 	legacyMode := len(options.targetUsername) > 0
 
@@ -394,6 +435,11 @@ func main() {
 			fmt.Printf("%v\n", err)
 			os.Exit(1)
 		}
+	}
+
+	if err := setupDirectories(); err != nil {
+		difftool.logger.Errorf("Unable to set up directory structure: %v\n", err)
+		os.Exit(1)
 	}
 
 	if err := difftool.retrieveClustersCapabilities(); err != nil {
@@ -428,7 +474,7 @@ func main() {
 	}
 }
 
-func cleanUpAndSetup() error {
+func setupDirectories() error {
 	err := os.MkdirAll(options.sourceFileDir, 0777)
 	if err != nil {
 		fmt.Printf("Error mkdir sourceFileDir: %v\n", err)
@@ -475,13 +521,6 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 
 	if options.completeByDuration == 0 && !options.completeBySeqno {
 		difftool.logger.Infof("completeByDuration is required when completeBySeqno is false\n")
-		os.Exit(1)
-	}
-
-	difftool.logger.Infof("Tool started\n")
-
-	if err := cleanUpAndSetup(); err != nil {
-		difftool.logger.Errorf("Unable to clean and set up directory structure: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -769,6 +808,9 @@ func (difftool *xdcrDiffTool) retrieveClustersCapabilities() error {
 	}
 
 	// Self capabilities
+	if atomic.LoadUint32(&difftool.selfRefPopulated) == 0 {
+		return fmt.Errorf("SelfRef has not been populated\n")
+	}
 	connStr, err := difftool.selfRef.MyConnectionStr()
 	if err != nil {
 		return fmt.Errorf("retrieveClusterCapabilities.myConnStr(%v) - %v", difftool.specifiedRef.Name(), err)
@@ -801,7 +843,7 @@ func (difftool *xdcrDiffTool) retrieveClustersCapabilities() error {
 func (difftool *xdcrDiffTool) populateCollectionsPreReq() error {
 	if difftool.srcCapabilities.HasCollectionSupport() && difftool.tgtCapabilities.HasCollectionSupport() {
 		// Both have collections support
-		if err := difftool.PopulateManifests(); err != nil {
+		if err := difftool.PopulateManifestsAndMappings(); err != nil {
 			return err
 		}
 	} else if difftool.srcCapabilities.HasCollectionSupport() && !difftool.tgtCapabilities.HasCollectionSupport() {
@@ -816,12 +858,49 @@ func (difftool *xdcrDiffTool) populateCollectionsPreReq() error {
 	return nil
 }
 
-func (difftool *xdcrDiffTool) PopulateManifests() error {
+func (difftool *xdcrDiffTool) PopulateManifestsAndMappings() error {
 	var err error
-	difftool.srcBucketManifest, difftool.tgtBucketManifest, err = difftool.collectionsManifestsSvc.GetLatestManifests(difftool.specifiedSpec, true)
+	fmt.Printf("Waiting 15 sec for manfiest service to initialize and then getting manifest for source Bucket %v target Bucket %v...\n", difftool.specifiedSpec.SourceBucketName, difftool.specifiedSpec.TargetBucketName)
+	time.Sleep(15 * time.Second)
 
+	difftool.srcBucketManifest, difftool.tgtBucketManifest, err = difftool.collectionsManifestsSvc.GetLatestManifests(difftool.specifiedSpec, false)
 	if err != nil {
-		fmt.Printf("PopulateManifests() - %v\n", err)
+		fmt.Printf("PopulateManifestsAndMappings() - %v\n", err)
+		return err
+	}
+
+	fmt.Printf("Source manifest: %v\nTarget manifest: %v\n", difftool.srcBucketManifest, difftool.tgtBucketManifest)
+	// Store the manifests in files
+	err = difftool.outputManifestsToFiles(err)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (difftool *xdcrDiffTool) outputManifestsToFiles(err error) error {
+	srcManJson, err := json.Marshal(difftool.srcBucketManifest)
+	if err != nil {
+		fmt.Printf("SrcManifestMarshal - %v\n", err)
+		return err
+	}
+
+	tgtManJson, err := json.Marshal(difftool.tgtBucketManifest)
+	if err != nil {
+		fmt.Printf("TgtManifestMarshal - %v\n", err)
+		return err
+	}
+
+	err = ioutil.WriteFile(utils.GetManifestFileName(options.sourceFileDir), srcManJson, 0644)
+	if err != nil {
+		fmt.Printf("SrcManifestWrite - %v\n", err)
+		return err
+	}
+
+	err = ioutil.WriteFile(utils.GetManifestFileName(options.targetFileDir), tgtManJson, 0644)
+	if err != nil {
+		fmt.Printf("TgtManifestWrite - %v\n", err)
 		return err
 	}
 	return nil
