@@ -42,20 +42,23 @@ type FilesDiffer struct {
 	BothExistButMismatch []*entryPair
 
 	fdPool *fdp.FdPool
+
+	collectionIdMapping map[uint32][]uint32
 }
 
 type FileAttributes struct {
 	name          string
-	entries       map[string]*oneEntry
-	sortedEntries []*oneEntry
+	entries       map[uint32]map[string]*oneEntry
+	sortedEntries map[uint32][]*oneEntry
 	readOp        fdp.FileOp
 	closeOp       func() error
 }
 
 func NewFileAttribute(fileName string) *FileAttributes {
 	attr := &FileAttributes{
-		name:    fileName,
-		entries: make(map[string]*oneEntry),
+		name:          fileName,
+		entries:       make(map[uint32]map[string]*oneEntry),
+		sortedEntries: make(map[uint32][]*oneEntry),
 	}
 	return attr
 }
@@ -118,22 +121,27 @@ func (entry oneEntry) Diff(other oneEntry) (int, bool) {
 		} else if entry.Datatype != other.Datatype {
 			return 0, false
 		}
-		// TODO NEIL - convert colId into namespace using manifest and then check against mapping
 	}
 	return 0, true
 }
 
-func NewFilesDiffer(file1, file2 string) *FilesDiffer {
+func NewFilesDiffer(file1, file2 string, collectionMapping map[uint32][]uint32) *FilesDiffer {
 	differ := &FilesDiffer{
-		file1: *NewFileAttribute(file1),
-		file2: *NewFileAttribute(file2),
+		file1:               *NewFileAttribute(file1),
+		file2:               *NewFileAttribute(file2),
+		collectionIdMapping: collectionMapping,
+	}
+	if len(collectionMapping) == 0 {
+		// This means this is legacy mode - no collection support
+		differ.collectionIdMapping = make(map[uint32][]uint32)
+		differ.collectionIdMapping[0] = []uint32{0}
 	}
 	return differ
 }
 
-func NewFilesDifferWithFDPool(file1, file2 string, fdPool *fdp.FdPool) (*FilesDiffer, error) {
+func NewFilesDifferWithFDPool(file1, file2 string, fdPool *fdp.FdPool, collectionMapping map[uint32][]uint32) (*FilesDiffer, error) {
 	var err error
-	differ := NewFilesDiffer(file1, file2)
+	differ := NewFilesDiffer(file1, file2, collectionMapping)
 	if fdPool != nil {
 		differ.fdPool = fdPool
 		differ.file1.readOp, err = fdPool.RegisterReadOnlyFileHandle(file1)
@@ -245,23 +253,28 @@ func (attr *FileAttributes) fillAndDedupEntries() error {
 	var err error
 	var entry *oneEntry
 
-	for err == nil {
+	for {
 		entry, err = getOneEntry(attr.readOp)
 		if err != nil {
 			break
 		}
 
-		if curEntry, ok := attr.entries[entry.Key]; !ok {
-			attr.entries[entry.Key] = entry
+		_, exists := attr.entries[entry.ColId]
+		if !exists {
+			attr.entries[entry.ColId] = make(map[string]*oneEntry)
+		}
+
+		if curEntry, ok := attr.entries[entry.ColId][entry.Key]; !ok {
+			attr.entries[entry.ColId][entry.Key] = entry
 		} else {
 			// Replace the entry in the map if the seqno is newer
 			if entry.Seqno > curEntry.Seqno {
-				attr.entries[entry.Key] = entry
+				attr.entries[entry.ColId][entry.Key] = entry
 			}
 		}
 	}
 
-	if err != nil && strings.Contains(err.Error(), io.EOF.Error()) {
+	if strings.Contains(err.Error(), io.EOF.Error()) {
 		err = nil
 	}
 
@@ -269,11 +282,12 @@ func (attr *FileAttributes) fillAndDedupEntries() error {
 }
 
 func (attr *FileAttributes) sortEntries() {
-	for _, v := range attr.entries {
-		attr.sortedEntries = append(attr.sortedEntries, v)
+	for colId, entriesOfThisCollection := range attr.entries {
+		for _, v := range entriesOfThisCollection {
+			attr.sortedEntries[colId] = append(attr.sortedEntries[colId], v)
+		}
+		sort.Sort(ByKeyName(attr.sortedEntries[colId]))
 	}
-
-	sort.Sort(ByKeyName(attr.sortedEntries))
 }
 
 func (attr *FileAttributes) LoadFileIntoBuffer() error {
@@ -303,69 +317,90 @@ func (differ *FilesDiffer) asyncLoad(attr *FileAttributes, err *error) {
 	*err = attr.LoadFileIntoBuffer()
 }
 
-func (differ *FilesDiffer) diffSorted() []string {
-	diffKeys := make([]string, 0)
+// Returns two maps that requires further Get() to analyze:
+// 1. map of [sourceColId] -> [key]
+// 2. map of [targetColId] -> [key]
+func (differ *FilesDiffer) diffSorted() (map[uint32][]string, map[uint32][]string) {
+	srcDiffMap := make(map[uint32][]string)
+	tgtDiffMap := make(map[uint32][]string)
+	for srcColId, tgtColIds := range differ.collectionIdMapping {
+		srcDedupMap := make(map[string]bool)
+		for _, tgtColId := range tgtColIds {
+			// TODO - revisit for multiple target collection IDs
+			diffKeys := make([]string, 0)
+			file1Len := len(differ.file1.sortedEntries[srcColId])
+			file2Len := len(differ.file2.sortedEntries[tgtColId])
 
-	file1Len := len(differ.file1.sortedEntries)
-	file2Len := len(differ.file2.sortedEntries)
+			if file1Len == 0 && file2Len == 0 {
+				//return srcDiffKeys
+				continue
+			}
 
-	if file1Len == 0 && file2Len == 0 {
-		return diffKeys
-	}
+			var i int
+			var j int
 
-	var i int
-	var j int
+			for i < file1Len && j < file2Len {
+				item1 := differ.file1.sortedEntries[srcColId][i]
+				item2 := differ.file2.sortedEntries[tgtColId][j]
 
-	for i < file1Len && j < file2Len {
-		item1 := differ.file1.sortedEntries[i]
-		item2 := differ.file2.sortedEntries[j]
+				keyCompare, match := item1.Diff(*item2)
+				if match {
+					// Both items are the same
+					i++
+					j++
+				} else {
+					if keyCompare == 0 {
+						// Both document are the same, but others mismatched
+						var onePair entryPair
+						onePair[0] = item1
+						onePair[1] = item2
+						differ.BothExistButMismatch = append(differ.BothExistButMismatch, &onePair)
+						diffKeys = append(diffKeys, item1.Key)
+						addToSrcDiffMapIfNotAdded(srcDedupMap, item1.Key, srcDiffMap, srcColId)
+						tgtDiffMap[tgtColId] = append(tgtDiffMap[tgtColId], item1.Key)
+						i++
+						j++
+					} else if keyCompare < 0 {
+						// Like "a" < "b", where a is 1 and b is 2
+						differ.MissingFromFile2 = append(differ.MissingFromFile2, item1)
+						diffKeys = append(diffKeys, item1.Key)
+						tgtDiffMap[tgtColId] = append(tgtDiffMap[tgtColId], item1.Key)
+						i++
+					} else {
+						// "b" > "a", leading to keyCompare > 0
+						differ.MissingFromFile1 = append(differ.MissingFromFile1, item2)
+						diffKeys = append(diffKeys, item2.Key)
+						addToSrcDiffMapIfNotAdded(srcDedupMap, item2.Key, srcDiffMap, srcColId)
+						j++
+					}
+				}
+			}
 
-		keyCompare, match := item1.Diff(*item2)
-		if match {
-			// Both items are the same
-			i++
-			j++
-		} else {
-			if keyCompare == 0 {
-				// Both document are the same, but others mismatched
-				var onePair entryPair
-				onePair[0] = item1
-				onePair[1] = item2
-				differ.BothExistButMismatch = append(differ.BothExistButMismatch, &onePair)
-				diffKeys = append(diffKeys, item1.Key)
-				i++
-				j++
-			} else if keyCompare < 0 {
-				// Like "a" < "b", where a is 1 and b is 2
-				differ.MissingFromFile2 = append(differ.MissingFromFile2, item1)
-				diffKeys = append(diffKeys, item1.Key)
-				i++
-			} else {
-				// "b" > "a", leading to keyCompare > 0
-				differ.MissingFromFile1 = append(differ.MissingFromFile1, item2)
-				diffKeys = append(diffKeys, item2.Key)
-				j++
+			for ; i < file1Len; i++ {
+				// This means that all the rest of the entries in file1 are missing from file2
+				differ.MissingFromFile2 = append(differ.MissingFromFile2, differ.file1.sortedEntries[srcColId][i])
+				addToSrcDiffMapIfNotAdded(srcDedupMap, differ.file1.sortedEntries[srcColId][i].Key, srcDiffMap, srcColId)
+			}
+
+			for ; j < file2Len; j++ {
+				// This means that all the rest of the entries in file2 are missing from file1
+				differ.MissingFromFile1 = append(differ.MissingFromFile1, differ.file2.sortedEntries[tgtColId][j])
+				tgtDiffMap[tgtColId] = append(tgtDiffMap[tgtColId], differ.file2.sortedEntries[tgtColId][j].Key)
 			}
 		}
 	}
 
-	for ; i < file1Len; i++ {
-		// This means that all the rest of the entries in file1 are missing from file2
-		differ.MissingFromFile2 = append(differ.MissingFromFile2, differ.file1.sortedEntries[i])
-		diffKeys = append(diffKeys, differ.file1.sortedEntries[i].Key)
-	}
+	return srcDiffMap, tgtDiffMap
+}
 
-	for ; j < file2Len; j++ {
-		// This means that all the rest of the entries in file2 are missing from file1
-		differ.MissingFromFile1 = append(differ.MissingFromFile1, differ.file2.sortedEntries[j])
-		diffKeys = append(diffKeys, differ.file2.sortedEntries[j].Key)
+func addToSrcDiffMapIfNotAdded(srcDedupMap map[string]bool, key string, srcDiffMap map[uint32][]string, srcColId uint32) {
+	if _, exists := srcDedupMap[key]; !exists {
+		srcDiffMap[srcColId] = append(srcDiffMap[srcColId], key)
 	}
-
-	return diffKeys
 }
 
 // Returns true if they are the same
-func (differ *FilesDiffer) Diff() ([]string, []byte, error) {
+func (differ *FilesDiffer) Diff() (srcDiffMap, tgtDiffMap map[uint32][]string, diffBytes []byte, err error) {
 	differ.dataLoadWg.Add(1)
 	go differ.asyncLoad(&differ.file1, &differ.err1)
 	differ.dataLoadWg.Add(1)
@@ -379,11 +414,9 @@ func (differ *FilesDiffer) Diff() ([]string, []byte, error) {
 		fmt.Printf("Error when loading file2 contents: %v\n", differ.err2)
 	}
 
-	diffKeys := differ.diffSorted()
-
-	diffBytes, err := differ.diffToJson()
-
-	return diffKeys, diffBytes, err
+	srcDiffMap, tgtDiffMap = differ.diffSorted()
+	diffBytes, err = differ.diffToJson()
+	return srcDiffMap, tgtDiffMap, diffBytes, err
 }
 
 func (differ *FilesDiffer) PrettyPrintResult() {

@@ -29,7 +29,8 @@ type DifferDriver struct {
 	numberOfWorkers   int
 	numberOfBins      int
 	waitGroup         *sync.WaitGroup
-	diffKeys          []string
+	srcDiffKeys       map[uint32][]string
+	tgtDiffKeys       map[uint32][]string
 	stateLock         *sync.RWMutex
 	fileDescPool      *fdp.FdPool
 	vbCompleted       uint32
@@ -56,6 +57,8 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName
 		fileDescPool:      fdPool,
 		finChan:           make(chan bool),
 		collectionMapping: collectionMapping,
+		srcDiffKeys:       make(map[uint32][]string),
+		tgtDiffKeys:       make(map[uint32][]string),
 	}
 }
 
@@ -114,31 +117,70 @@ func (dr *DifferDriver) reportStatus() {
 	}
 }
 
-func (dr *DifferDriver) addDiffKeys(diffKeys []string) {
+func (dr *DifferDriver) addSrcDiffKeys(diffKeys map[uint32][]string) {
 	dr.stateLock.Lock()
 	defer dr.stateLock.Unlock()
-	dr.diffKeys = append(dr.diffKeys, diffKeys...)
+	for srcColId, keys := range diffKeys {
+		dr.srcDiffKeys[srcColId] = append(dr.srcDiffKeys[srcColId], keys...)
+	}
+}
+
+func (dr *DifferDriver) addTgtDiffKeys(diffKeys map[uint32][]string) {
+	dr.stateLock.Lock()
+	defer dr.stateLock.Unlock()
+	for tgtColId, keys := range diffKeys {
+		dr.tgtDiffKeys[tgtColId] = append(dr.tgtDiffKeys[tgtColId], keys...)
+	}
 }
 
 func (dr *DifferDriver) writeDiffKeys() error {
 	dr.stateLock.RLock()
 	defer dr.stateLock.RUnlock()
 
-	diffKeysBytes, err := json.Marshal(dr.diffKeys)
+	var writeWaitGrp sync.WaitGroup
+	writeWaitGrp.Add(2)
+
+	var srcErr error
+	var tgtErr error
+	go func() {
+		srcErr = dr.writeSrcDiffKeys(true, &writeWaitGrp)
+	}()
+
+	go func() {
+		tgtErr = dr.writeSrcDiffKeys(false, &writeWaitGrp)
+	}()
+
+	writeWaitGrp.Wait()
+
+	if srcErr == nil && tgtErr == nil {
+		return nil
+	} else {
+		return fmt.Errorf("writeDiffKeysSrc: %v writeDiffKeysTgt: %v", srcErr, tgtErr)
+	}
+}
+
+func (dr *DifferDriver) writeSrcDiffKeys(isSrc bool, waitGrp *sync.WaitGroup) error {
+	defer waitGrp.Done()
+	diffKeys := dr.srcDiffKeys
+	suffix := base.SourceClusterName
+	if !isSrc {
+		diffKeys = dr.tgtDiffKeys
+		suffix = base.TargetClusterName
+	}
+
+	diffKeysBytes, err := json.Marshal(diffKeys)
 	if err != nil {
 		return err
 	}
 
-	diffKeysFileName := dr.diffFileDir + base.FileDirDelimiter + dr.diffKeysFileName
+	diffKeysFileName := dr.diffFileDir + base.FileDirDelimiter + dr.diffKeysFileName + base.FileNameDelimiter + suffix
 	diffKeysFile, err := os.OpenFile(diffKeysFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
 	if err != nil {
 		return err
 	}
-
-	defer diffKeysFile.Close()
-
 	_, err = diffKeysFile.Write(diffKeysBytes)
-	return err
+	diffKeysFile.Close()
+	return nil
 }
 
 type DifferHandler struct {
@@ -185,7 +227,7 @@ func (dh *DifferHandler) run() error {
 			sourceFileName := utils.GetFileName(dh.sourceFileDir, vbno, bucketIndex)
 			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex)
 
-			filesDiffer, err := NewFilesDifferWithFDPool(sourceFileName, targetFileName, dh.fileDescPool)
+			filesDiffer, err := NewFilesDifferWithFDPool(sourceFileName, targetFileName, dh.fileDescPool, dh.collectionMapping)
 			if err != nil {
 				// Most likely FD overrun, program should exit. Print a msg just in case
 				fmt.Printf("Creating file differ for files %v and %v resulted in error: %v\n",
@@ -193,14 +235,18 @@ func (dh *DifferHandler) run() error {
 				return err
 			}
 
-			diffKeys, diffBytes, err := filesDiffer.Diff()
+			srcDiffMap, tgtDiffMap, diffBytes, err := filesDiffer.Diff()
 			if err != nil {
 				fmt.Printf("error getting diff from file differ. err=%v\n", err)
 				continue
 			}
-			if len(diffKeys) > 0 {
-				//filesDiffer.PrettyPrintResult()
-				dh.driver.addDiffKeys(diffKeys)
+			if len(srcDiffMap) > 0 || len(tgtDiffMap) > 0 {
+				if len(srcDiffMap) > 0 {
+					dh.driver.addSrcDiffKeys(srcDiffMap)
+				}
+				if len(tgtDiffMap) > 0 {
+					dh.driver.addTgtDiffKeys(tgtDiffMap)
+				}
 				dh.writeDiffBytes(diffBytes)
 			}
 		}

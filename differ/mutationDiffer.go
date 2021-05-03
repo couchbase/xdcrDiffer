@@ -230,7 +230,7 @@ func (d *MutationDiffer) writeKeysWithDiff2(isBodyDiff bool) error {
 		fileName = base.MutationBodyDiffKeysFileName
 	}
 
-	// aggragate all keys with diffs into a diffKeys array
+	// aggragate all keys with diffs into a srcDiffKeys array
 	numberOfDiffKeys := len(d.missingFromSource) + len(d.missingFromTarget) + len(diff)
 	diffKeys := make([]string, numberOfDiffKeys)
 	index := 0
