@@ -208,15 +208,15 @@ func TestLoader(t *testing.T) {
 	err := ioutil.WriteFile(outputFileTemp, data, 0644)
 	assert.Nil(err)
 
-	differ := NewFilesDiffer(outputFileTemp, "")
+	differ := NewFilesDiffer(outputFileTemp, "", nil)
 	err = differ.file1.LoadFileIntoBuffer()
 	assert.Nil(err)
 
-	assert.Equal(1, len(differ.file1.entries))
-	assert.Equal(seqno, differ.file1.entries[key].Seqno)
+	assert.Equal(1, len(differ.file1.entries[0]))
+	assert.Equal(seqno, differ.file1.entries[0][key].Seqno)
 
-	assert.Equal(1, len(differ.file1.sortedEntries))
-	assert.Equal(seqno, differ.file1.sortedEntries[0].Seqno)
+	assert.Equal(1, len(differ.file1.sortedEntries[0]))
+	assert.Equal(seqno, differ.file1.sortedEntries[0][0].Seqno)
 }
 
 func TestLoadSameFile(t *testing.T) {
@@ -233,18 +233,19 @@ func TestLoadSameFile(t *testing.T) {
 	err := genSameFiles(entries, file1, file2)
 	assert.Equal(nil, err)
 
-	differ := NewFilesDiffer(file1, file2)
+	differ := NewFilesDiffer(file1, file2, nil)
 	assert.NotNil(differ)
 
-	result, _, _ := differ.Diff()
+	srcDiffMap, tgtDiffMap, _, _ := differ.Diff()
 
-	assert.True(len(result) == 0)
+	assert.True(len(srcDiffMap) == 0)
+	assert.True(len(tgtDiffMap) == 0)
 	differ.PrettyPrintResult()
 	fmt.Println("============== Test case end: TestLoadSameFile =================")
 }
 
-func TestLoadMismatchedFiles(t *testing.T) {
-	fmt.Println("============== Test case start: TestLoadMismatchedFiles =================")
+func TestLoadMismatchedFilesOnly(t *testing.T) {
+	fmt.Println("============== Test case start: TestLoadMismatchedFilesOnly =================")
 	assert := assert.New(t)
 
 	file1 := "/tmp/test1.bin"
@@ -258,12 +259,13 @@ func TestLoadMismatchedFiles(t *testing.T) {
 	keys, err := genMismatchedFiles(entries, numMismatch, file1, file2)
 	assert.Nil(err)
 
-	differ := NewFilesDiffer(file1, file2)
+	differ := NewFilesDiffer(file1, file2, nil)
 	assert.NotNil(differ)
 
-	result, _, _ := differ.Diff()
+	srcDiffMap, tgtDiffMap, _, _ := differ.Diff()
 
-	assert.False(len(result) == 0)
+	assert.False(len(srcDiffMap) == 0)
+	assert.False(len(tgtDiffMap) == 0)
 
 	assert.Equal(numMismatch, len(differ.BothExistButMismatch))
 	assert.True(verifyMisMatch(keys, differ))
@@ -272,7 +274,7 @@ func TestLoadMismatchedFiles(t *testing.T) {
 	assert.Equal(0, len(differ.MissingFromFile2))
 
 	differ.PrettyPrintResult()
-	fmt.Println("============== Test case end: TestLoadMismatchedFiles =================")
+	fmt.Println("============== Test case end: TestLoadMismatchedFilesOnly =================")
 }
 
 func TestLoadMismatchedFilesAndUneven(t *testing.T) {
@@ -299,12 +301,13 @@ func TestLoadMismatchedFilesAndUneven(t *testing.T) {
 	assert.Nil(err)
 	f.Close()
 
-	differ := NewFilesDiffer(file1, file2)
+	differ := NewFilesDiffer(file1, file2, nil)
 	assert.NotNil(differ)
 
-	result, _, _ := differ.Diff()
+	srcDiffMap, tgtDiffMap, _, _ := differ.Diff()
 
-	assert.False(len(result) == 0)
+	assert.False(len(srcDiffMap) == 0)
+	assert.False(len(tgtDiffMap) == 0)
 
 	assert.Equal(numMismatch, len(differ.BothExistButMismatch))
 	assert.True(verifyMisMatch(keys, differ))
@@ -331,13 +334,14 @@ func TestLoadSameFileWPool(t *testing.T) {
 	err := genSameFiles(entries, file1, file2)
 	assert.Equal(nil, err)
 
-	differ, err := NewFilesDifferWithFDPool(file1, file2, fileDescPool)
+	differ, err := NewFilesDifferWithFDPool(file1, file2, fileDescPool, nil)
 	assert.NotNil(differ)
 	assert.Nil(err)
 
-	result, _, _ := differ.Diff()
+	srcDiffMap, tgtDiffMap, _, _ := differ.Diff()
 
-	assert.True(len(result) == 0)
+	assert.True(len(srcDiffMap) == 0)
+	assert.True(len(tgtDiffMap) == 0)
 	fmt.Println("============== Test case end: TestLoadSameFileWPool =================")
 }
 
