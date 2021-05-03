@@ -74,8 +74,8 @@ type oneEntry struct {
 }
 
 func (oneEntry *oneEntry) String() string {
-	return fmt.Sprintf("<Key>: %v <Seqno>: %v <RevId>: %v <Cas>: %v <Flags>: %v <Expiry>: %v <OpCode>: %v <DataType>: %v <Hash>: %s",
-		oneEntry.Key, oneEntry.Seqno, oneEntry.RevId, oneEntry.Cas, oneEntry.Flags, oneEntry.Expiry, oneEntry.OpCode, oneEntry.Datatype, hex.EncodeToString(oneEntry.BodyHash[:]))
+	return fmt.Sprintf("<Key>: %v <Seqno>: %v <RevId>: %v <Cas>: %v <Flags>: %v <Expiry>: %v <OpCode>: %v <DataType>: %v <Hash>: %s <colId>: %v",
+		oneEntry.Key, oneEntry.Seqno, oneEntry.RevId, oneEntry.Cas, oneEntry.Flags, oneEntry.Expiry, oneEntry.OpCode, oneEntry.Datatype, hex.EncodeToString(oneEntry.BodyHash[:]), oneEntry.ColId)
 }
 
 type entryPair [2]*oneEntry
