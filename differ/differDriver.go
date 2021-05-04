@@ -21,6 +21,103 @@ import (
 	"xdcrDiffer/utils"
 )
 
+type DiffKeysMap map[uint32][]string
+
+func (d *DiffKeysMap) GetTotalCount() int {
+	if d == nil {
+		return 0
+	}
+	var count int
+	for _, v := range *d {
+		count += len(v)
+	}
+	return count
+}
+
+func (d *DiffKeysMap) ToFetchEntries(mappings map[uint32][]uint32) (MutationDiffFetchList, MutationDiffFetchListIdx) {
+	var fetchList MutationDiffFetchList
+	index := make(MutationDiffFetchListIdx)
+
+	if d == nil {
+		return fetchList, index
+	}
+
+	for srcColId, keys := range *d {
+		for _, oneKey := range keys {
+			tgtList, ok := mappings[srcColId]
+			if !ok {
+				// Shouldn't happen
+				continue
+			}
+			entry := &MutationDifferFetchEntry{
+				SrcColId:  srcColId,
+				TgtColIds: tgtList,
+				Key:       oneKey,
+			}
+			fetchList = append(fetchList, entry)
+			index.AddEntry(entry)
+		}
+	}
+
+	return fetchList, index
+}
+
+type MutationDifferFetchEntry struct {
+	SrcColId  uint32
+	TgtColIds []uint32
+	Key       string
+}
+
+func (m *MutationDifferFetchEntry) Clone() *MutationDifferFetchEntry {
+	copyTgt := make([]uint32, len(m.TgtColIds))
+	for i, id := range m.TgtColIds {
+		copyTgt[i] = id
+	}
+	return &MutationDifferFetchEntry{
+		SrcColId:  m.SrcColId,
+		TgtColIds: copyTgt,
+		Key:       m.Key,
+	}
+}
+
+// Typically used from the target's point of view
+// If a target entry doesn't exist in the source
+// then flip this around to the source's point of view
+func (m *MutationDifferFetchEntry) Reverse() MutationDiffFetchList {
+	var reversedList MutationDiffFetchList
+
+	for _, oneSrcColId := range m.TgtColIds {
+		srcPovEntry := &MutationDifferFetchEntry{
+			SrcColId:  oneSrcColId,
+			TgtColIds: []uint32{m.SrcColId},
+			Key:       m.Key,
+		}
+		reversedList = append(reversedList, srcPovEntry)
+	}
+	return reversedList
+}
+
+type MutationDiffFetchList []*MutationDifferFetchEntry
+
+func (m MutationDiffFetchList) Clone() MutationDiffFetchList {
+	var cloneList MutationDiffFetchList
+	for _, entry := range m {
+		cloneList = append(cloneList, entry)
+	}
+	return cloneList
+}
+
+// Indexed by key name with multiple src/tgt colIds entries
+type MutationDiffFetchListIdx map[string][]*MutationDifferFetchEntry
+
+func (m MutationDiffFetchListIdx) AddEntry(entry *MutationDifferFetchEntry) {
+	if _, keyExists := m[entry.Key]; !keyExists {
+		m[entry.Key] = MutationDiffFetchList{entry}
+	} else {
+		m[entry.Key] = append(m[entry.Key], entry)
+	}
+}
+
 type DifferDriver struct {
 	sourceFileDir     string
 	targetFileDir     string
@@ -29,8 +126,8 @@ type DifferDriver struct {
 	numberOfWorkers   int
 	numberOfBins      int
 	waitGroup         *sync.WaitGroup
-	srcDiffKeys       map[uint32][]string
-	tgtDiffKeys       map[uint32][]string
+	srcDiffKeys       DiffKeysMap
+	tgtDiffKeys       DiffKeysMap
 	stateLock         *sync.RWMutex
 	fileDescPool      *fdp.FdPool
 	vbCompleted       uint32
@@ -57,8 +154,8 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName
 		fileDescPool:      fdPool,
 		finChan:           make(chan bool),
 		collectionMapping: collectionMapping,
-		srcDiffKeys:       make(map[uint32][]string),
-		tgtDiffKeys:       make(map[uint32][]string),
+		srcDiffKeys:       make(DiffKeysMap),
+		tgtDiffKeys:       make(DiffKeysMap),
 	}
 }
 
@@ -95,7 +192,7 @@ func (dr *DifferDriver) cleanup() {
 	close(dr.finChan)
 	err := dr.writeDiffKeys()
 	if err != nil {
-		fmt.Printf("Error writing diff keys. err=%v\n", err)
+		fmt.Printf("Error writing srcDiff fetchList. err=%v\n", err)
 	}
 }
 
@@ -162,10 +259,8 @@ func (dr *DifferDriver) writeDiffKeys() error {
 func (dr *DifferDriver) writeSrcDiffKeys(isSrc bool, waitGrp *sync.WaitGroup) error {
 	defer waitGrp.Done()
 	diffKeys := dr.srcDiffKeys
-	suffix := base.SourceClusterName
 	if !isSrc {
 		diffKeys = dr.tgtDiffKeys
-		suffix = base.TargetClusterName
 	}
 
 	diffKeysBytes, err := json.Marshal(diffKeys)
@@ -173,7 +268,7 @@ func (dr *DifferDriver) writeSrcDiffKeys(isSrc bool, waitGrp *sync.WaitGroup) er
 		return err
 	}
 
-	diffKeysFileName := dr.diffFileDir + base.FileDirDelimiter + dr.diffKeysFileName + base.FileNameDelimiter + suffix
+	diffKeysFileName := utils.DiffKeysFileName(isSrc, dr.diffFileDir, dr.diffKeysFileName)
 	diffKeysFile, err := os.OpenFile(diffKeysFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
 	if err != nil {
 		return err
@@ -217,7 +312,7 @@ func (dh *DifferHandler) run() error {
 
 	err := dh.initialize()
 	if err != nil {
-		fmt.Printf("%v diff handler failed to initialize. err=%v\n", dh.index, err)
+		fmt.Printf("%v srcDiff handler failed to initialize. err=%v\n", dh.index, err)
 		return err
 	}
 
@@ -237,7 +332,7 @@ func (dh *DifferHandler) run() error {
 
 			srcDiffMap, tgtDiffMap, diffBytes, err := filesDiffer.Diff()
 			if err != nil {
-				fmt.Printf("error getting diff from file differ. err=%v\n", err)
+				fmt.Printf("error getting srcDiff from file differ. err=%v\n", err)
 				continue
 			}
 			if len(srcDiffMap) > 0 || len(tgtDiffMap) > 0 {
@@ -271,7 +366,7 @@ func (dh *DifferHandler) initialize() error {
 func (dh *DifferHandler) writeDiffBytes(diffBytes []byte) error {
 	_, err := dh.diffDetailsFile.Write(diffBytes)
 	if err != nil {
-		fmt.Printf("Diff handler %v error writing diff details. err=%v\n", dh.index, err)
+		fmt.Printf("Diff handler %v error writing srcDiff details. err=%v\n", dh.index, err)
 	}
 	return err
 }

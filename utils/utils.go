@@ -402,3 +402,11 @@ func PopulateCCCPConnectString(url string) string {
 
 	return cccpUrl
 }
+
+func DiffKeysFileName(isSource bool, diffFileDir, diffKeysFileName string) string {
+	suffix := base.SourceClusterName
+	if !isSource {
+		suffix = base.TargetClusterName
+	}
+	return diffFileDir + base.FileDirDelimiter + diffKeysFileName + base.FileNameDelimiter + suffix
+}
