@@ -364,6 +364,7 @@ func (differ *FilesDiffer) diffSorted() (map[uint32][]string, map[uint32][]strin
 						// Like "a" < "b", where a is 1 and b is 2
 						differ.MissingFromFile2 = append(differ.MissingFromFile2, item1)
 						diffKeys = append(diffKeys, item1.Key)
+						addToSrcDiffMapIfNotAdded(srcDedupMap, item1.Key, srcDiffMap, srcColId)
 						tgtDiffMap[tgtColId] = append(tgtDiffMap[tgtColId], item1.Key)
 						i++
 					} else {
@@ -371,6 +372,7 @@ func (differ *FilesDiffer) diffSorted() (map[uint32][]string, map[uint32][]strin
 						differ.MissingFromFile1 = append(differ.MissingFromFile1, item2)
 						diffKeys = append(diffKeys, item2.Key)
 						addToSrcDiffMapIfNotAdded(srcDedupMap, item2.Key, srcDiffMap, srcColId)
+						tgtDiffMap[tgtColId] = append(tgtDiffMap[tgtColId], item2.Key)
 						j++
 					}
 				}

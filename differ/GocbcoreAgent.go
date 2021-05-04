@@ -73,12 +73,11 @@ func (a *GocbcoreAgent) setupGocbcoreAgent(config *gocbcore.AgentConfig) (err er
 	return
 }
 
-func (a *GocbcoreAgent) Get(key string, scopeName string, collectionName string, callbackFunc func(result *gocbcore.GetResult, err error)) error {
+func (a *GocbcoreAgent) Get(key string, callbackFunc func(result *gocbcore.GetResult, err error), colId uint32) error {
 	opts := gocbcore.GetOptions{
-		Key:            []byte(key),
-		CollectionName: collectionName,
-		ScopeName:      scopeName,
-		RetryStrategy:  nil,
+		Key:           []byte(key),
+		RetryStrategy: nil,
+		CollectionID:  colId,
 	}
 	_, err := a.agent.Get(opts, callbackFunc)
 	return err
