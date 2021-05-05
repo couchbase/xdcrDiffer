@@ -601,7 +601,14 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 		return
 	}
 
-	mutationDiffer := differ.NewMutationDiffer(options.sourceUrl, difftool.specifiedSpec.SourceBucketName, options.sourceUsername, options.sourcePassword, difftool.specifiedRef.HostName_, difftool.specifiedSpec.TargetBucketName, difftool.specifiedRef.UserName_, difftool.specifiedRef.Password_, options.fileDifferDir, options.mutationDifferDir, int(options.numberOfWorkersForMutationDiffer), int(options.mutationDifferBatchSize), int(options.mutationDifferTimeout), int(options.maxNumOfSendBatchRetry), time.Duration(options.sendBatchRetryInterval)*time.Millisecond, time.Duration(options.sendBatchMaxBackoff)*time.Second, difftool.logger, difftool.srcToTgtColIdsMap)
+	mutationDiffer := differ.NewMutationDiffer(options.sourceUrl, difftool.specifiedSpec.SourceBucketName,
+		options.sourceUsername, options.sourcePassword, difftool.specifiedRef.HostName_,
+		difftool.specifiedSpec.TargetBucketName, difftool.specifiedRef.UserName_, difftool.specifiedRef.Password_,
+		options.fileDifferDir, options.mutationDifferDir, int(options.numberOfWorkersForMutationDiffer),
+		int(options.mutationDifferBatchSize), int(options.mutationDifferTimeout), int(options.maxNumOfSendBatchRetry),
+		time.Duration(options.sendBatchRetryInterval)*time.Millisecond,
+		time.Duration(options.sendBatchMaxBackoff)*time.Second, difftool.logger, difftool.srcToTgtColIdsMap,
+		difftool.srcCapabilities, difftool.tgtCapabilities)
 	err = mutationDiffer.Run()
 	if err != nil {
 		difftool.logger.Errorf("Error from runMutationDiffer = %v\n", err)
@@ -927,6 +934,8 @@ func (difftool *xdcrDiffTool) compileImplicitMapping() {
 		tgtList := []uint32{tgtColId}
 		difftool.srcToTgtColIdsMap[srcColId] = tgtList
 	}
+
+	fmt.Printf("NEIL DEBUG implicitMap: %v\nidsMap: %v\n", implicitNamespaceMap, difftool.srcToTgtColIdsMap)
 }
 
 func (difftool *xdcrDiffTool) generateSrcAndTgtColIds() {
