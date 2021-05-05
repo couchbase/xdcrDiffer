@@ -217,8 +217,8 @@ func dedupFetchLists(srcPovList MutationDiffFetchList, srcIdx MutationDiffFetchL
 	for _, tgtFetchEntry := range tgtPovList {
 		potentialCombinedEntries, exists := combinedFetchIdx[tgtFetchEntry.Key]
 		if !exists {
-			// This means that this key is not even being fetched from the target at all
-			// need to add it to be fetched
+			// This means that this key is not even being fetched from the source at all
+			// need to add it to be fetched so that the diff algo can find it
 			srcEntries := tgtFetchEntry.Reverse()
 			for _, addOneEntry := range srcEntries {
 				combinedFetchList = append(combinedFetchList, addOneEntry)
@@ -228,6 +228,7 @@ func dedupFetchLists(srcPovList MutationDiffFetchList, srcIdx MutationDiffFetchL
 		}
 
 		// Key is being fetched from the source but need to check to make sure that the right colId is being fetched
+		// since we are working off of the index
 		for _, chkSrcColId := range tgtFetchEntry.TgtColIds {
 			var foundSourceEntry bool
 			for _, potentialEntry := range potentialCombinedEntries {
@@ -239,7 +240,9 @@ func dedupFetchLists(srcPovList MutationDiffFetchList, srcIdx MutationDiffFetchL
 			if foundSourceEntry {
 				break
 			} else {
-				// This means that from target's pov, the sourceColId -> tgtMap entry is missing
+				// From target's pov, the sourceColId -> tgtMap entry is missing
+				// This means that for a key that exists in the source's collection, it isn't aware that
+				// this target collection also needs to be fetched
 				// Add them into the combinedFetchList
 				srcEntries := tgtFetchEntry.Reverse()
 				for _, addOneEntry := range srcEntries {
@@ -583,7 +586,6 @@ func (dw *DifferWorker) diff() {
 	for srcColId, sourceResultMap := range dw.sourceResults {
 		for key, sourceResult := range sourceResultMap {
 			if sourceResult.Key == "" {
-				//fmt.Printf("Skipping srcDiff on %v since we did not get results from source\n", key)
 				continue
 			}
 
@@ -592,7 +594,6 @@ func (dw *DifferWorker) diff() {
 			for _, tgtColId := range tgtColIds {
 				targetResult := dw.targetResults[tgtColId][key]
 				if targetResult.Key == "" {
-					//fmt.Printf("Skipping srcDiff on %v since we did not get results from target\n", key)
 					continue
 				}
 				if isKeyNotFoundError(sourceResult.Error) && !isKeyNotFoundError(targetResult.Error) {
@@ -637,7 +638,6 @@ func (dw *DifferWorker) diff() {
 	for tgtColId, targetResultMap := range dw.targetResults {
 		for key, targetResult := range targetResultMap {
 			if targetResult.Key == "" {
-				//fmt.Printf("Skipping srcDiff on %v since we did not get results from source\n", key)
 				continue
 			}
 
@@ -704,10 +704,8 @@ func NewBatch(dw *DifferWorker, startIndex, endIndex int) *batch {
 
 func (b *batch) send() error {
 	for _, fetchItem := range b.fetchList {
-		//b.waitGroup.Add(1)
 		b.get(fetchItem.Key, true /*isSource*/, fetchItem.SrcColId)
 		for _, tgtId := range fetchItem.TgtColIds {
-			//b.waitGroup.Add(1)
 			b.get(fetchItem.Key, false, tgtId)
 		}
 	}

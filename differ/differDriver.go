@@ -21,6 +21,7 @@ import (
 	"xdcrDiffer/utils"
 )
 
+// For each ColID, the keys that have diffs
 type DiffKeysMap map[uint32][]string
 
 func (d *DiffKeysMap) GetTotalCount() int {
@@ -34,6 +35,9 @@ func (d *DiffKeysMap) GetTotalCount() int {
 	return count
 }
 
+// Translate into a list of mutations that needs fetching
+// Returns alongside an index keyed by the document ID
+// For each docID of the index, there can be multiple collection IDs that owns this key
 func (d *DiffKeysMap) ToFetchEntries(mappings map[uint32][]uint32) (MutationDiffFetchList, MutationDiffFetchListIdx) {
 	var fetchList MutationDiffFetchList
 	index := make(MutationDiffFetchListIdx)
@@ -62,6 +66,7 @@ func (d *DiffKeysMap) ToFetchEntries(mappings map[uint32][]uint32) (MutationDiff
 	return fetchList, index
 }
 
+// An doc that needs to be fetched multiple times, once for each collectionID
 type MutationDifferFetchEntry struct {
 	SrcColId  uint32
 	TgtColIds []uint32
