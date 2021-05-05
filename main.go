@@ -815,7 +815,7 @@ func (difftool *xdcrDiffTool) retrieveClustersCapabilities() error {
 		return fmt.Errorf("retrieveClusterCapabilities.LoadFromDefaultPoolInfo(%v) - %v", defaultPoolInfo, err)
 	}
 
-	fmt.Printf("Source cluster supports collections: %v Target cluster supports collections: %v\n",
+	difftool.logger.Infof("Source cluster supports collections: %v Target cluster supports collections: %v\n",
 		difftool.srcCapabilities.HasCollectionSupport(), difftool.tgtCapabilities.HasCollectionSupport())
 
 	if difftool.srcCapabilities.HasCollectionSupport() || difftool.tgtCapabilities.HasCollectionSupport() {
@@ -848,16 +848,16 @@ func (difftool *xdcrDiffTool) populateCollectionsPreReq() error {
 // This is needed whenever source and tgt clusters are >= 7.0
 func (difftool *xdcrDiffTool) PopulateManifestsAndMappings() error {
 	var err error
-	fmt.Printf("Waiting 15 sec for manfiest service to initialize and then getting manifest for source Bucket %v target Bucket %v...\n", difftool.specifiedSpec.SourceBucketName, difftool.specifiedSpec.TargetBucketName)
+	difftool.logger.Infof("Waiting 15 sec for manfiest service to initialize and then getting manifest for source Bucket %v target Bucket %v...\n", difftool.specifiedSpec.SourceBucketName, difftool.specifiedSpec.TargetBucketName)
 	time.Sleep(15 * time.Second)
 
 	difftool.srcBucketManifest, difftool.tgtBucketManifest, err = difftool.collectionsManifestsSvc.GetLatestManifests(difftool.specifiedSpec, false)
 	if err != nil {
-		fmt.Printf("PopulateManifestsAndMappings() - %v\n", err)
+		difftool.logger.Errorf("PopulateManifestsAndMappings() - %v\n", err)
 		return err
 	}
 
-	fmt.Printf("Source manifest: %v\nTarget manifest: %v\n", difftool.srcBucketManifest, difftool.tgtBucketManifest)
+	difftool.logger.Infof("Source manifest: %v\nTarget manifest: %v\n", difftool.srcBucketManifest, difftool.tgtBucketManifest)
 	// Store the manifests in files
 	err = difftool.outputManifestsToFiles(err)
 	if err != nil {
@@ -866,7 +866,7 @@ func (difftool *xdcrDiffTool) PopulateManifestsAndMappings() error {
 
 	modes := difftool.specifiedSpec.Settings.GetCollectionModes()
 	if modes.IsImplicitMapping() {
-		fmt.Printf("Replication spec is using implicit mapping\n")
+		difftool.logger.Infof("Replication spec is using implicit mapping\n")
 		difftool.compileImplicitMapping()
 	} else {
 		return fmt.Errorf("Non-Implicit is not supported\n")
@@ -881,25 +881,25 @@ func (difftool *xdcrDiffTool) PopulateManifestsAndMappings() error {
 func (difftool *xdcrDiffTool) outputManifestsToFiles(err error) error {
 	srcManJson, err := json.Marshal(difftool.srcBucketManifest)
 	if err != nil {
-		fmt.Printf("SrcManifestMarshal - %v\n", err)
+		difftool.logger.Errorf("SrcManifestMarshal - %v\n", err)
 		return err
 	}
 
 	tgtManJson, err := json.Marshal(difftool.tgtBucketManifest)
 	if err != nil {
-		fmt.Printf("TgtManifestMarshal - %v\n", err)
+		difftool.logger.Errorf("TgtManifestMarshal - %v\n", err)
 		return err
 	}
 
 	err = ioutil.WriteFile(utils.GetManifestFileName(options.sourceFileDir), srcManJson, 0644)
 	if err != nil {
-		fmt.Printf("SrcManifestWrite - %v\n", err)
+		difftool.logger.Errorf("SrcManifestWrite - %v\n", err)
 		return err
 	}
 
 	err = ioutil.WriteFile(utils.GetManifestFileName(options.targetFileDir), tgtManJson, 0644)
 	if err != nil {
-		fmt.Printf("TgtManifestWrite - %v\n", err)
+		difftool.logger.Errorf("TgtManifestWrite - %v\n", err)
 		return err
 	}
 	return nil
