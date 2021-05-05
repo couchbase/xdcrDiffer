@@ -317,6 +317,8 @@ func (differ *FilesDiffer) asyncLoad(attr *FileAttributes, err *error) {
 	*err = attr.LoadFileIntoBuffer()
 }
 
+// This will take each collection ID to ID mapping and diff the keys within them to find
+// any discrepancies
 // Returns two maps that requires further Get() to analyze:
 // 1. map of [sourceColId] -> [key]
 // 2. map of [targetColId] -> [key]
@@ -326,7 +328,6 @@ func (differ *FilesDiffer) diffSorted() (map[uint32][]string, map[uint32][]strin
 	for srcColId, tgtColIds := range differ.collectionIdMapping {
 		srcDedupMap := make(map[string]bool)
 		for _, tgtColId := range tgtColIds {
-			// TODO - revisit for multiple target collection IDs
 			diffKeys := make([]string, 0)
 			file1Len := len(differ.file1.sortedEntries[srcColId])
 			file2Len := len(differ.file2.sortedEntries[tgtColId])
