@@ -2,6 +2,7 @@ package differ
 
 import (
 	"github.com/couchbase/gocbcore/v9"
+	"github.com/couchbase/goxdcr/metadata"
 	"time"
 	"xdcrDiffer/base"
 )
@@ -11,8 +12,8 @@ type GocbcoreAgent struct {
 	agent *gocbcore.Agent
 }
 
-func (a *GocbcoreAgent) setupAgent(password *base.PasswordAuth, batchSize int) error {
-	agentConfig := a.setupAgentConfig(password)
+func (a *GocbcoreAgent) setupAgent(password *base.PasswordAuth, batchSize int, capability metadata.Capability) error {
+	agentConfig := a.setupAgentConfig(password, capability)
 	agentConfig.MaxQueueSize = batchSize * 50 // Give SDK some breathing room
 
 	connStr := base.GetConnStr(a.Servers)
@@ -25,7 +26,7 @@ func (a *GocbcoreAgent) setupAgent(password *base.PasswordAuth, batchSize int) e
 	return a.setupGocbcoreAgent(agentConfig)
 }
 
-func (a *GocbcoreAgent) setupAgentConfig(pw *base.PasswordAuth) *gocbcore.AgentConfig {
+func (a *GocbcoreAgent) setupAgentConfig(pw *base.PasswordAuth, capability metadata.Capability) *gocbcore.AgentConfig {
 	var auth gocbcore.AuthProvider
 	if pw != nil {
 		auth = gocbcore.PasswordAuthProvider{
@@ -39,7 +40,7 @@ func (a *GocbcoreAgent) setupAgentConfig(pw *base.PasswordAuth) *gocbcore.AgentC
 		BucketName:       a.BucketName,
 		UserAgent:        a.Name,
 		Auth:             auth,
-		UseCollections:   false,
+		UseCollections:   capability.HasCollectionSupport(),
 		ConnectTimeout:   a.SetupTimeout,
 		KVConnectTimeout: a.SetupTimeout,
 	}
@@ -83,7 +84,7 @@ func (a *GocbcoreAgent) Get(key string, callbackFunc func(result *gocbcore.GetRe
 	return err
 }
 
-func NewGocbcoreAgent(id string, servers []string, bucketName string, password *base.PasswordAuth, batchSize int) (*GocbcoreAgent, error) {
+func NewGocbcoreAgent(id string, servers []string, bucketName string, password *base.PasswordAuth, batchSize int, capability metadata.Capability) (*GocbcoreAgent, error) {
 	gocbcoreAgent := &GocbcoreAgent{
 		GocbcoreAgentCommon: base.GocbcoreAgentCommon{
 			Name:         id,
@@ -94,6 +95,6 @@ func NewGocbcoreAgent(id string, servers []string, bucketName string, password *
 		agent: nil,
 	}
 
-	err := gocbcoreAgent.setupAgent(password, batchSize)
+	err := gocbcoreAgent.setupAgent(password, batchSize, capability)
 	return gocbcoreAgent, err
 }
