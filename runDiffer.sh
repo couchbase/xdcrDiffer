@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#build Copyright (c) 2013-2019 Couchbase, Inc.
+#build Copyright (c) 2013-2021 Couchbase, Inc.
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file
 # except in compliance with the License. You may obtain a copy of the License at
 #   http://www.apache.org/licenses/LICENSE-2.0
@@ -12,6 +12,7 @@
 run_args=$@
 
 execGo="xdcrDiffer"
+differLogFileName="${execGo}.log"
 
 function findExec() {
 	if [[ ! -f "$execGo" ]]; then
@@ -31,6 +32,24 @@ specified source cluster (NOTE: over http://) and retrieve the specified replica
 The difftool currently only supports connecting to remote targets with username and password. Thus, if the specified remote cluster
 reference only contains certificate, then specify the remoteClusterUsername and remoteClusterPassword accordingly.
 EOF
+}
+
+function waitForBgJobs {
+	local mainPid=$1
+	local mainPidCnt=$(ps -ef | grep -v grep | grep -c $mainPid)
+	local jobsCnt=$(jobs -l | grep -c "Running")
+	while (((($jobsCnt > 0)) && (($mainPidCnt > 0)))); do
+		sleep 1
+		jobsCnt=$(jobs -l | grep -c "Running")
+		mainPidCnt=$(ps -ef | grep -v grep | grep -c $mainPid)
+	done
+}
+
+function killBgTail {
+	local tailPid=$(jobs -l | grep tail | awk '{print $2}')
+	if [[ ! -z "$tailPid" ]]; then
+		kill $tailPid >/dev/null 2>&1
+	fi
 }
 
 while getopts ":h:p:u:r:s:t:n:q:c" opt; do
@@ -146,6 +165,23 @@ if [[ ! -z "$maxFileDescs" ]]; then
 	execString="${execString} $maxFileDescs"
 fi
 
-$execString
+# Execute the differ in background and watch the pid to be finished
+$execString >$differLogFileName 2>&1 &
+bgPid=$(jobs -p)
+
+# in the meantime, trap ctrl-c and pass the signal to the program
+trap ctrl_c INT
+
+function ctrl_c() {
+	if [[ -z "$bgPid" ]]; then
+		exit 0
+	else
+		kill -SIGINT $bgPid
+		killBgTail
+	fi
+}
+
+tail -f $differLogFileName &
+waitForBgJobs $bgPid
 
 unset CBAUTH_REVRPC_URL
