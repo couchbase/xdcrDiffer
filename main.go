@@ -864,7 +864,8 @@ func (difftool *xdcrDiffTool) PopulateManifestsAndMappings() error {
 		return err
 	}
 
-	difftool.logger.Infof("Source manifest: %v\nTarget manifest: %v\n", difftool.srcBucketManifest, difftool.tgtBucketManifest)
+	difftool.logger.Infof("Source manifest: %v", difftool.srcBucketManifest)
+	difftool.logger.Infof("Target manifest: %v", difftool.tgtBucketManifest)
 	// Store the manifests in files
 	err = difftool.outputManifestsToFiles(err)
 	if err != nil {
@@ -872,11 +873,21 @@ func (difftool *xdcrDiffTool) PopulateManifestsAndMappings() error {
 	}
 
 	modes := difftool.specifiedSpec.Settings.GetCollectionModes()
-	if modes.IsImplicitMapping() {
-		difftool.logger.Infof("Replication spec is using implicit mapping\n")
-		difftool.compileImplicitMapping()
+	rules := difftool.specifiedSpec.Settings.GetCollectionsRoutingRules()
+	if modes.IsMigrationOn() && !rules.IsExplicitMigrationRule() {
+		return fmt.Errorf("Migration mode is not currently supported\n")
 	} else {
-		return fmt.Errorf("Non-Implicit is not supported\n")
+		if modes.IsMigrationOn() {
+			difftool.logger.Infof("Replication spec is using special migration mapping")
+		} else if modes.IsExplicitMapping() {
+			difftool.logger.Infof("Replication spec is using explicit mapping")
+		} else {
+			difftool.logger.Infof("Replication spec is using implicit mapping\n")
+		}
+		err = difftool.compileCollectionMapping()
+		if err != nil {
+			return err
+		}
 	}
 
 	// Once hardcoded compilation map has been generated, just stream these Collection IDs from DCP to minimize other noise
@@ -912,30 +923,42 @@ func (difftool *xdcrDiffTool) outputManifestsToFiles(err error) error {
 	return nil
 }
 
-func (difftool *xdcrDiffTool) compileImplicitMapping() {
-	implicitNamespaceMap, _, _ := difftool.srcBucketManifest.ImplicitMap(difftool.tgtBucketManifest)
-
-	// Implicit map means the namespaces must be the same
-	for srcNs, _ := range implicitNamespaceMap {
-		scopeName := srcNs.GetCollectionNamespace().ScopeName
-		collectionName := srcNs.GetCollectionNamespace().CollectionName
-		srcColId, srcErr := difftool.srcBucketManifest.GetCollectionId(scopeName, collectionName)
-		tgtColId, tgtErr := difftool.tgtBucketManifest.GetCollectionId(scopeName, collectionName)
-
-		if srcErr != nil {
-			difftool.logger.Errorf("Cannot find %v - %v from source manifest %v\n", scopeName, collectionName, srcErr)
-			continue
-		}
-		if tgtErr != nil {
-			difftool.logger.Errorf("Cannot find %v - %v from target manifest %v\n", scopeName, collectionName, tgtErr)
-			continue
-		}
-
-		tgtList := []uint32{tgtColId}
-		difftool.srcToTgtColIdsMap[srcColId] = tgtList
+func (difftool *xdcrDiffTool) compileCollectionMapping() error {
+	pair := metadata.CollectionsManifestPair{
+		Source: difftool.srcBucketManifest,
+		Target: difftool.tgtBucketManifest,
+	}
+	namespaceMapping, err := metadata.NewCollectionNamespaceMappingFromRules(pair, difftool.specifiedSpec.Settings.GetCollectionModes(), difftool.specifiedSpec.Settings.GetCollectionsRoutingRules(), false, false)
+	if err != nil {
+		difftool.logger.Errorf("NewCollectionNamespaceMappingFromRules err: %v", err)
+		return err
 	}
 
-	fmt.Printf("NEIL DEBUG implicitMap: %v\nidsMap: %v\n", implicitNamespaceMap, difftool.srcToTgtColIdsMap)
+	for srcNs, tgtNamespaces := range namespaceMapping {
+		for _, tgtNs := range tgtNamespaces {
+			scopeName := srcNs.GetCollectionNamespace().ScopeName
+			collectionName := srcNs.GetCollectionNamespace().CollectionName
+			tgtScopeName := tgtNs.ScopeName
+			tgtCollectionName := tgtNs.CollectionName
+			srcColId, srcErr := difftool.srcBucketManifest.GetCollectionId(scopeName, collectionName)
+			tgtColId, tgtErr := difftool.tgtBucketManifest.GetCollectionId(tgtScopeName, tgtCollectionName)
+
+			if srcErr != nil {
+				difftool.logger.Errorf("Cannot find %v - %v from source manifest %v\n", scopeName, collectionName, srcErr)
+				continue
+			}
+			if tgtErr != nil {
+				difftool.logger.Errorf("Cannot find %v - %v from target manifest %v\n", scopeName, collectionName, tgtErr)
+				continue
+			}
+
+			tgtList := []uint32{tgtColId}
+			difftool.srcToTgtColIdsMap[srcColId] = tgtList
+		}
+	}
+
+	difftool.logger.Infof("Collection namespace mapping: %v idsMap: %v", namespaceMapping, difftool.srcToTgtColIdsMap)
+	return nil
 }
 
 func (difftool *xdcrDiffTool) generateSrcAndTgtColIds() {
