@@ -18,7 +18,9 @@ import (
 	mcc "github.com/couchbase/gomemcached/client"
 	xdcrParts "github.com/couchbase/goxdcr/base/filter"
 	xdcrLog "github.com/couchbase/goxdcr/log"
+	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"os"
+	"strings"
 	"sync"
 	"xdcrDiffer/base"
 	fdp "xdcrDiffer/fileDescriptorPool"
@@ -27,41 +29,49 @@ import (
 
 // implements StreamObserver
 type DcpHandler struct {
-	dcpClient           *DcpClient
-	fileDir             string
-	index               int
-	vbList              []uint16
-	numberOfBins        int
-	dataChan            chan *Mutation
-	waitGrp             sync.WaitGroup
-	finChan             chan bool
-	bucketMap           map[uint16]map[int]*Bucket
-	fdPool              fdp.FdPoolIface
-	logger              *xdcrLog.CommonLogger
-	filter              xdcrParts.Filter
-	incrementCounter    func()
-	incrementSysCounter func()
+	dcpClient               *DcpClient
+	fileDir                 string
+	index                   int
+	vbList                  []uint16
+	numberOfBins            int
+	dataChan                chan *Mutation
+	waitGrp                 sync.WaitGroup
+	finChan                 chan bool
+	bucketMap               map[uint16]map[int]*Bucket
+	fdPool                  fdp.FdPoolIface
+	logger                  *xdcrLog.CommonLogger
+	filter                  xdcrParts.Filter
+	incrementCounter        func()
+	incrementSysCounter     func()
+	colMigrationFilters     []string
+	colMigrationFiltersOn   bool // shortcut to avoid len() check
+	colMigrationFiltersImpl []xdcrParts.Filter
+	isSource                bool
+	utils                   xdcrUtils.UtilsIface
 }
 
-func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface,
-	incReceivedCounter, incSysEvtReceived func()) (*DcpHandler, error) {
+func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface, incReceivedCounter, incSysEvtReceived func(), colMigrationFilters []string, utils xdcrUtils.UtilsIface) (*DcpHandler, error) {
 	if len(vbList) == 0 {
 		return nil, fmt.Errorf("vbList is empty for handler %v", index)
 	}
 	return &DcpHandler{
-		dcpClient:           dcpClient,
-		fileDir:             fileDir,
-		index:               index,
-		vbList:              vbList,
-		numberOfBins:        numberOfBins,
-		dataChan:            make(chan *Mutation, dataChanSize),
-		finChan:             make(chan bool),
-		bucketMap:           make(map[uint16]map[int]*Bucket),
-		fdPool:              fdPool,
-		logger:              dcpClient.logger,
-		filter:              dcpClient.dcpDriver.filter,
-		incrementCounter:    incReceivedCounter,
-		incrementSysCounter: incSysEvtReceived,
+		dcpClient:             dcpClient,
+		fileDir:               fileDir,
+		index:                 index,
+		vbList:                vbList,
+		numberOfBins:          numberOfBins,
+		dataChan:              make(chan *Mutation, dataChanSize),
+		finChan:               make(chan bool),
+		bucketMap:             make(map[uint16]map[int]*Bucket),
+		fdPool:                fdPool,
+		logger:                dcpClient.logger,
+		filter:                dcpClient.dcpDriver.filter,
+		incrementCounter:      incReceivedCounter,
+		incrementSysCounter:   incSysEvtReceived,
+		colMigrationFilters:   colMigrationFilters,
+		colMigrationFiltersOn: len(colMigrationFilters) > 0,
+		utils:                 utils,
+		isSource:              strings.Contains(dcpClient.Name, base.SourceClusterName),
 	}, nil
 }
 
@@ -85,6 +95,21 @@ func (dh *DcpHandler) Stop() {
 	dh.cleanup()
 }
 
+func (d *DcpHandler) compileMigrCollectionFiltersIfNeeded() error {
+	if len(d.colMigrationFilters) == 0 {
+		return nil
+	}
+
+	for i, filterStr := range d.colMigrationFilters {
+		filter, err := xdcrParts.NewFilter(fmt.Sprintf("%d", i), filterStr, d.utils)
+		if err != nil {
+			return fmt.Errorf("compiling %v resulted in: %v", filterStr, err)
+		}
+		d.colMigrationFiltersImpl = append(d.colMigrationFiltersImpl, filter)
+	}
+	return nil
+}
+
 func (dh *DcpHandler) initialize() error {
 	for _, vbno := range dh.vbList {
 		innerMap := make(map[int]*Bucket)
@@ -98,6 +123,9 @@ func (dh *DcpHandler) initialize() error {
 		}
 	}
 
+	if err := dh.compileMigrCollectionFiltersIfNeeded(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -105,13 +133,13 @@ func (dh *DcpHandler) cleanup() {
 	for _, vbno := range dh.vbList {
 		innerMap := dh.bucketMap[vbno]
 		if innerMap == nil {
-			dh.logger.Warnf("Cannot find innerMap for vbno %v at cleanup\n", vbno)
+			dh.logger.Warnf("Cannot find innerMap for Vbno %v at cleanup\n", vbno)
 			continue
 		}
 		for i := 0; i < dh.numberOfBins; i++ {
 			bucket := innerMap[i]
 			if bucket == nil {
-				dh.logger.Warnf("Cannot find bucket for vbno %v and index %v at cleanup\n", vbno, i)
+				dh.logger.Warnf("Cannot find bucket for Vbno %v and index %v at cleanup\n", vbno, i)
 				continue
 			}
 			//fmt.Printf("%v DcpHandler closing bucket %v\n", dh.dcpClient.Name, i)
@@ -138,21 +166,10 @@ done:
 
 func (dh *DcpHandler) processMutation(mut *Mutation) {
 	var matched bool
-	var err error
-	var errStr string
-	var filterResult base.FilterResultType
-	if dh.filter != nil && mut.IsMutation() {
-		matched, err, errStr, _ = dh.filter.FilterUprEvent(mut.ToUprEvent())
-		if !matched {
-			filterResult = base.Filtered
-		}
-		if err != nil {
-			filterResult = base.UnableToFilter
-			dh.logger.Warnf("Err %v - (%v) when filtering mutation %v", err, errStr, mut)
-		}
-	}
+	var replicationFilterResult base.FilterResultType
 
-	valid := dh.dcpClient.dcpDriver.checkpointManager.HandleMutationEvent(mut, filterResult)
+	replicationFilterResult = dh.replicationFilter(mut, matched, replicationFilterResult)
+	valid := dh.dcpClient.dcpDriver.checkpointManager.HandleMutationEvent(mut, replicationFilterResult)
 	if !valid {
 		// if mutation is out of range, ignore it
 		return
@@ -166,17 +183,45 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 		return
 	}
 
-	vbno := mut.vbno
-	index := utils.GetBucketIndexFromKey(mut.key, dh.numberOfBins)
+	var filterIdsMatched []uint8
+	if dh.colMigrationFiltersOn && dh.isSource {
+		filterIdsMatched = dh.checkColMigrationFilters(mut)
+		if len(filterIdsMatched) == 0 {
+			return
+		}
+	}
+
+	vbno := mut.Vbno
+	index := utils.GetBucketIndexFromKey(mut.Key, dh.numberOfBins)
 	innerMap := dh.bucketMap[vbno]
 	if innerMap == nil {
-		panic(fmt.Sprintf("cannot find bucketMap for vbno %v", vbno))
+		panic(fmt.Sprintf("cannot find bucketMap for Vbno %v", vbno))
 	}
 	bucket := innerMap[index]
 	if bucket == nil {
 		panic(fmt.Sprintf("cannot find bucket for index %v", index))
 	}
+
+	if dh.colMigrationFiltersOn && len(filterIdsMatched) > 0 {
+		mut.ColFiltersMatched = filterIdsMatched
+	}
 	bucket.write(mut.Serialize())
+}
+
+func (dh *DcpHandler) replicationFilter(mut *Mutation, matched bool, filterResult base.FilterResultType) base.FilterResultType {
+	var err error
+	var errStr string
+	if dh.filter != nil && mut.IsMutation() {
+		matched, err, errStr, _ = dh.filter.FilterUprEvent(mut.ToUprEvent())
+		if !matched {
+			filterResult = base.Filtered
+		}
+		if err != nil {
+			filterResult = base.UnableToFilter
+			dh.logger.Warnf("Err %v - (%v) when filtering mutation %v", err, errStr, mut)
+		}
+	}
+	return filterResult
 }
 
 func (dh *DcpHandler) writeToDataChan(mut *Mutation) {
@@ -240,6 +285,18 @@ func (dh *DcpHandler) OSOSnapshot(vbID uint16, snapshotType uint32, streamID uin
 
 func (dh *DcpHandler) SeqNoAdvanced(vbID uint16, bySeqno uint64, streamID uint16) {
 	// Don't care
+}
+
+func (dh *DcpHandler) checkColMigrationFilters(mut *Mutation) []uint8 {
+	var filterIdsMatched []uint8
+	for i, filter := range dh.colMigrationFiltersImpl {
+		// If at least one passed, let it through
+		matched, _, _, _ := filter.FilterUprEvent(mut.ToUprEvent())
+		if matched {
+			filterIdsMatched = append(filterIdsMatched, uint8(i))
+		}
+	}
+	return filterIdsMatched
 }
 
 type Bucket struct {
@@ -338,105 +395,115 @@ func (b *Bucket) close() {
 }
 
 type Mutation struct {
-	vbno     uint16
-	key      []byte
-	seqno    uint64
-	revId    uint64
-	cas      uint64
-	flags    uint32
-	expiry   uint32
-	opCode   gomemcached.CommandCode
-	value    []byte
-	datatype uint8
-	colId    uint32
+	Vbno              uint16
+	Key               []byte
+	Seqno             uint64
+	RevId             uint64
+	Cas               uint64
+	Flags             uint32
+	Expiry            uint32
+	OpCode            gomemcached.CommandCode
+	Value             []byte
+	Datatype          uint8
+	ColId             uint32
+	ColFiltersMatched []uint8 // Given a ordered list of filters, this list contains indexes of the ordered list of filter that matched
 }
 
 func CreateMutation(vbno uint16, key []byte, seqno, revId, cas uint64, flags, expiry uint32, opCode gomemcached.CommandCode, value []byte, datatype uint8, collectionId uint32) *Mutation {
 	return &Mutation{
-		vbno:   vbno,
-		key:    key,
-		seqno:  seqno,
-		revId:  revId,
-		cas:    cas,
-		flags:  flags,
-		expiry: expiry,
-		opCode: opCode,
-		value:  value,
-		colId:  collectionId,
+		Vbno:     vbno,
+		Key:      key,
+		Seqno:    seqno,
+		RevId:    revId,
+		Cas:      cas,
+		Flags:    flags,
+		Expiry:   expiry,
+		OpCode:   opCode,
+		Value:    value,
+		Datatype: datatype,
+		ColId:    collectionId,
 	}
 }
 
 func (m *Mutation) IsExpiration() bool {
-	return m.opCode == gomemcached.UPR_EXPIRATION
+	return m.OpCode == gomemcached.UPR_EXPIRATION
 }
 
 func (m *Mutation) IsDeletion() bool {
-	return m.opCode == gomemcached.UPR_DELETION
+	return m.OpCode == gomemcached.UPR_DELETION
 }
 
 func (m *Mutation) IsMutation() bool {
-	return m.opCode == gomemcached.UPR_MUTATION
+	return m.OpCode == gomemcached.UPR_MUTATION
 }
 
 func (m *Mutation) IsSystemEvent() bool {
-	return m.opCode == gomemcached.DCP_SYSTEM_EVENT
+	return m.OpCode == gomemcached.DCP_SYSTEM_EVENT
 }
 
 func (m *Mutation) ToUprEvent() *mcc.UprEvent {
 	return &mcc.UprEvent{
-		Opcode:       m.opCode,
-		VBucket:      m.vbno,
-		DataType:     m.datatype,
-		Flags:        m.flags,
-		Expiry:       m.expiry,
-		Key:          m.key,
-		Value:        m.value,
-		Cas:          m.cas,
-		Seqno:        m.seqno,
-		CollectionId: m.colId,
+		Opcode:       m.OpCode,
+		VBucket:      m.Vbno,
+		DataType:     m.Datatype,
+		Flags:        m.Flags,
+		Expiry:       m.Expiry,
+		Key:          m.Key,
+		Value:        m.Value,
+		Cas:          m.Cas,
+		Seqno:        m.Seqno,
+		CollectionId: m.ColId,
 	}
 }
 
 // serialize mutation into []byte
 // format:
 //  keyLen   - 2 bytes
-//  key  - length specified by keyLen
-//  seqno    - 8 bytes
-//  revId    - 8 bytes
-//  cas      - 8 bytes
-//  flags    - 4 bytes
-//  expiry   - 4 bytes
+//  Key  - length specified by keyLen
+//  Seqno    - 8 bytes
+//  RevId    - 8 bytes
+//  Cas      - 8 bytes
+//  Flags    - 4 bytes
+//  Expiry   - 4 bytes
 //  opType   - 2 byte
-//  datatype - 2 byte
+//  Datatype - 2 byte
 //  hash     - 64 bytes
 //  collectionId - 4 bytes
+//  colFiltersLen - 1 byte (number of collection migration filters)
+//  (per col filter) - 1 byte
 func (mut *Mutation) Serialize() []byte {
-	keyLen := len(mut.key)
-	ret := make([]byte, keyLen+base.BodyLength+2)
-	bodyHash := sha512.Sum512(mut.value)
+	keyLen := len(mut.Key)
+	ret := make([]byte, base.GetFixedSizeMutationLen(keyLen, mut.ColFiltersMatched))
+	bodyHash := sha512.Sum512(mut.Value)
 
 	pos := 0
 	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(keyLen))
 	pos += 2
-	copy(ret[pos:pos+keyLen], mut.key)
+	copy(ret[pos:pos+keyLen], mut.Key)
 	pos += keyLen
-	binary.BigEndian.PutUint64(ret[pos:pos+8], mut.seqno)
+	binary.BigEndian.PutUint64(ret[pos:pos+8], mut.Seqno)
 	pos += 8
-	binary.BigEndian.PutUint64(ret[pos:pos+8], mut.revId)
+	binary.BigEndian.PutUint64(ret[pos:pos+8], mut.RevId)
 	pos += 8
-	binary.BigEndian.PutUint64(ret[pos:pos+8], mut.cas)
+	binary.BigEndian.PutUint64(ret[pos:pos+8], mut.Cas)
 	pos += 8
-	binary.BigEndian.PutUint32(ret[pos:pos+4], mut.flags)
+	binary.BigEndian.PutUint32(ret[pos:pos+4], mut.Flags)
 	pos += 4
-	binary.BigEndian.PutUint32(ret[pos:pos+4], mut.expiry)
+	binary.BigEndian.PutUint32(ret[pos:pos+4], mut.Expiry)
 	pos += 4
-	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(mut.opCode))
+	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(mut.OpCode))
 	pos += 2
-	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(mut.datatype))
+	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(mut.Datatype))
 	pos += 2
 	copy(ret[pos:], bodyHash[:])
 	pos += 64
-	binary.BigEndian.PutUint32(ret[pos:pos+4], mut.colId)
-
+	binary.BigEndian.PutUint32(ret[pos:pos+4], mut.ColId)
+	pos += 4
+	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(len(mut.ColFiltersMatched)))
+	pos += 2
+	for _, colFilterId := range mut.ColFiltersMatched {
+		binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(colFilterId))
+		pos += 2
+	}
 	return ret
 }

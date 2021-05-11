@@ -43,7 +43,7 @@ type DCPFeedParams struct {
 	IncludeXAttrs bool `json:"includeXAttrs,omitempty"`
 
 	// Used to specify whether the applications are not interested
-	// in receiving the value for mutations in a dcp stream.
+	// in receiving the Value for mutations in a dcp stream.
 	NoValue bool `json:"noValue,omitempty"`
 
 	// Scope within the bucket to stream data from.

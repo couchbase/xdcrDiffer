@@ -183,5 +183,6 @@ function ctrl_c() {
 
 tail -f $differLogFileName &
 waitForBgJobs $bgPid
+killBgTail
 
 unset CBAUTH_REVRPC_URL

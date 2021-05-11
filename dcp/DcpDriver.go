@@ -12,9 +12,11 @@ package dcp
 import (
 	"fmt"
 	gocbcore "github.com/couchbase/gocbcore/v9"
+	xdcrBase "github.com/couchbase/goxdcr/base"
 	xdcrParts "github.com/couchbase/goxdcr/base/filter"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/couchbase/goxdcr/metadata"
+	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,18 +46,21 @@ type DcpDriver struct {
 	startVbtsDoneChan  chan bool
 	fdPool             fdp.FdPoolIface
 	clients            []*DcpClient
-	// value = true if processing on the vb has been completed
+	// Value = true if processing on the vb has been completed
 	vbStateMap map[uint16]*VBStateWithLock
 	// 0 - not started
 	// 1 - started
 	// 2 - stopped
-	state         DriverState
-	stateLock     sync.RWMutex
-	finChan       chan bool
-	logger        *xdcrLog.CommonLogger
-	filter        xdcrParts.Filter
-	capabilities  metadata.Capability
-	collectionIDs []uint32
+	state               DriverState
+	stateLock           sync.RWMutex
+	finChan             chan bool
+	logger              *xdcrLog.CommonLogger
+	filter              xdcrParts.Filter
+	capabilities        metadata.Capability
+	collectionIDs       []uint32
+	colMigrationFilters []string
+	dataPool            xdcrBase.DataPool
+	utils               xdcrUtils.UtilsIface
 
 	// various counters
 	totalNumReceivedFromDCP      uint64
@@ -83,32 +88,34 @@ const (
 	DriverStateStopped DriverState = iota
 )
 
-func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration, checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIds []uint32) *DcpDriver {
+func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration, checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIds []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface) *DcpDriver {
 	dcpDriver := &DcpDriver{
-		Name:               name,
-		url:                url,
-		bucketName:         bucketName,
-		userName:           userName,
-		password:           password,
-		fileDir:            fileDir,
-		numberOfClients:    numberOfClients,
-		numberOfWorkers:    numberOfWorkers,
-		numberOfBins:       numberOfBins,
-		dcpHandlerChanSize: dcpHandlerChanSize,
-		completeBySeqno:    completeBySeqno,
-		errChan:            errChan,
-		waitGroup:          waitGroup,
-		clients:            make([]*DcpClient, numberOfClients),
-		childWaitGroup:     &sync.WaitGroup{},
-		vbStateMap:         make(map[uint16]*VBStateWithLock),
-		fdPool:             fdPool,
-		state:              DriverStateNew,
-		finChan:            make(chan bool),
-		startVbtsDoneChan:  make(chan bool),
-		logger:             logger,
-		filter:             filter,
-		capabilities:       capabilities,
-		collectionIDs:      collectionIds,
+		Name:                name,
+		url:                 url,
+		bucketName:          bucketName,
+		userName:            userName,
+		password:            password,
+		fileDir:             fileDir,
+		numberOfClients:     numberOfClients,
+		numberOfWorkers:     numberOfWorkers,
+		numberOfBins:        numberOfBins,
+		dcpHandlerChanSize:  dcpHandlerChanSize,
+		completeBySeqno:     completeBySeqno,
+		errChan:             errChan,
+		waitGroup:           waitGroup,
+		clients:             make([]*DcpClient, numberOfClients),
+		childWaitGroup:      &sync.WaitGroup{},
+		vbStateMap:          make(map[uint16]*VBStateWithLock),
+		fdPool:              fdPool,
+		state:               DriverStateNew,
+		finChan:             make(chan bool),
+		startVbtsDoneChan:   make(chan bool),
+		logger:              logger,
+		filter:              filter,
+		capabilities:        capabilities,
+		collectionIDs:       collectionIds,
+		colMigrationFilters: colMigrationFilters,
+		utils:               utils,
 	}
 
 	var vbno uint16
@@ -243,7 +250,7 @@ func (d *DcpDriver) initializeDcpClients() {
 		}
 
 		d.childWaitGroup.Add(1)
-		dcpClient := NewDcpClient(d, i, vbList, d.childWaitGroup, d.startVbtsDoneChan, d.capabilities, d.collectionIDs)
+		dcpClient := NewDcpClient(d, i, vbList, d.childWaitGroup, d.startVbtsDoneChan, d.capabilities, d.collectionIDs, d.colMigrationFilters, d.utils)
 		d.clients[i] = dcpClient
 	}
 }
@@ -301,7 +308,7 @@ func allowedCompletionError(err error) bool {
 
 func (d *DcpDriver) handleVbucketCompletion(vbno uint16, err error, reason string) {
 	if err != nil && !allowedCompletionError(err) {
-		wrappedErr := fmt.Errorf("%v vbno %v vbucket completed with err %v - %v", d.Name, vbno, err, reason)
+		wrappedErr := fmt.Errorf("%v Vbno %v vbucket completed with err %v - %v", d.Name, vbno, err, reason)
 		d.reportError(wrappedErr)
 	} else {
 		if d.completeBySeqno {

@@ -44,6 +44,8 @@ type FilesDiffer struct {
 	fdPool *fdp.FdPool
 
 	collectionIdMapping map[uint32][]uint32
+	colFilterStrings    []string
+	colFilterTgtIds     []uint32
 }
 
 type FileAttributes struct {
@@ -64,16 +66,18 @@ func NewFileAttribute(fileName string) *FileAttributes {
 }
 
 type oneEntry struct {
-	Key      string
-	Seqno    uint64
-	RevId    uint64
-	Cas      uint64
-	Flags    uint32
-	Expiry   uint32
-	OpCode   gomemcached.CommandCode
-	Datatype uint8
-	BodyHash [sha512.Size]byte
-	ColId    uint32
+	Key               string
+	Seqno             uint64
+	RevId             uint64
+	Cas               uint64
+	Flags             uint32
+	Expiry            uint32
+	OpCode            gomemcached.CommandCode
+	Datatype          uint8
+	BodyHash          [sha512.Size]byte
+	ColId             uint32
+	ColMigrFilterLen  uint8
+	ColFiltersMatched []uint8
 }
 
 func (oneEntry *oneEntry) String() string {
@@ -125,11 +129,35 @@ func (entry oneEntry) Diff(other oneEntry) (int, bool) {
 	return 0, true
 }
 
-func NewFilesDiffer(file1, file2 string, collectionMapping map[uint32][]uint32) *FilesDiffer {
+func (entry *oneEntry) IsMutation() bool {
+	return entry.OpCode == gomemcached.UPR_MUTATION
+}
+
+func (srcEntry *oneEntry) MapsToTargetCol(tgtColId uint32, colFilterTgtIds []uint32, currentTgtFileColId uint32) bool {
+	for _, oneMatchedFilterIdx := range srcEntry.ColFiltersMatched {
+		// Each matched entry represents a target collection ID that is supposed to be replicated
+		if int(oneMatchedFilterIdx) >= len(colFilterTgtIds) {
+			panic("FilterIdx matched is greater than available compiled filters")
+		}
+		filterTargetColId := colFilterTgtIds[oneMatchedFilterIdx]
+		if filterTargetColId == tgtColId && tgtColId == currentTgtFileColId {
+			// This source entry is meant to be replicated to this target entry's collection ID
+			// and the current file differ is looking at contains the same collection ID
+			return true
+		}
+	}
+
+	// This source entry was never meant to replicated to this target entry's collection
+	return false
+}
+
+func NewFilesDiffer(file1, file2 string, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32) *FilesDiffer {
 	differ := &FilesDiffer{
 		file1:               *NewFileAttribute(file1),
 		file2:               *NewFileAttribute(file2),
 		collectionIdMapping: collectionMapping,
+		colFilterStrings:    colFilterStrings,
+		colFilterTgtIds:     colFilterTgtIds,
 	}
 	if len(collectionMapping) == 0 {
 		// This means this is legacy mode - no collection support
@@ -139,9 +167,9 @@ func NewFilesDiffer(file1, file2 string, collectionMapping map[uint32][]uint32) 
 	return differ
 }
 
-func NewFilesDifferWithFDPool(file1, file2 string, fdPool *fdp.FdPool, collectionMapping map[uint32][]uint32) (*FilesDiffer, error) {
+func NewFilesDifferWithFDPool(file1, file2 string, fdPool *fdp.FdPool, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32) (*FilesDiffer, error) {
 	var err error
-	differ := NewFilesDiffer(file1, file2, collectionMapping)
+	differ := NewFilesDiffer(file1, file2, collectionMapping, colFilterStrings, colFilterTgtIds)
 	if fdPool != nil {
 		differ.fdPool = fdPool
 		differ.file1.readOp, err = fdPool.RegisterReadOnlyFileHandle(file1)
@@ -242,6 +270,23 @@ func getOneEntry(readOp fdp.FileOp) (*oneEntry, error) {
 	}
 	entry.ColId = binary.BigEndian.Uint32(collectionIdBytes)
 
+	colFiltersLenByte := make([]byte, 2)
+	bytesRead, err = readOp(colFiltersLenByte)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to read filterLenBytes, bytes read: %v, err: %v", bytesRead, err)
+	}
+	entry.ColMigrFilterLen = uint8(binary.BigEndian.Uint16(colFiltersLenByte))
+
+	var colFilterIds []uint8
+	for i := uint8(0); i < entry.ColMigrFilterLen; i++ {
+		idByte := make([]byte, 2)
+		bytesRead, err = readOp(idByte)
+		if err != nil {
+			return nil, fmt.Errorf("Unable to read a single colFilterID for index %v, err: %v", i, err)
+		}
+		colFilterIds = append(colFilterIds, uint8(binary.BigEndian.Uint16(idByte)))
+	}
+	entry.ColFiltersMatched = colFilterIds
 	return entry, nil
 }
 
@@ -319,12 +364,20 @@ func (differ *FilesDiffer) asyncLoad(attr *FileAttributes, err *error) {
 
 // This will take each collection ID to ID mapping and diff the keys within them to find
 // any discrepancies
-// Returns two maps that requires further Get() to analyze:
+// Returns maps that requires further Get() to analyze:
 // 1. map of [sourceColId] -> [key]
 // 2. map of [targetColId] -> [key]
-func (differ *FilesDiffer) diffSorted() (map[uint32][]string, map[uint32][]string) {
+// 3. map of [sourceDocId] -> Maps to which target collection IDs (migration mode only)
+func (differ *FilesDiffer) diffSorted() (map[uint32][]string, map[uint32][]string, map[string][]uint32) {
 	srcDiffMap := make(map[uint32][]string)
 	tgtDiffMap := make(map[uint32][]string)
+
+	// For collection migration mode, diffing by colId -> file isn't enough
+	// We need to check to make sure that only something that the source is meant to replicate to the target
+	// should be there
+	migrationHintMap := make(map[string][]uint32)
+	colMigrationMode := len(differ.colFilterStrings) > 0
+
 	for srcColId, tgtColIds := range differ.collectionIdMapping {
 		srcDedupMap := make(map[string]bool)
 		for _, tgtColId := range tgtColIds {
@@ -332,7 +385,7 @@ func (differ *FilesDiffer) diffSorted() (map[uint32][]string, map[uint32][]strin
 			file1Len := len(differ.file1.sortedEntries[srcColId])
 			file2Len := len(differ.file2.sortedEntries[tgtColId])
 
-			if file1Len == 0 && file2Len == 0 {
+			if file1Len == 0 && file2Len == 0 && !colMigrationMode {
 				//return srcDiffKeys
 				continue
 			}
@@ -343,8 +396,10 @@ func (differ *FilesDiffer) diffSorted() (map[uint32][]string, map[uint32][]strin
 			for i < file1Len && j < file2Len {
 				item1 := differ.file1.sortedEntries[srcColId][i]
 				item2 := differ.file2.sortedEntries[tgtColId][j]
+				differ.addMigrationHintIfNeeded(colMigrationMode, item1, migrationHintMap)
 
 				keyCompare, match := item1.Diff(*item2)
+				validComparison := !colMigrationMode || item1.MapsToTargetCol(item2.ColId, differ.colFilterTgtIds, tgtColId) && item1.IsMutation() && item2.IsMutation()
 				if match {
 					// Both items are the same
 					i++
@@ -352,28 +407,34 @@ func (differ *FilesDiffer) diffSorted() (map[uint32][]string, map[uint32][]strin
 				} else {
 					if keyCompare == 0 {
 						// Both document are the same, but others mismatched
-						var onePair entryPair
-						onePair[0] = item1
-						onePair[1] = item2
-						differ.BothExistButMismatch = append(differ.BothExistButMismatch, &onePair)
-						diffKeys = append(diffKeys, item1.Key)
-						addToSrcDiffMapIfNotAdded(srcDedupMap, item1.Key, srcDiffMap, srcColId)
-						tgtDiffMap[tgtColId] = append(tgtDiffMap[tgtColId], item1.Key)
+						if validComparison {
+							var onePair entryPair
+							onePair[0] = item1
+							onePair[1] = item2
+							differ.BothExistButMismatch = append(differ.BothExistButMismatch, &onePair)
+							diffKeys = append(diffKeys, item1.Key)
+							addToSrcDiffMapIfNotAdded(srcDedupMap, item1.Key, srcDiffMap, srcColId)
+							tgtDiffMap[tgtColId] = append(tgtDiffMap[tgtColId], item1.Key)
+						}
 						i++
 						j++
 					} else if keyCompare < 0 {
 						// Like "a" < "b", where a is 1 and b is 2
-						differ.MissingFromFile2 = append(differ.MissingFromFile2, item1)
-						diffKeys = append(diffKeys, item1.Key)
-						addToSrcDiffMapIfNotAdded(srcDedupMap, item1.Key, srcDiffMap, srcColId)
-						tgtDiffMap[tgtColId] = append(tgtDiffMap[tgtColId], item1.Key)
+						if validComparison {
+							differ.MissingFromFile2 = append(differ.MissingFromFile2, item1)
+							diffKeys = append(diffKeys, item1.Key)
+							addToSrcDiffMapIfNotAdded(srcDedupMap, item1.Key, srcDiffMap, srcColId)
+							tgtDiffMap[tgtColId] = append(tgtDiffMap[tgtColId], item1.Key)
+						}
 						i++
 					} else {
 						// "b" > "a", leading to keyCompare > 0
-						differ.MissingFromFile1 = append(differ.MissingFromFile1, item2)
-						diffKeys = append(diffKeys, item2.Key)
-						addToSrcDiffMapIfNotAdded(srcDedupMap, item2.Key, srcDiffMap, srcColId)
-						tgtDiffMap[tgtColId] = append(tgtDiffMap[tgtColId], item2.Key)
+						if validComparison {
+							differ.MissingFromFile1 = append(differ.MissingFromFile1, item2)
+							diffKeys = append(diffKeys, item2.Key)
+							addToSrcDiffMapIfNotAdded(srcDedupMap, item2.Key, srcDiffMap, srcColId)
+							tgtDiffMap[tgtColId] = append(tgtDiffMap[tgtColId], item2.Key)
+						}
 						j++
 					}
 				}
@@ -381,19 +442,28 @@ func (differ *FilesDiffer) diffSorted() (map[uint32][]string, map[uint32][]strin
 
 			for ; i < file1Len; i++ {
 				// This means that all the rest of the entries in file1 are missing from file2
-				differ.MissingFromFile2 = append(differ.MissingFromFile2, differ.file1.sortedEntries[srcColId][i])
-				addToSrcDiffMapIfNotAdded(srcDedupMap, differ.file1.sortedEntries[srcColId][i].Key, srcDiffMap, srcColId)
+				item1 := differ.file1.sortedEntries[srcColId][i]
+				differ.addMigrationHintIfNeeded(colMigrationMode, item1, migrationHintMap)
+				validComparison := !colMigrationMode || item1.MapsToTargetCol(tgtColId, differ.colFilterTgtIds, tgtColId) && item1.IsMutation()
+				if validComparison {
+					differ.MissingFromFile2 = append(differ.MissingFromFile2, item1)
+					addToSrcDiffMapIfNotAdded(srcDedupMap, item1.Key, srcDiffMap, srcColId)
+				}
 			}
 
-			for ; j < file2Len; j++ {
-				// This means that all the rest of the entries in file2 are missing from file1
-				differ.MissingFromFile1 = append(differ.MissingFromFile1, differ.file2.sortedEntries[tgtColId][j])
-				tgtDiffMap[tgtColId] = append(tgtDiffMap[tgtColId], differ.file2.sortedEntries[tgtColId][j].Key)
+			// iterative migration means that it is possible target has more docs than the source as customers
+			// do migration with a set of rules, and then do another set of migration with another set of rules, etc
+			// Do not check the rest if it is migration mode
+			if !colMigrationMode {
+				for ; j < file2Len; j++ {
+					// This means that all the rest of the entries in file2 are missing from file1
+					differ.MissingFromFile1 = append(differ.MissingFromFile1, differ.file2.sortedEntries[tgtColId][j])
+					tgtDiffMap[tgtColId] = append(tgtDiffMap[tgtColId], differ.file2.sortedEntries[tgtColId][j].Key)
+				}
 			}
 		}
 	}
-
-	return srcDiffMap, tgtDiffMap
+	return srcDiffMap, tgtDiffMap, migrationHintMap
 }
 
 func addToSrcDiffMapIfNotAdded(srcDedupMap map[string]bool, key string, srcDiffMap map[uint32][]string, srcColId uint32) {
@@ -402,8 +472,14 @@ func addToSrcDiffMapIfNotAdded(srcDedupMap map[string]bool, key string, srcDiffM
 	}
 }
 
-// Returns true if they are the same
-func (differ *FilesDiffer) Diff() (srcDiffMap, tgtDiffMap map[uint32][]string, diffBytes []byte, err error) {
+// Diff Returns:
+// 1. srcDiffMap - a map of <colId> -> []<key> : For a collection ID <colId>, the keys that shows some inconsistency
+// 2. tgtDiffMap - a map of <colId> -> []<key> : For a target side colId, the keys that show inconsistency with source counterpart
+// 3. migrationHintMap - map of <string] -> []<colId> :
+//                       Under collections migration mode, this map will allow a quick index of which source document
+//                       should belong in which target collection ID. This is needed because fileDiffer ingested this
+//                       information from actual DCP binary dump and needs to pass this to mutationDiffer for display
+func (differ *FilesDiffer) Diff() (srcDiffMap, tgtDiffMap map[uint32][]string, migrationHintMap map[string][]uint32, diffBytes []byte, err error) {
 	differ.dataLoadWg.Add(1)
 	go differ.asyncLoad(&differ.file1, &differ.err1)
 	differ.dataLoadWg.Add(1)
@@ -417,9 +493,9 @@ func (differ *FilesDiffer) Diff() (srcDiffMap, tgtDiffMap map[uint32][]string, d
 		fmt.Printf("Error when loading file2 contents: %v\n", differ.err2)
 	}
 
-	srcDiffMap, tgtDiffMap = differ.diffSorted()
+	srcDiffMap, tgtDiffMap, migrationHintMap = differ.diffSorted()
 	diffBytes, err = differ.diffToJson()
-	return srcDiffMap, tgtDiffMap, diffBytes, err
+	return srcDiffMap, tgtDiffMap, migrationHintMap, diffBytes, err
 }
 
 func (differ *FilesDiffer) PrettyPrintResult() {
@@ -471,4 +547,19 @@ func (differ *FilesDiffer) diffToJson() ([]byte, error) {
 	ret, err := json.Marshal(outputMap)
 
 	return ret, err
+}
+
+func (differ *FilesDiffer) addMigrationHintIfNeeded(migrationMode bool, item1 *oneEntry, hintMap map[string][]uint32) {
+	if !migrationMode {
+		return
+	}
+	if _, exists := hintMap[item1.Key]; !exists {
+		// The whole source needs to be added to hintMap
+		var tgtColIds []uint32
+		for _, filterIdxMatched := range item1.ColFiltersMatched {
+			// Shouldn't panic
+			tgtColIds = append(tgtColIds, differ.colFilterTgtIds[filterIdxMatched])
+		}
+		hintMap[item1.Key] = tgtColIds
+	}
 }
