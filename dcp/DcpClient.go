@@ -15,6 +15,7 @@ import (
 	gocbcore "github.com/couchbase/gocbcore/v9"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/couchbase/goxdcr/metadata"
+	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -24,40 +25,44 @@ import (
 )
 
 type DcpClient struct {
-	Name               string
-	dcpDriver          *DcpDriver
-	vbList             []uint16
-	cluster            *gocb.Cluster
-	dcpAgent           *gocbcore.DCPAgent
-	waitGroup          *sync.WaitGroup
-	dcpHandlers        []*DcpHandler
-	vbHandlerMap       map[uint16]*DcpHandler
-	numberClosing      uint32
-	closeStreamsDoneCh chan bool
-	activeStreams      uint32
-	finChan            chan bool
-	startVbtsDoneChan  chan bool
-	logger             *xdcrLog.CommonLogger
-	capabilities       metadata.Capability
-	collectionIds      []uint32
+	Name                string
+	dcpDriver           *DcpDriver
+	vbList              []uint16
+	cluster             *gocb.Cluster
+	dcpAgent            *gocbcore.DCPAgent
+	waitGroup           *sync.WaitGroup
+	dcpHandlers         []*DcpHandler
+	vbHandlerMap        map[uint16]*DcpHandler
+	numberClosing       uint32
+	closeStreamsDoneCh  chan bool
+	activeStreams       uint32
+	finChan             chan bool
+	startVbtsDoneChan   chan bool
+	logger              *xdcrLog.CommonLogger
+	capabilities        metadata.Capability
+	collectionIds       []uint32
+	colMigrationFilters []string
 
 	gocbcoreDcpFeed *GocbcoreDCPFeed
+	utils           xdcrUtils.UtilsIface
 }
 
-func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.WaitGroup, startVbtsDoneChan chan bool, capabilities metadata.Capability, collectionIds []uint32) *DcpClient {
+func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.WaitGroup, startVbtsDoneChan chan bool, capabilities metadata.Capability, collectionIds []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface) *DcpClient {
 	return &DcpClient{
-		Name:               fmt.Sprintf("%v_%v", dcpDriver.Name, i),
-		dcpDriver:          dcpDriver,
-		vbList:             vbList,
-		waitGroup:          waitGroup,
-		dcpHandlers:        make([]*DcpHandler, dcpDriver.numberOfWorkers),
-		vbHandlerMap:       make(map[uint16]*DcpHandler),
-		closeStreamsDoneCh: make(chan bool),
-		finChan:            make(chan bool),
-		startVbtsDoneChan:  startVbtsDoneChan,
-		logger:             dcpDriver.logger,
-		capabilities:       capabilities,
-		collectionIds:      collectionIds,
+		Name:                fmt.Sprintf("%v_%v", dcpDriver.Name, i),
+		dcpDriver:           dcpDriver,
+		vbList:              vbList,
+		waitGroup:           waitGroup,
+		dcpHandlers:         make([]*DcpHandler, dcpDriver.numberOfWorkers),
+		vbHandlerMap:        make(map[uint16]*DcpHandler),
+		closeStreamsDoneCh:  make(chan bool),
+		finChan:             make(chan bool),
+		startVbtsDoneChan:   startVbtsDoneChan,
+		logger:              dcpDriver.logger,
+		capabilities:        capabilities,
+		collectionIds:       collectionIds,
+		colMigrationFilters: colMigrationFilters,
+		utils:               utils,
 	}
 }
 
@@ -217,7 +222,7 @@ func (c *DcpClient) initializeDcpHandlers() error {
 		}
 
 		dcpHandler, err := NewDcpHandler(c, c.dcpDriver.fileDir, i, vbList, c.dcpDriver.numberOfBins, c.dcpDriver.dcpHandlerChanSize,
-			c.dcpDriver.fdPool, c.dcpDriver.IncrementDocReceived, c.dcpDriver.IncrementSysEventReceived)
+			c.dcpDriver.fdPool, c.dcpDriver.IncrementDocReceived, c.dcpDriver.IncrementSysEventReceived, c.colMigrationFilters, c.utils)
 		if err != nil {
 			c.logger.Errorf("Error constructing dcp handler. err=%v\n", err)
 			return err

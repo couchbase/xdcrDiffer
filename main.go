@@ -248,6 +248,15 @@ type xdcrDiffTool struct {
 	// Logically there should only be 1-1 mapping, but make this flexible just in case
 	srcToTgtColIdsMap map[uint32][]uint32
 
+	// For collections migration mode, each filter should cause one or more target collection IDs
+	colFilterToTgtColIdsMap map[string][]uint32
+	// Each filter string above is translated into a consistent ordered list below. The *index* of each filter
+	// string will then be used for the remainder of the differ protocol, and used to determine if a source mutation
+	// has passed a certain filter or not
+	colFilterOrderedKeys        []string
+	colFilterOrderedTargetNs    []*xdcrBase.CollectionNamespace
+	colFilterOrderedTargetColId []uint32
+
 	sourceDcpDriver *dcp.DcpDriver
 	targetDcpDriver *dcp.DcpDriver
 
@@ -259,9 +268,10 @@ type xdcrDiffTool struct {
 func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 	var err error
 	difftool := &xdcrDiffTool{
-		utils:             xdcrUtils.NewUtilities(),
-		legacyMode:        legacyMode,
-		srcToTgtColIdsMap: make(map[uint32][]uint32),
+		utils:                   xdcrUtils.NewUtilities(),
+		legacyMode:              legacyMode,
+		srcToTgtColIdsMap:       make(map[uint32][]uint32),
+		colFilterToTgtColIdsMap: map[string][]uint32{},
 	}
 
 	difftool.logger = xdcrLog.NewLogger("xdcrDiffTool", nil)
@@ -536,20 +546,20 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.numberOfWorkersPerSourceDcpClient, options.numberOfBins, options.sourceDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
-		difftool.srcCapabilities, difftool.srcCollectionIds)
+		difftool.srcCapabilities, difftool.srcCollectionIds, difftool.colFilterOrderedKeys, difftool.utils)
 
 	delayDurationBetweenSourceAndTarget := time.Duration(options.delayBetweenSourceAndTarget) * time.Second
 	difftool.logger.Infof("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
 	time.Sleep(delayDurationBetweenSourceAndTarget)
 
 	difftool.logger.Infof("Starting target dcp clients\n")
-	difftool.targetDcpDriver = startDcpDriver(difftool.logger, base.TargetClusterName, difftool.specifiedRef.HostName_, difftool.specifiedSpec.TargetBucketName,
-		difftool.specifiedRef.UserName_, difftool.specifiedRef.Password_, options.targetFileDir, options.checkpointFileDir,
-		options.oldTargetCheckpointFileName, options.newCheckpointFileName, options.numberOfTargetDcpClients,
-		options.numberOfWorkersPerTargetDcpClient, options.numberOfBins, options.targetDcpHandlerChanSize,
-		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
-		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
-		difftool.tgtCapabilities, difftool.tgtCollectionIds)
+	difftool.targetDcpDriver = startDcpDriver(difftool.logger, base.TargetClusterName, difftool.specifiedRef.HostName_,
+		difftool.specifiedSpec.TargetBucketName, difftool.specifiedRef.UserName_, difftool.specifiedRef.Password_,
+		options.targetFileDir, options.checkpointFileDir, options.oldTargetCheckpointFileName, options.newCheckpointFileName,
+		options.numberOfTargetDcpClients, options.numberOfWorkersPerTargetDcpClient, options.numberOfBins, options.targetDcpHandlerChanSize,
+		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval, options.getStatsMaxBackoff,
+		options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
+		difftool.tgtCapabilities, difftool.tgtCollectionIds, difftool.colFilterOrderedKeys, difftool.utils)
 
 	difftool.curState.mtx.Lock()
 	difftool.curState.state = StateDcpStarted
@@ -578,7 +588,9 @@ func (difftool *xdcrDiffTool) diffDataFiles() error {
 		return fmt.Errorf("Error mkdir fileDifferDir: %v\n", err)
 	}
 
-	difftoolDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.fileDifferDir, base.DiffKeysFileName, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBins), int(options.numberOfFileDesc), difftool.srcToTgtColIdsMap)
+	difftoolDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.fileDifferDir,
+		base.DiffKeysFileName, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBins),
+		int(options.numberOfFileDesc), difftool.srcToTgtColIdsMap, difftool.colFilterOrderedKeys, difftool.colFilterOrderedTargetColId)
 	err = difftoolDriver.Run()
 	if err != nil {
 		difftool.logger.Errorf("Error from diffDataFiles = %v\n", err)
@@ -615,13 +627,13 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 	}
 }
 
-func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32) *dcp.DcpDriver {
+func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface) *dcp.DcpDriver {
 	waitGroup.Add(1)
 	dcpDriver := dcp.NewDcpDriver(logger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBins),
 		int(dcpHandlerChanSize), time.Duration(bucketOpTimeout)*time.Second, int(maxNumOfGetStatsRetry),
 		time.Duration(getStatsRetryInterval)*time.Second, time.Duration(getStatsMaxBackoff)*time.Second,
-		int(checkpointInterval), errChan, waitGroup, completeBySeqno, fdPool, filter, capabilities, collectionIDs)
+		int(checkpointInterval), errChan, waitGroup, completeBySeqno, fdPool, filter, capabilities, collectionIDs, colMigrationFilters, utils)
 	// dcp driver startup may take some time. Do it asynchronously
 	go startDcpDriverAysnc(dcpDriver, errChan, logger)
 	return dcpDriver
@@ -874,20 +886,18 @@ func (difftool *xdcrDiffTool) PopulateManifestsAndMappings() error {
 
 	modes := difftool.specifiedSpec.Settings.GetCollectionModes()
 	rules := difftool.specifiedSpec.Settings.GetCollectionsRoutingRules()
-	if modes.IsMigrationOn() && !rules.IsExplicitMigrationRule() {
-		return fmt.Errorf("Migration mode is not currently supported\n")
+	if modes.IsMigrationOn() && rules.IsExplicitMigrationRule() {
+		difftool.logger.Infof("Replication spec is using special migration mapping")
+	} else if modes.IsMigrationOn() {
+		difftool.logger.Infof("Replication spec is using migration mode")
+	} else if modes.IsExplicitMapping() {
+		difftool.logger.Infof("Replication spec is using explicit mapping")
 	} else {
-		if modes.IsMigrationOn() {
-			difftool.logger.Infof("Replication spec is using special migration mapping")
-		} else if modes.IsExplicitMapping() {
-			difftool.logger.Infof("Replication spec is using explicit mapping")
-		} else {
-			difftool.logger.Infof("Replication spec is using implicit mapping\n")
-		}
-		err = difftool.compileCollectionMapping()
-		if err != nil {
-			return err
-		}
+		difftool.logger.Infof("Replication spec is using implicit mapping")
+	}
+	err = difftool.compileCollectionMapping()
+	if err != nil {
+		return err
 	}
 
 	// Once hardcoded compilation map has been generated, just stream these Collection IDs from DCP to minimize other noise
@@ -934,6 +944,17 @@ func (difftool *xdcrDiffTool) compileCollectionMapping() error {
 		return err
 	}
 
+	modes := difftool.specifiedSpec.Settings.GetCollectionModes()
+	rules := difftool.specifiedSpec.Settings.GetCollectionsRoutingRules()
+	if modes.IsMigrationOn() && !rules.IsExplicitMigrationRule() {
+		return difftool.compileMigrationMapping(namespaceMapping)
+	} else {
+		difftool.compileHardcodedColToColMapping(namespaceMapping)
+	}
+	return nil
+}
+
+func (difftool *xdcrDiffTool) compileHardcodedColToColMapping(namespaceMapping metadata.CollectionNamespaceMapping) {
 	for srcNs, tgtNamespaces := range namespaceMapping {
 		for _, tgtNs := range tgtNamespaces {
 			scopeName := srcNs.GetCollectionNamespace().ScopeName
@@ -958,20 +979,79 @@ func (difftool *xdcrDiffTool) compileCollectionMapping() error {
 	}
 
 	difftool.logger.Infof("Collection namespace mapping: %v idsMap: %v", namespaceMapping, difftool.srcToTgtColIdsMap)
-	return nil
 }
 
 func (difftool *xdcrDiffTool) generateSrcAndTgtColIds() {
 	tgtColIdDedupMap := make(map[uint32]bool)
 
-	for srcColId, tgtColIds := range difftool.srcToTgtColIdsMap {
-		difftool.srcCollectionIds = append(difftool.srcCollectionIds, srcColId)
-		for _, tgtColId := range tgtColIds {
-			_, exists := tgtColIdDedupMap[tgtColId]
-			if !exists {
-				tgtColIdDedupMap[tgtColId] = true
-				difftool.tgtCollectionIds = append(difftool.tgtCollectionIds)
+	modes := difftool.specifiedSpec.Settings.GetCollectionModes()
+	rules := difftool.specifiedSpec.Settings.GetCollectionsRoutingRules()
+	var migrationMode bool
+
+	if modes.IsMigrationOn() && !rules.IsExplicitMigrationRule() {
+		migrationMode = true
+		for _, tgtColIds := range difftool.colFilterToTgtColIdsMap {
+			difftool.populateDedupColIds(tgtColIds, tgtColIdDedupMap)
+		}
+	} else {
+		for srcColId, tgtColIds := range difftool.srcToTgtColIdsMap {
+			if !migrationMode {
+				difftool.srcCollectionIds = append(difftool.srcCollectionIds, srcColId)
 			}
+			difftool.populateDedupColIds(tgtColIds, tgtColIdDedupMap)
 		}
 	}
+
+	if migrationMode {
+		// Migration mode wise we only pull from the source collectionID
+		difftool.srcCollectionIds = []uint32{xdcrBase.DefaultCollectionId}
+	}
+}
+
+func (difftool *xdcrDiffTool) populateDedupColIds(tgtColIds []uint32, tgtColIdDedupMap map[uint32]bool) {
+	for _, tgtColId := range tgtColIds {
+		_, exists := tgtColIdDedupMap[tgtColId]
+		if !exists {
+			tgtColIdDedupMap[tgtColId] = true
+			difftool.tgtCollectionIds = append(difftool.tgtCollectionIds)
+		}
+	}
+}
+
+func (difftool *xdcrDiffTool) compileMigrationMapping(nsMappings metadata.CollectionNamespaceMapping) error {
+	for srcNs, tgtNsList := range nsMappings {
+		if len(tgtNsList) > 1 {
+			return fmt.Errorf("Migration rules with more than one target namespace is not supported")
+		}
+		for _, tgtNs := range tgtNsList {
+			colId, err := difftool.tgtBucketManifest.GetCollectionId(tgtNs.ScopeName, tgtNs.CollectionName)
+			if err != nil {
+				difftool.logger.Errorf("Cannot find target namespace in manifest: %v", tgtNs.ToIndexString())
+				continue
+			}
+			if _, exists := difftool.colFilterToTgtColIdsMap[srcNs.String()]; !exists {
+				difftool.colFilterToTgtColIdsMap[srcNs.String()] = []uint32{colId}
+			} else {
+				difftool.colFilterToTgtColIdsMap[srcNs.String()] = append(difftool.colFilterToTgtColIdsMap[srcNs.String()], colId)
+			}
+			difftool.colFilterOrderedTargetNs = append(difftool.colFilterOrderedTargetNs, tgtNs)
+		}
+		difftool.colFilterOrderedKeys = append(difftool.colFilterOrderedKeys, srcNs.String())
+	}
+
+	difftool.logger.Infof("Collections Migrations filters:\n")
+	for i, filterStr := range difftool.colFilterOrderedKeys {
+		difftool.logger.Infof("%v : %v -> %v", i, filterStr, difftool.colFilterOrderedTargetNs[i].ToIndexString())
+	}
+
+	// Ensure that the colIdMappings are handled accordingly
+	for _, targetNs := range difftool.colFilterOrderedTargetNs {
+		targetColId, err := difftool.tgtBucketManifest.GetCollectionId(targetNs.ScopeName, targetNs.CollectionName)
+		if err != nil {
+			return fmt.Errorf("cannot find collection %v from manifest %v", targetNs.ToIndexString(), difftool.tgtBucketManifest.String())
+		}
+		difftool.srcToTgtColIdsMap[0] = append(difftool.srcToTgtColIdsMap[0], targetColId)
+		difftool.colFilterOrderedTargetColId = append(difftool.colFilterOrderedTargetColId, targetColId)
+	}
+	return nil
 }
