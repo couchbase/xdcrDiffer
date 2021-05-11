@@ -145,8 +145,7 @@ The limiting space factor here is the actual machine that is running the diff to
 The diff tool has checkpointing mechanism built in in case of interruptions. The checkpointing mechanism is pretty much the same concept as XDCR checkpoints - that it knows where in the DCP stream it was last stopped and will try to resume from that point in time.
 
 ## Known Limitations
-1. No collections support. Diffing on Couchbase 7.0 will only diff between default collections.
-2. No SSL support. Data being transferred will be visible. This includes credentials information and also user data.
+1. No SSL support. Data being transferred will be visible. This includes credentials information and also user data.
 3. No dynamic topology change support. If VBs are moved during runtime, the tool does not handle it well.
 
 ## License
