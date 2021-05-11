@@ -317,10 +317,10 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() error {
 
 	if cm.dcpDriver.completeBySeqno {
 		cm.endSeqnoMap = endSeqnoMap
-		// For end seqno 0's, mark them as completed
+		// For end Seqno 0's, mark them as completed
 		for vb, seqno := range endSeqnoMap {
 			if seqno == 0 {
-				cm.dcpDriver.handleVbucketCompletion(vb, nil, "end seqno reached")
+				cm.dcpDriver.handleVbucketCompletion(vb, nil, "end Seqno reached")
 			}
 		}
 	} else {
@@ -374,7 +374,7 @@ func (cm *CheckpointManager) setStartVBTS() error {
 				cm.startVBTS[vbno].NoNeedToStartDcpStream = true
 			}
 
-			// update start seqno as that in checkpoint doc
+			// update start Seqno as that in checkpoint doc
 			cm.seqnoMap[vbno].setSeqno(checkpoint.Seqno)
 			sum += checkpoint.Seqno
 			totalFiltered += checkpoint.FilteredCnt
@@ -520,24 +520,24 @@ func (cm *CheckpointManager) RecordFilterEvent(vbno uint16, filterResult base.Fi
 }
 
 // no need to lock seqoMap since
-// 1. MutationProcessedEvent on a vbno are serialized
+// 1. MutationProcessedEvent on a Vbno are serialized
 // 2. checkpointManager reads seqnoMap when it saves checkpoints.
 //    This is done after all DcpHandlers are stopped and MutationProcessedEvent cease to happen
 func (cm *CheckpointManager) HandleMutationEvent(mut *Mutation, filterResult base.FilterResultType) bool {
 	if cm.dcpDriver.completeBySeqno {
-		endSeqno := cm.endSeqnoMap[mut.vbno]
-		if mut.seqno >= endSeqno {
-			cm.dcpDriver.handleVbucketCompletion(mut.vbno, nil, "end seqno reached")
+		endSeqno := cm.endSeqnoMap[mut.Vbno]
+		if mut.Seqno >= endSeqno {
+			cm.dcpDriver.handleVbucketCompletion(mut.Vbno, nil, "end Seqno reached")
 		}
-		if mut.seqno <= endSeqno {
-			cm.seqnoMap[mut.vbno].setSeqno(mut.seqno)
-			return cm.RecordFilterEvent(mut.vbno, filterResult)
+		if mut.Seqno <= endSeqno {
+			cm.seqnoMap[mut.Vbno].setSeqno(mut.Seqno)
+			return cm.RecordFilterEvent(mut.Vbno, filterResult)
 		} else {
 			return false
 		}
 	} else {
-		cm.seqnoMap[mut.vbno].setSeqno(mut.seqno)
-		return cm.RecordFilterEvent(mut.vbno, filterResult)
+		cm.seqnoMap[mut.Vbno].setSeqno(mut.Seqno)
+		return cm.RecordFilterEvent(mut.Vbno, filterResult)
 	}
 }
 

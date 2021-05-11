@@ -12,6 +12,7 @@ package differ
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -23,6 +24,7 @@ import (
 
 // For each ColID, the keys that have diffs
 type DiffKeysMap map[uint32][]string
+type MigrationHintMap map[string][]uint32
 
 func (d *DiffKeysMap) GetTotalCount() int {
 	if d == nil {
@@ -38,7 +40,8 @@ func (d *DiffKeysMap) GetTotalCount() int {
 // Translate into a list of mutations that needs fetching
 // Returns alongside an index keyed by the document ID
 // For each docID of the index, there can be multiple collection IDs that owns this key
-func (d *DiffKeysMap) ToFetchEntries(mappings map[uint32][]uint32) (MutationDiffFetchList, MutationDiffFetchListIdx) {
+// For migration source's default collection namespace, each entry will depend on the migrationHintMap to get the necessary info
+func (d *DiffKeysMap) ToFetchEntries(mappings map[uint32][]uint32, migrationHintMap MigrationHintMap) (MutationDiffFetchList, MutationDiffFetchListIdx) {
 	var fetchList MutationDiffFetchList
 	index := make(MutationDiffFetchListIdx)
 
@@ -46,13 +49,25 @@ func (d *DiffKeysMap) ToFetchEntries(mappings map[uint32][]uint32) (MutationDiff
 		return fetchList, index
 	}
 
+	migrationMode := len(migrationHintMap) > 0
+
 	for srcColId, keys := range *d {
 		for _, oneKey := range keys {
-			tgtList, ok := mappings[srcColId]
-			if !ok {
-				// Shouldn't happen
-				continue
+			var tgtList []uint32
+			var ok bool
+
+			if migrationMode {
+				tgtList = migrationHintMap[oneKey]
+			} else {
+				tgtList, ok = mappings[srcColId]
+				if !ok {
+					if len(migrationHintMap) == 0 {
+						// Shouldn't happen
+						continue
+					}
+				}
 			}
+
 			entry := &MutationDifferFetchEntry{
 				SrcColId:  srcColId,
 				TgtColIds: tgtList,
@@ -132,6 +147,7 @@ type DifferDriver struct {
 	numberOfBins      int
 	waitGroup         *sync.WaitGroup
 	srcDiffKeys       DiffKeysMap
+	srcMigrationHint  MigrationHintMap
 	tgtDiffKeys       DiffKeysMap
 	stateLock         *sync.RWMutex
 	fileDescPool      *fdp.FdPool
@@ -139,9 +155,11 @@ type DifferDriver struct {
 	finChan           chan bool
 	stopOnce          sync.Once
 	collectionMapping map[uint32][]uint32
+	colFilterStrings  []string
+	colFilterTgtIds   []uint32
 }
 
-func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32) *DifferDriver {
+func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32) *DifferDriver {
 	var fdPool *fdp.FdPool
 	if numberOfFds > 0 {
 		fdPool = fdp.NewFileDescriptorPool(numberOfFds)
@@ -161,6 +179,9 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName
 		collectionMapping: collectionMapping,
 		srcDiffKeys:       make(DiffKeysMap),
 		tgtDiffKeys:       make(DiffKeysMap),
+		colFilterStrings:  colFilterStrings,
+		colFilterTgtIds:   colFilterTgtIds,
+		srcMigrationHint:  MigrationHintMap{},
 	}
 }
 
@@ -178,7 +199,7 @@ func (dr *DifferDriver) Run() error {
 		}
 
 		dr.waitGroup.Add(1)
-		differHandler := NewDifferHandler(dr, i, dr.sourceFileDir, dr.targetFileDir, vbList, dr.numberOfBins, dr.waitGroup, dr.fileDescPool, dr.collectionMapping)
+		differHandler := NewDifferHandler(dr, i, dr.sourceFileDir, dr.targetFileDir, vbList, dr.numberOfBins, dr.waitGroup, dr.fileDescPool, dr.collectionMapping, dr.colFilterStrings, dr.colFilterTgtIds)
 		go differHandler.run()
 	}
 
@@ -219,11 +240,16 @@ func (dr *DifferDriver) reportStatus() {
 	}
 }
 
-func (dr *DifferDriver) addSrcDiffKeys(diffKeys map[uint32][]string) {
+func (dr *DifferDriver) addSrcDiffKeys(diffKeys map[uint32][]string, migrationHints map[string][]uint32) {
 	dr.stateLock.Lock()
 	defer dr.stateLock.Unlock()
 	for srcColId, keys := range diffKeys {
 		dr.srcDiffKeys[srcColId] = append(dr.srcDiffKeys[srcColId], keys...)
+		if srcColId == 0 && len(migrationHints) > 0 {
+			for _, key := range keys {
+				dr.srcMigrationHint[key] = migrationHints[key]
+			}
+		}
 	}
 }
 
@@ -280,6 +306,18 @@ func (dr *DifferDriver) writeSrcDiffKeys(isSrc bool, waitGrp *sync.WaitGroup) er
 	}
 	_, err = diffKeysFile.Write(diffKeysBytes)
 	diffKeysFile.Close()
+
+	if isSrc && len(dr.colFilterStrings) > 0 {
+		migrationHintFile := fmt.Sprintf("%v_%v", diffKeysFileName, base.DiffKeysSrcMigrationHintSuffix)
+		data, err := json.Marshal(dr.srcMigrationHint)
+		if err != nil {
+			return err
+		}
+		err = ioutil.WriteFile(migrationHintFile, data, 0644)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -294,9 +332,11 @@ type DifferHandler struct {
 	waitGroup         *sync.WaitGroup
 	fileDescPool      *fdp.FdPool
 	collectionMapping map[uint32][]uint32
+	colFilterStrings  []string
+	colFilterTgtIds   []uint32
 }
 
-func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFileDir string, vbList []uint16, numberOfBins int, waitGroup *sync.WaitGroup, fdPool *fdp.FdPool, collectionMapping map[uint32][]uint32) *DifferHandler {
+func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFileDir string, vbList []uint16, numberOfBins int, waitGroup *sync.WaitGroup, fdPool *fdp.FdPool, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32) *DifferHandler {
 	return &DifferHandler{
 		driver:            driver,
 		index:             index,
@@ -307,6 +347,8 @@ func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFile
 		waitGroup:         waitGroup,
 		fileDescPool:      fdPool,
 		collectionMapping: collectionMapping,
+		colFilterStrings:  colFilterStrings,
+		colFilterTgtIds:   colFilterTgtIds,
 	}
 }
 
@@ -327,7 +369,7 @@ func (dh *DifferHandler) run() error {
 			sourceFileName := utils.GetFileName(dh.sourceFileDir, vbno, bucketIndex)
 			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex)
 
-			filesDiffer, err := NewFilesDifferWithFDPool(sourceFileName, targetFileName, dh.fileDescPool, dh.collectionMapping)
+			filesDiffer, err := NewFilesDifferWithFDPool(sourceFileName, targetFileName, dh.fileDescPool, dh.collectionMapping, dh.colFilterStrings, dh.colFilterTgtIds)
 			if err != nil {
 				// Most likely FD overrun, program should exit. Print a msg just in case
 				fmt.Printf("Creating file differ for files %v and %v resulted in error: %v\n",
@@ -335,14 +377,14 @@ func (dh *DifferHandler) run() error {
 				return err
 			}
 
-			srcDiffMap, tgtDiffMap, diffBytes, err := filesDiffer.Diff()
+			srcDiffMap, tgtDiffMap, migrationHints, diffBytes, err := filesDiffer.Diff()
 			if err != nil {
 				fmt.Printf("error getting srcDiff from file differ. err=%v\n", err)
 				continue
 			}
 			if len(srcDiffMap) > 0 || len(tgtDiffMap) > 0 {
 				if len(srcDiffMap) > 0 {
-					dh.driver.addSrcDiffKeys(srcDiffMap)
+					dh.driver.addSrcDiffKeys(srcDiffMap, migrationHints)
 				}
 				if len(tgtDiffMap) > 0 {
 					dh.driver.addTgtDiffKeys(tgtDiffMap)

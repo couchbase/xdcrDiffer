@@ -72,6 +72,8 @@ type MutationDiffer struct {
 
 	srcCapability metadata.Capability
 	tgtCapability metadata.Capability
+
+	migrationHintMap MigrationHintMap
 }
 
 func NewMutationDiffer(sourceUrl string, sourceBucketName string, sourceUserName string, sourcePassword string,
@@ -123,13 +125,14 @@ func NewMutationDiffer(sourceUrl string, sourceBucketName string, sourceUserName
 }
 
 func (d *MutationDiffer) Run() error {
-	srcDiffKeys, tgtDiffKeys, err := d.loadDiffKeys()
+	srcDiffKeys, tgtDiffKeys, migrationHintMap, err := d.loadDiffKeys()
 	if err != nil {
 		return err
 	}
+	d.migrationHintMap = migrationHintMap
 
-	srcPovFetchList, srcPovFetchIdx := srcDiffKeys.ToFetchEntries(d.colIdsMap)
-	tgtPovFetchList, tgtPovFetchIdx := tgtDiffKeys.ToFetchEntries(d.reverseTgtColIdsMap)
+	srcPovFetchList, srcPovFetchIdx := srcDiffKeys.ToFetchEntries(d.colIdsMap, migrationHintMap)
+	tgtPovFetchList, tgtPovFetchIdx := tgtDiffKeys.ToFetchEntries(d.reverseTgtColIdsMap, nil)
 	combinedFetchList := dedupFetchLists(srcPovFetchList, srcPovFetchIdx, tgtPovFetchList, tgtPovFetchIdx)
 
 	totalCnt := len(combinedFetchList)
@@ -153,7 +156,7 @@ func (d *MutationDiffer) Run() error {
 			// skip workers with 0 load
 			continue
 		}
-		diffWorker := NewDifferWorker(d, d.sourceDcpAgent, d.targetDcpAgent, d.sourceBucket, d.targetBucket, combinedFetchList[lowIndex:highIndex], waitGroup, d.colIdsMap, d.reverseTgtColIdsMap)
+		diffWorker := NewDifferWorker(d, d.sourceDcpAgent, d.targetDcpAgent, d.sourceBucket, d.targetBucket, combinedFetchList[lowIndex:highIndex], waitGroup, d.colIdsMap, d.reverseTgtColIdsMap, d.migrationHintMap)
 		waitGroup.Add(1)
 		go diffWorker.run()
 	}
@@ -375,30 +378,46 @@ func (d *MutationDiffer) writeDiffBytesToFile(diffBytes []byte) error {
 
 }
 
-func (d *MutationDiffer) loadDiffKeys() (DiffKeysMap, DiffKeysMap, error) {
+func (d *MutationDiffer) loadDiffKeys() (DiffKeysMap, DiffKeysMap, MigrationHintMap, error) {
 	srcDiffKeysBytes, err := ioutil.ReadFile(d.srcDiffKeysFileName)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	tgtDiffKeyBytes, err := ioutil.ReadFile(d.tgtDiffKeysFileName)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
+	}
+
+	// migration hint map may or may not exist
+	var migrationHintFound bool
+	migrationHintFile := fmt.Sprintf("%v_%v", d.srcDiffKeysFileName, base.DiffKeysSrcMigrationHintSuffix)
+	migrationHintBytes, err := ioutil.ReadFile(migrationHintFile)
+	if err == nil {
+		migrationHintFound = true
 	}
 
 	srcDiffKeys := make(DiffKeysMap)
 	tgtDiffKeys := make(DiffKeysMap)
+	migrationHintMap := make(MigrationHintMap)
 
 	err = json.Unmarshal(srcDiffKeysBytes, &srcDiffKeys)
 	if err != nil {
-		return nil, nil, fmt.Errorf("srcUnmarshal %v", err)
+		return nil, nil, nil, fmt.Errorf("srcUnmarshal %v", err)
 	}
 	err = json.Unmarshal(tgtDiffKeyBytes, &tgtDiffKeys)
 	if err != nil {
-		return nil, nil, fmt.Errorf("tgtUnmarshal %v", err)
+		return nil, nil, nil, fmt.Errorf("tgtUnmarshal %v", err)
 	}
 
-	return srcDiffKeys, tgtDiffKeys, nil
+	if migrationHintFound {
+		err = json.Unmarshal(migrationHintBytes, &migrationHintMap)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("hintUnmarshal %v", err)
+		}
+	}
+
+	return srcDiffKeys, tgtDiffKeys, migrationHintMap, nil
 }
 
 func (d *MutationDiffer) addDiff(missingFromSource, missingFromTarget map[uint32]map[string]*gocbcore.GetResult,
@@ -452,35 +471,37 @@ func (d *MutationDiffer) addKeysWithError(keysWithError MutationDiffFetchList) {
 }
 
 type DifferWorker struct {
-	differ         *MutationDiffer
-	fetchList      MutationDiffFetchList
-	sourceBucket   *GocbcoreAgent
-	targetBucket   *GocbcoreAgent
-	sourceDcpAgent *gocbcore.DCPAgent
-	targetDcpAgent *gocbcore.DCPAgent
-	waitGroup      *sync.WaitGroup
-	sourceResults  map[uint32]map[string]*GetResult
-	targetResults  map[uint32]map[string]*GetResult
-	resultsLock    sync.RWMutex
-	logger         *xdcrLog.CommonLogger
-	colIds         map[uint32][]uint32
-	reverseColIds  map[uint32][]uint32
+	differ           *MutationDiffer
+	fetchList        MutationDiffFetchList
+	sourceBucket     *GocbcoreAgent
+	targetBucket     *GocbcoreAgent
+	sourceDcpAgent   *gocbcore.DCPAgent
+	targetDcpAgent   *gocbcore.DCPAgent
+	waitGroup        *sync.WaitGroup
+	sourceResults    map[uint32]map[string]*GetResult
+	targetResults    map[uint32]map[string]*GetResult
+	resultsLock      sync.RWMutex
+	logger           *xdcrLog.CommonLogger
+	colIds           map[uint32][]uint32
+	reverseColIds    map[uint32][]uint32
+	migrationHintMap MigrationHintMap
 }
 
-func NewDifferWorker(differ *MutationDiffer, sourceDCPAgent, targetDCPAgent *gocbcore.DCPAgent, sourceBucket, targetBucket *GocbcoreAgent, fetchList MutationDiffFetchList, waitGroup *sync.WaitGroup, colIds, reverseColIds map[uint32][]uint32) *DifferWorker {
+func NewDifferWorker(differ *MutationDiffer, sourceDCPAgent, targetDCPAgent *gocbcore.DCPAgent, sourceBucket, targetBucket *GocbcoreAgent, fetchList MutationDiffFetchList, waitGroup *sync.WaitGroup, colIds, reverseColIds map[uint32][]uint32, migrationHintMap MigrationHintMap) *DifferWorker {
 	return &DifferWorker{
-		differ:         differ,
-		sourceBucket:   sourceBucket,
-		targetBucket:   targetBucket,
-		fetchList:      fetchList,
-		waitGroup:      waitGroup,
-		sourceResults:  make(map[uint32]map[string]*GetResult),
-		targetResults:  make(map[uint32]map[string]*GetResult),
-		logger:         differ.logger,
-		sourceDcpAgent: sourceDCPAgent,
-		targetDcpAgent: targetDCPAgent,
-		colIds:         colIds,
-		reverseColIds:  reverseColIds,
+		differ:           differ,
+		sourceBucket:     sourceBucket,
+		targetBucket:     targetBucket,
+		fetchList:        fetchList,
+		waitGroup:        waitGroup,
+		sourceResults:    make(map[uint32]map[string]*GetResult),
+		targetResults:    make(map[uint32]map[string]*GetResult),
+		logger:           differ.logger,
+		sourceDcpAgent:   sourceDCPAgent,
+		targetDcpAgent:   targetDCPAgent,
+		colIds:           colIds,
+		reverseColIds:    reverseColIds,
+		migrationHintMap: migrationHintMap,
 	}
 }
 
@@ -583,13 +604,20 @@ func (dw *DifferWorker) diff() {
 	srcBodyDiff := make(map[uint32]map[string][]*gocbcore.GetResult)
 	tgtBodyDiff := make(map[uint32]map[string][]*gocbcore.GetResult)
 
+	migrationMode := len(dw.migrationHintMap) > 0
+
 	for srcColId, sourceResultMap := range dw.sourceResults {
 		for key, sourceResult := range sourceResultMap {
 			if sourceResult.Key == "" {
 				continue
 			}
 
-			tgtColIds := dw.colIds[srcColId]
+			var tgtColIds []uint32
+			if migrationMode {
+				tgtColIds = dw.migrationHintMap[key]
+			} else {
+				tgtColIds = dw.colIds[srcColId]
+			}
 
 			for _, tgtColId := range tgtColIds {
 				targetResult := dw.targetResults[tgtColId][key]

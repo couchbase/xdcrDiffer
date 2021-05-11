@@ -27,8 +27,8 @@ const FileDifferDir = "fileDiff"
 const MutationDifferDir = "mutationDiff"
 const DiffKeysFileName = "diffKeys"
 const DiffDetailsFileName = "diffDetails"
+const DiffKeysSrcMigrationHintSuffix = "hint"
 const MutationDiffFileName = "mutationDiffDetails"
-const MutationBodyDiffFileName = "mutationBodyDiffDetails"
 const MutationDiffColIdMapping = "mutationDiffColIdMapping"
 const DiffErrorKeysFileName = "diffKeysWithError"
 const StatsReportInterval = 5
@@ -65,7 +65,15 @@ const CheckpointInterval = 600
 //  datatype - 2 byte
 //  hash     - 64 bytes
 //  collectionId - 4 bytes
+//  migrationFilterLen - 2 bytes
+//  (variable) - each filterID is 2 bytes
 const BodyLength = 104
+const KeyLenVariable = 2
+const MigrationFilterLen = 2
+
+func GetFixedSizeMutationLen(keyLen int, colMigrationFilterMatched []uint8) int {
+	return KeyLenVariable + keyLen + BodyLength + MigrationFilterLen + len(colMigrationFilterMatched)*2
+}
 
 var VersionForRBACSupport = []int{5, 0}
 
