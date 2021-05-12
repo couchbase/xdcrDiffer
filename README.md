@@ -115,20 +115,43 @@ The difftool performs the following in order:
 3. Verify differences from above using async Get (verifyDiffKeys) to rule out transitional mutations
 
 ## Output
-Results from file diffing can be viewed as a summary file under `diffKeys`:
-```
-neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer$ cat fileDiff/diffKeys
-null
-```
-
-Results from verifyDiffKeys can be viewed as JSON summary files under `mutationDiff`:
+Results can be viewed as JSON summary files under `mutationDiff`:
 ```
 neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer/mutationDiff$ ls
-diffKeysWithError	mutationBodyDiffDetails	mutationBodyDiffKeys	mutationDiffDetails	mutationDiffKeys
+diffKeysWithError		mutationDiffColIdMapping	mutationDiffDetails
 
-neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer/mutationDiff$ cat mutationDiffDetails
-{"Mismatch":{},"MissingFromSource":{},"MissingFromTarget":{}}
+neil.huang@NeilsMacbookPro:~/go/src/github.com/nelio2k/xdcrDiffer/mutationDiff$ jsonpp mutationDiffDetails  | head
+{
+  "Mismatch": {},
+  "MissingFromSource": {},
+  "MissingFromTarget": {
+    "0": {
+      "xdcrProv_C10": {
+        "Value": "eyJuYW1lIjogInhkY3JQcm92X0MxMCIsICJhZ2UiOiAwLCAiaW5kZXgiOiAiMCIsICJib2R5IjoiMDAwMDAwMDAwMCJ9",
+        "Flags": 0,
+        "Datatype": 1,
+        "Cas": 1620776636481929216
+        ...
 ```
+If there is no differences, then the set will be empty. Otherwise, any differences will be shown as above via JSON.
+The key of "0" represents the collection ID. For `MissingFromTarget`, the collection ID represents the target collection that the specific document should belong. For `MissingFromSource`, the collectionID would represent the collection ID under the source bucket.
+For `Mismatch` column, the collection ID would represent collection ID for the source bucket.
+
+### Manifests
+Difftool will retrieve the manifests from both source and target buckets and store them under the corresponding source and target directories:
+```
+neil.huang@NeilsMacbookPro:~/go/src/github.com/nelio2k/xdcrDiffer$ find . -name diffTool_manifest
+./target/diffTool_manifest
+./source/diffTool_manifest
+```
+
+### Collection Mapping
+The xdcrDiffer is going to compile various collection-to-collection mapping, and those are recorded as part of the differ log:
+```
+2021-05-11T17:03:49.564-07:00 INFO GOXDCR.xdcrDiffTool: Replication spec is using implicit mapping
+2021-05-11T17:03:49.564-07:00 INFO GOXDCR.xdcrDiffTool: Collection namespace mapping: map[S1.col1:|Scope: S1 Collection: col1|  S1.col2:|Scope: S1 Collection: col2|  _default._default:|Scope: _default Collection: _default| ] idsMap: map[0:[0] 8:[8] 9:[9]]
+```
+
 ## Detailed Q&A's
 > Does the tool just match keys or the values of documents as well?
 
