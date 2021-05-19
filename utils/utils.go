@@ -11,16 +11,13 @@ package utils
 
 import (
 	"bytes"
-	"encoding/json"
-	"errors"
 	"fmt"
+	xdcrBase "github.com/couchbase/goxdcr/base"
+	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"hash/crc32"
-	"io"
 	"io/ioutil"
 	"math"
 	mrand "math/rand"
-	"net/http"
-	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -203,153 +200,6 @@ func ShuffleVbList(list []uint16) {
 	}
 }
 
-func GetRBACSupportedAndBucketPassword(remoteConnectStr, bucketName, remoteUsername, remotePassword string) (bool, string, error) {
-	bucketInfo, err := GetBucketInfo(remoteConnectStr, bucketName, remoteUsername, remotePassword)
-	if err != nil || bucketInfo == nil {
-		return false, "", fmt.Errorf("Error retrieveing bucket info for %v. err=%v\n", remoteConnectStr, err)
-	}
-
-	clusterCompatibility, err := GetClusterCompatibilityFromBucketInfo(bucketInfo)
-	if err != nil {
-		return false, "", err
-	}
-
-	rbacSupported := IsClusterCompatible(clusterCompatibility, base.VersionForRBACSupport)
-	bucketPassword := ""
-	if !rbacSupported {
-		// bucket password is needed when rbac is not supported
-		bucketPassword, err = GetBucketPasswordFromBucketInfo(bucketName, bucketInfo)
-		if err != nil {
-			return false, "", err
-		}
-	}
-
-	return rbacSupported, bucketPassword, nil
-}
-
-func GetBucketInfo(remoteConnectStr, bucketName, remoteUsername, remotePassword string) (map[string]interface{}, error) {
-	bucketInfo := make(map[string]interface{})
-
-	req, err := http.NewRequest(base.HttpGet, remoteConnectStr+base.PoolsDefaultBucketPath+bucketName, nil)
-	if err != nil {
-		return nil, nil
-	}
-
-	req.SetBasicAuth(remoteUsername, remotePassword)
-
-	client := &http.Client{}
-
-	res, err := client.Do(req)
-	if err == nil && res != nil {
-		err = ParseResponseBody(res, &bucketInfo)
-		if err != nil {
-			return nil, err
-		}
-		return bucketInfo, nil
-	}
-
-	return bucketInfo, err
-}
-
-func ParseResponseBody(res *http.Response,
-	out interface{}) error {
-	if res != nil && res.Body != nil {
-		defer res.Body.Close()
-		bod, err := ioutil.ReadAll(io.LimitReader(res.Body, res.ContentLength))
-		if err != nil {
-			fmt.Printf("Failed to read response body, err=%v\n res=%v\n", err, res)
-			return err
-		}
-		if out != nil {
-			err_marshal := json.Unmarshal(bod, out)
-			if err_marshal != nil {
-				fmt.Printf("Failed to unmarshal the response as json, err=%v, bod=%v\n res=%v\n", err_marshal, bod, res)
-				out = bod
-			}
-		}
-	}
-	return nil
-}
-
-func GetClusterCompatibilityFromBucketInfo(bucketInfo map[string]interface{}) (int, error) {
-	nodeList, err := GetNodeListFromInfoMap(bucketInfo)
-	if err != nil {
-		return 0, err
-	}
-
-	clusterCompatibility, err := GetClusterCompatibilityFromNodeList(nodeList)
-	if err != nil {
-		return 0, err
-	}
-
-	return clusterCompatibility, nil
-}
-
-func GetClusterCompatibilityFromNodeList(nodeList []interface{}) (int, error) {
-	if len(nodeList) > 0 {
-		firstNode, ok := nodeList[0].(map[string]interface{})
-		if !ok {
-			return 0, fmt.Errorf("node info is of wrong type. node info=%v", nodeList[0])
-		}
-		clusterCompatibility, ok := firstNode[base.ClusterCompatibilityKey]
-		if !ok {
-			return 0, fmt.Errorf("Can't get cluster compatibility info. node info=%v\n If replicating to ElasticSearch node, use XDCR v1.", nodeList[0])
-		}
-		clusterCompatibilityFloat, ok := clusterCompatibility.(float64)
-		if !ok {
-			return 0, fmt.Errorf("cluster compatibility is not of int type. type=%v", reflect.TypeOf(clusterCompatibility))
-		}
-		return int(clusterCompatibilityFloat), nil
-	}
-
-	return 0, fmt.Errorf("node list is empty")
-}
-
-func GetNodeListFromInfoMap(infoMap map[string]interface{}) ([]interface{}, error) {
-	// get node list from the map
-	nodes, ok := infoMap[base.NodesKey]
-	if !ok {
-		errMsg := fmt.Sprintf("info map contains no nodes. info map=%v", infoMap)
-		return nil, errors.New(errMsg)
-	}
-
-	nodeList, ok := nodes.([]interface{})
-	if !ok {
-		errMsg := fmt.Sprintf("nodes is not of list type. type of nodes=%v", reflect.TypeOf(nodes))
-		return nil, errors.New(errMsg)
-	}
-
-	// only return the nodes that are active
-	activeNodeList := make([]interface{}, 0)
-	for _, node := range nodeList {
-		nodeInfoMap, ok := node.(map[string]interface{})
-		if !ok {
-			errMsg := fmt.Sprintf("node info is not of map type. type=%v", reflect.TypeOf(node))
-			return nil, errors.New(errMsg)
-		}
-		clusterMembershipObj, ok := nodeInfoMap[base.ClusterMembershipKey]
-		if !ok {
-			// this could happen when target is elastic search cluster (or maybe very old couchbase cluster?)
-			// consider the node to be "active" to be safe
-			fmt.Printf("node info map does not contain cluster membership. node info map=%v ", nodeInfoMap)
-			activeNodeList = append(activeNodeList, node)
-			continue
-		}
-		clusterMembership, ok := clusterMembershipObj.(string)
-		if !ok {
-			// play safe and return the node as active
-			fmt.Printf("cluster membership is not string type. type=%v ", reflect.TypeOf(clusterMembershipObj))
-			activeNodeList = append(activeNodeList, node)
-			continue
-		}
-		if clusterMembership == "" || clusterMembership == base.ClusterMembership_Active {
-			activeNodeList = append(activeNodeList, node)
-		}
-	}
-
-	return activeNodeList, nil
-}
-
 func GetBucketPasswordFromBucketInfo(bucketName string, bucketInfo map[string]interface{}) (string, error) {
 	bucketPassword := ""
 	bucketPasswordObj, ok := bucketInfo[base.SASLPasswordKey]
@@ -384,20 +234,18 @@ func EncodeVersionToEffectiveVersion(version []int) int {
 	return effectiveVersion
 }
 
-// Diff tool by default allow users to enter "http://<addr>:<ns_serverPort>"
-const httpPrefix = "http://"
-const couchbasePrefix = "couchbase://"
-
 func PopulateCCCPConnectString(url string) string {
 	var cccpUrl string
-	if strings.HasPrefix(url, httpPrefix) {
-		cccpUrl = strings.TrimPrefix(url, httpPrefix)
+	if strings.HasPrefix(url, base.HttpPrefix) {
+		cccpUrl = strings.TrimPrefix(url, base.HttpPrefix)
+	} else if strings.HasPrefix(url, base.HttpsPrefix) {
+		cccpUrl = strings.TrimPrefix(url, base.HttpsPrefix)
 	} else {
 		cccpUrl = url
 	}
 
-	if !strings.HasPrefix(cccpUrl, couchbasePrefix) {
-		cccpUrl = fmt.Sprintf("%v%v", couchbasePrefix, cccpUrl)
+	if !strings.HasPrefix(cccpUrl, base.CouchbasePrefix) {
+		cccpUrl = fmt.Sprintf("%v%v", base.CouchbasePrefix, cccpUrl)
 	}
 
 	return cccpUrl
@@ -409,4 +257,25 @@ func DiffKeysFileName(isSource bool, diffFileDir, diffKeysFileName string) strin
 		suffix = base.TargetClusterName
 	}
 	return diffFileDir + base.FileDirDelimiter + diffKeysFileName + base.FileNameDelimiter + suffix
+}
+
+func GetCertificate(u xdcrUtils.UtilsIface, hostname string, username, password string, authMech xdcrBase.HttpAuthMech) ([]byte, error) {
+	certificate := make([]byte, 0)
+
+	userAuthMode := xdcrBase.UserAuthModeBasic
+	req, host, err := u.ConstructHttpRequest(hostname, xdcrBase.DefaultPoolPath+"/certificate", false, username, password, authMech, userAuthMode, xdcrBase.MethodGet, xdcrBase.DefaultContentType, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	client, err := u.GetHttpClient(username, authMech, certificate, false, nil, nil, host, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	return ioutil.ReadAll(res.Body)
 }

@@ -29,9 +29,7 @@ type DcpDriver struct {
 	Name               string
 	url                string
 	bucketName         string
-	userName           string
-	password           string
-	rbacSupported      bool
+	ref                *metadata.RemoteClusterReference
 	bucketPassword     string
 	fileDir            string
 	errChan            chan error
@@ -88,13 +86,12 @@ const (
 	DriverStateStopped DriverState = iota
 )
 
-func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration, checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIds []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface) *DcpDriver {
+func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration, checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIds []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface) *DcpDriver {
 	dcpDriver := &DcpDriver{
 		Name:                name,
 		url:                 url,
 		bucketName:          bucketName,
-		userName:            userName,
-		password:            password,
+		ref:                 ref,
 		fileDir:             fileDir,
 		numberOfClients:     numberOfClients,
 		numberOfWorkers:     numberOfWorkers,
@@ -127,7 +124,8 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName,
 
 	dcpDriver.checkpointManager = NewCheckpointManager(dcpDriver, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, name, bucketOpTimeout, maxNumOfGetStatsRetry,
-		getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval, dcpDriver.startVbtsDoneChan, logger, completeBySeqno)
+		getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval, dcpDriver.startVbtsDoneChan, logger,
+		completeBySeqno)
 
 	base.TagHttpPrefix(&dcpDriver.url)
 
@@ -136,6 +134,7 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName,
 }
 
 func (d *DcpDriver) Start() error {
+	// TODO NEIL - credentials over TLS?
 	err := d.populateCredentials()
 	if err != nil {
 		d.logger.Errorf("%v error populating credentials. err=%v\n", d.Name, err)
@@ -193,9 +192,19 @@ func (d *DcpDriver) checkForCompletion() {
 }
 
 func (d *DcpDriver) populateCredentials() error {
-	var err error
-	d.rbacSupported, d.bucketPassword, err = utils.GetRBACSupportedAndBucketPassword(d.url, d.bucketName, d.userName, d.password)
-	d.logger.Infof("%v rbacSupported=%v url=%v\n", d.Name, d.rbacSupported, d.url)
+	connStr, err := d.ref.MyConnectionStr()
+	if err != nil {
+		return err
+	}
+
+	bucketInfo, err := d.utils.GetBucketInfo(connStr, d.bucketName, d.ref.UserName(), d.ref.Password(), d.ref.HttpAuthMech(), d.ref.Certificate(), d.ref.SANInCertificate(), d.ref.ClientCertificate(), d.ref.ClientKey(), d.logger)
+	if err != nil {
+		return fmt.Errorf("GetBucketInfo %v", err)
+	}
+	d.bucketPassword, err = utils.GetBucketPasswordFromBucketInfo(d.bucketName, bucketInfo)
+	if err != nil {
+		return err
+	}
 	return err
 }
 

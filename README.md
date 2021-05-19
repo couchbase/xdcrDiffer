@@ -47,9 +47,16 @@ For example:
 neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer$ ./runDiffer.sh -u Administrator -p password -h 127.0.0.1:9000 -r backupCluster -s beer-sample -t backupDumpster
 ```
 
+#### Preparing xdcrDiffer host for running differ
+While the differ can run on any machine that compiles the binary, one method of running the differ tool is to run on a non-KV couchbase node.
+It is also possible to create a small Couchbase node that has only a simple non-impacting service enabled (i.e. Backup), and rebalance in to the cluster for running the differ, which will not trigger vb movement.
+The node can then be removed once the differ has finished running.
+The runDiffer script above will then allow the differ to access metadata information to enable various features, including using secure connections, or collections.
+
 #### Tool binary
 The legacy method is to run the tool binary natively by using the options provided that can be found using "-h".
 Note that running the tool natively will bypass the `remote cluster reference` and `replication specification` retrieval from the source node's metakv.
+And that this legacy method does not support features that are introduced _after_ Couchbase Server 6.0.
 
 ```
 Usage of ./xdcrDiffer:
@@ -61,6 +68,8 @@ Usage of ./xdcrDiffer:
     	whether tool should automatically complete (after processing all mutations at start time) (default true)
   -diffFileDir string
     	 directory for storing diffs (default "diff")
+  -enforceTLS
+    	 stops executing if pre-requisites are not in place to ensure TLS communications
   -newCheckpointFileName string
     	new checkpoint file to write to when tool shuts down
   -numberOfBins uint
@@ -96,7 +105,7 @@ Usage of ./xdcrDiffer:
   -targetUsername string
     	username for target cluster (default "Administrator")
   -verifyDiffKeys
-    	 whether to verify diff keys through aysnc Get on clusters (default true)
+    	whether to verify diff keys through aysnc Get on clusters (default true)
 ```
 
 A few options worth noting:
@@ -108,11 +117,29 @@ A few options worth noting:
 - numberOfBins - Each Couchbase bucket contains 1024 vbuckets. For optimizing sorting, each vbucket is also sub-divided into bins as the data are streamed before the diff operation.
 - numberOfFileDesc - If the tool has exhausted all system file descriptors, this option allows the tool to limit the max number of concurently open file descriptors.
 
+#### Running with TLS encrypted traffic
+The xdcrDiffer supports running with encrypted traffic such that no data (or metadata) is sent or received in plain text over the wire. To run TLS, the followings need to be in place:
+1. The xdcrDiffer must be run using the runDiffer.sh
+2. The xdcrDiffer must be run on a Couchbase Server node that is a part of the source cluster (the said node does not need KV service)
+3. The `runDiffer.sh`'s `-h` argument (hostname to contact) must be a loopback address to the local node's ns_server (i.e. `127.0.0.1:8091`)
+4. The specified remote cluster reference for `runDiffer.sh` must have Full-Encryption and the appropriate username/password already set up
+5. (Optionally) The `-enforceTLS` flag passed to `xdcrDiffer` binary can be used to ensure the above pre-requisites are present, and will cause the program to exit if they are not in place (Not present in runDiffer.sh by default)
+6. Obviously, that the loopback interface has not been tampered in any way
+
+Once the above are in place, the xdcrDiffer will:
+1. Retrieve the local cluster's Root Certificate from the local ns_server via loopback device to the ns_server's REST endpoint
+2. Retrieve the remote cluster reference and replication spec from the local node's metakv, which contains the remote cluster's root certificate (Hopefully Node-To-Node encryption was already active)
+3. Use the local cluster's root certificate to contact local cluster's ns_server (not necessary since using loopback, but does it anyway)
+4. Use the local cluster's root certificate to contact local cluster's KV services over KV SSL ports
+6. Use the remote cluster reference's root certificate to contact remote cluster's ns_server for any necessary information
+5. Use the remote cluster reference's root certificate to contact remote cluster's KV services over KV SSL ports
+
 ## DiffTool Process Flow
 The difftool performs the following in order:
-1. Data Retrieval from source and target buckets via DCP (can press Ctrl-C to move onto next phase)
-2. Diff files retrieved from DCP to find differences
-3. Verify differences from above using async Get (verifyDiffKeys) to rule out transitional mutations
+1. Retrieve metadata from the specified node's metakv (if started via runDiffer.sh)
+2. Data Retrieval from source and target buckets via DCP according to the specs' definitions (can press Ctrl-C to move onto next phase)
+3. Diff files retrieved from DCP to find differences
+4. Verify differences from above using async Get (verifyDiffKeys) to rule out transitional mutations
 
 ## Output
 Results can be viewed as JSON summary files under `mutationDiff`:
@@ -168,9 +195,8 @@ The limiting space factor here is the actual machine that is running the diff to
 The diff tool has checkpointing mechanism built in in case of interruptions. The checkpointing mechanism is pretty much the same concept as XDCR checkpoints - that it knows where in the DCP stream it was last stopped and will try to resume from that point in time.
 
 ## Known Limitations
-1. No SSL support. Data being transferred will be visible. This includes credentials information and also user data.
-3. No dynamic topology change support. If VBs are moved during runtime, the tool does not handle it well.
+1. No dynamic topology change support. If VBs are moved during runtime, the tool does not handle it well.
 
 ## License
 
-Copyright 2018-2020 Couchbase, Inc. All rights reserved.
+Copyright 2018-2021 Couchbase, Inc. All rights reserved.

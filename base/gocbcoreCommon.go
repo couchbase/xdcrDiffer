@@ -1,6 +1,7 @@
 package base
 
 import (
+	"crypto/tls"
 	"fmt"
 	"github.com/couchbase/gocbcore/v9"
 	"net/url"
@@ -19,6 +20,30 @@ type GocbcoreAgentCommon struct {
 type PasswordAuth struct {
 	Username string
 	Password string
+}
+
+type CertificateAuth struct {
+	PasswordAuth
+	CertificateBytes []byte
+}
+
+func (c *CertificateAuth) SupportsTLS() bool {
+	return true
+}
+
+func (c *CertificateAuth) SupportsNonTLS() bool {
+	return false
+}
+
+func (c *CertificateAuth) Certificate(req gocbcore.AuthCertRequest) (*tls.Certificate, error) {
+	return &tls.Certificate{Certificate: [][]byte{c.CertificateBytes}}, nil
+}
+
+func (c *CertificateAuth) Credentials(req gocbcore.AuthCredsRequest) ([]gocbcore.UserPassPair, error) {
+	return []gocbcore.UserPassPair{{
+		Username: c.Username,
+		Password: c.Password,
+	}}, nil
 }
 
 type RetryStrategy struct{}
@@ -50,7 +75,19 @@ func GetConnStr(servers []string) string {
 }
 
 func TagHttpPrefix(url *string) {
-	if !strings.HasPrefix(*url, "http") {
-		*url = fmt.Sprintf("http://%v", *url)
+	if !strings.HasPrefix(*url, HttpPrefix) {
+		*url = fmt.Sprintf("%v%v", HttpPrefix, *url)
+	}
+}
+
+func TagHttpsPrefix(url *string) {
+	if !strings.HasPrefix(*url, HttpsPrefix) {
+		*url = fmt.Sprintf("%v%v", HttpsPrefix, *url)
+	}
+}
+
+func TagCouchbaseSecurePrefix(url *string) {
+	if !strings.HasPrefix(*url, CouchbaseSecurePrefix) {
+		*url = fmt.Sprintf("%v%v", CouchbaseSecurePrefix, *url)
 	}
 }

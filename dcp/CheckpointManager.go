@@ -3,7 +3,8 @@ package dcp
 import (
 	"encoding/json"
 	"fmt"
-	gocb "github.com/couchbase/gocb"
+	gocb "github.com/couchbase/gocb/v2"
+	"github.com/couchbase/gocbcore/v9"
 	xdcrBase "github.com/couchbase/goxdcr/base"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/rcrowley/go-metrics"
@@ -43,6 +44,11 @@ type CheckpointManager struct {
 	completeBySeqno       bool
 	logOnceCount          uint64
 	lastRemainingMap      map[uint16]uint64
+
+	kvSSLPortMap    xdcrBase.SSLPortMap
+	kvVbMap         map[string][]uint16
+	gocbcoreDcpFeed *GocbcoreDCPFeed
+	agent           *gocbcore.Agent
 }
 
 func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, clusterName string,
@@ -247,6 +253,11 @@ func (cm *CheckpointManager) initialize() error {
 		return err
 	}
 
+	err = cm.initializeBucket()
+	if err != nil {
+		return nil
+	}
+
 	err = cm.getVbuuidsAndHighSeqnos()
 	if err != nil {
 		return err
@@ -262,41 +273,30 @@ func (cm *CheckpointManager) initialize() error {
 }
 
 func (cm *CheckpointManager) initializeCluster() error {
-	cluster, err := gocb.Connect(cm.dcpDriver.url)
+	cluster, err := initializeClusterWithSecurity(cm.dcpDriver)
 	if err != nil {
-		cm.logger.Errorf("%v error connecting to cluster %v. err=%v\n", cm.clusterName, cm.dcpDriver.url, err)
 		return err
 	}
 
-	if cm.dcpDriver.rbacSupported {
-		err = cluster.Authenticate(gocb.PasswordAuthenticator{
-			Username: cm.dcpDriver.userName,
-			Password: cm.dcpDriver.password,
-		})
+	cm.cluster = cluster
 
-		if err != nil {
-			cm.logger.Errorf("%v error authenticating cluster. err=%v\n", cm.clusterName, err)
-			return err
-		}
+	cm.kvVbMap, err = initializeKVVBMap(cm.dcpDriver)
+	if err != nil {
+		return err
 	}
 
-	cm.cluster = cluster
+	cm.kvSSLPortMap, err = initializeSSLPorts(cm.dcpDriver)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
 func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() error {
-	statsBucket, err := cm.cluster.OpenBucket(cm.dcpDriver.bucketName, cm.dcpDriver.bucketPassword)
+	statsMap, err := cm.getStatsWithRetry()
 	if err != nil {
-		cm.logger.Errorf("%v error opening bucket. err=%v\n", cm.clusterName, err)
-		return err
-	}
-	defer statsBucket.Close()
-
-	statsBucket.SetOperationTimeout(cm.bucketOpTimeout)
-	statsBucket.SetBulkOperationTimeout(cm.bucketOpTimeout)
-
-	statsMap, err := cm.getStatsWithRetry(statsBucket)
-	if err != nil {
+		cm.logger.Errorf("getting stats returned error: %v", err)
 		return err
 	}
 
@@ -336,11 +336,39 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() error {
 }
 
 // get stats is likely to time out. add retry
-func (cm *CheckpointManager) getStatsWithRetry(statsBucket *gocb.Bucket) (map[string]map[string]string, error) {
-	var statsMap map[string]map[string]string
+func (cm *CheckpointManager) getStatsWithRetry() (map[string]map[string]string, error) {
+	var statsMap = make(map[string]map[string]string)
 	var err error
+
 	getStatsFunc := func() error {
-		statsMap, err = statsBucket.Stats(base.VbucketSeqnoStatName)
+		var waitGroup sync.WaitGroup
+
+		callback := func(result *gocbcore.StatsResult, cbErr error) {
+			defer waitGroup.Done()
+			if cbErr != nil {
+				err = cbErr
+			} else {
+				for server, singleServerStats := range result.Servers {
+					if singleServerStats.Error != nil {
+						err = singleServerStats.Error
+						return
+					}
+					statsMap[server] = make(map[string]string)
+					for k, v := range singleServerStats.Stats {
+						statsMap[server][k] = v
+					}
+				}
+			}
+		}
+
+		waitGroup.Add(1)
+		cm.agent.Stats(gocbcore.StatsOptions{
+			Key:           base.VbucketSeqnoStatName,
+			Deadline:      time.Now().Add(cm.bucketOpTimeout),
+			RetryStrategy: &base.RetryStrategy{},
+		}, callback)
+
+		waitGroup.Wait()
 		return err
 	}
 
@@ -556,6 +584,57 @@ func (cm *CheckpointManager) getSnapshot(vbno uint16) (startSeqno, endSeqno uint
 	defer snapshot.lock.RUnlock()
 
 	return snapshot.startSeqno, snapshot.endSeqno
+}
+
+func (cm *CheckpointManager) initializeBucket() error {
+	auth, bucketConnStr, err := initializeBucketWithSecurity(cm.dcpDriver, cm.kvVbMap, cm.kvSSLPortMap, false)
+	if err != nil {
+		return err
+	}
+
+	useTLS, x509Provider, authProvider, err := getAgentConfigs(auth)
+
+	agentConfig := &gocbcore.AgentConfig{
+		MemdAddrs:         []string{bucketConnStr},
+		BucketName:        cm.dcpDriver.bucketName,
+		UserAgent:         fmt.Sprintf("xdcrDifferCheckpointMgr"),
+		UseTLS:            useTLS,
+		Auth:              authProvider,
+		TLSRootCAProvider: x509Provider,
+		UseCollections:    cm.dcpDriver.capabilities.HasCollectionSupport(),
+	}
+
+	agent, err := gocbcore.CreateAgent(agentConfig)
+	if err != nil {
+		return err
+	}
+	cm.agent = agent
+
+	options := gocbcore.WaitUntilReadyOptions{
+		DesiredState:  gocbcore.ClusterStateOnline,
+		ServiceTypes:  []gocbcore.ServiceType{gocbcore.MemdService},
+		RetryStrategy: &base.RetryStrategy{},
+	}
+
+	signal := make(chan error, 1)
+	_, err = cm.agent.WaitUntilReady(time.Now().Add(base.SetupTimeout),
+		options, func(res *gocbcore.WaitUntilReadyResult, er error) {
+			signal <- er
+		})
+
+	if err == nil {
+		err = <-signal
+	}
+
+	if err != nil {
+		go cm.agent.Close()
+	}
+
+	if useTLS && !cm.agent.IsSecure() {
+		return fmt.Errorf("%v requested secure but agent says not secure", cm.clusterName)
+	}
+
+	return nil
 }
 
 type Snapshot struct {

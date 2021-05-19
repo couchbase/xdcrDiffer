@@ -1,8 +1,12 @@
 package differ
 
 import (
+	"crypto/x509"
+	"fmt"
 	"github.com/couchbase/gocbcore/v9"
+	xdcrBase "github.com/couchbase/goxdcr/base"
 	"github.com/couchbase/goxdcr/metadata"
+	"reflect"
 	"time"
 	"xdcrDiffer/base"
 )
@@ -12,13 +16,16 @@ type GocbcoreAgent struct {
 	agent *gocbcore.Agent
 }
 
-func (a *GocbcoreAgent) setupAgent(password *base.PasswordAuth, batchSize int, capability metadata.Capability) error {
-	agentConfig := a.setupAgentConfig(password, capability)
+func (a *GocbcoreAgent) setupAgent(auth interface{}, batchSize int, capability metadata.Capability) error {
+	agentConfig, err := a.setupAgentConfig(auth, capability)
+	if err != nil {
+		return err
+	}
 	agentConfig.MaxQueueSize = batchSize * 50 // Give SDK some breathing room
 
 	connStr := base.GetConnStr(a.Servers)
 
-	err := agentConfig.FromConnStr(connStr)
+	err = agentConfig.FromConnStr(connStr)
 	if err != nil {
 		return err
 	}
@@ -26,24 +33,45 @@ func (a *GocbcoreAgent) setupAgent(password *base.PasswordAuth, batchSize int, c
 	return a.setupGocbcoreAgent(agentConfig)
 }
 
-func (a *GocbcoreAgent) setupAgentConfig(pw *base.PasswordAuth, capability metadata.Capability) *gocbcore.AgentConfig {
+func (a *GocbcoreAgent) setupAgentConfig(authIn interface{}, capability metadata.Capability) (*gocbcore.AgentConfig, error) {
 	var auth gocbcore.AuthProvider
-	if pw != nil {
-		auth = gocbcore.PasswordAuthProvider{
-			Username: pw.Username,
-			Password: pw.Password,
+	var useTLS bool
+	x509Provider := func() *x509.CertPool {
+		return nil
+	}
+	if authIn != nil {
+		if pwAuth, ok := authIn.(*base.PasswordAuth); ok {
+			auth = gocbcore.PasswordAuthProvider{
+				Username: pwAuth.Username,
+				Password: pwAuth.Password,
+			}
+		} else if certAuth, ok := authIn.(*base.CertificateAuth); ok {
+			useTLS = true
+			auth = certAuth
+			certPool := x509.NewCertPool()
+			ok := certPool.AppendCertsFromPEM(certAuth.CertificateBytes)
+			if !ok {
+				return nil, xdcrBase.InvalidCerfiticateError
+			}
+			x509Provider = func() *x509.CertPool {
+				return certPool
+			}
+		} else {
+			panic(fmt.Sprintf("Unknown type: %v\n", reflect.TypeOf(authIn)))
 		}
 	}
 
 	return &gocbcore.AgentConfig{
-		HTTPAddrs:        a.Servers,
-		BucketName:       a.BucketName,
-		UserAgent:        a.Name,
-		Auth:             auth,
-		UseCollections:   capability.HasCollectionSupport(),
-		ConnectTimeout:   a.SetupTimeout,
-		KVConnectTimeout: a.SetupTimeout,
-	}
+		HTTPAddrs:         a.Servers,
+		BucketName:        a.BucketName,
+		UserAgent:         a.Name,
+		Auth:              auth,
+		UseCollections:    capability.HasCollectionSupport(),
+		ConnectTimeout:    a.SetupTimeout,
+		KVConnectTimeout:  a.SetupTimeout,
+		UseTLS:            useTLS,
+		TLSRootCAProvider: x509Provider,
+	}, nil
 }
 
 func (a *GocbcoreAgent) setupGocbcoreAgent(config *gocbcore.AgentConfig) (err error) {
@@ -84,7 +112,7 @@ func (a *GocbcoreAgent) Get(key string, callbackFunc func(result *gocbcore.GetRe
 	return err
 }
 
-func NewGocbcoreAgent(id string, servers []string, bucketName string, password *base.PasswordAuth, batchSize int, capability metadata.Capability) (*GocbcoreAgent, error) {
+func NewGocbcoreAgent(id string, servers []string, bucketName string, auth interface{}, batchSize int, capability metadata.Capability) (*GocbcoreAgent, error) {
 	gocbcoreAgent := &GocbcoreAgent{
 		GocbcoreAgentCommon: base.GocbcoreAgentCommon{
 			Name:         id,
@@ -95,6 +123,6 @@ func NewGocbcoreAgent(id string, servers []string, bucketName string, password *
 		agent: nil,
 	}
 
-	err := gocbcoreAgent.setupAgent(password, batchSize, capability)
+	err := gocbcoreAgent.setupAgent(auth, batchSize, capability)
 	return gocbcoreAgent, err
 }

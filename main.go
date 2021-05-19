@@ -23,6 +23,7 @@ import (
 	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"github.com/stretchr/testify/mock"
 	"io/ioutil"
+	"net"
 	"os"
 	"os/signal"
 	"sync"
@@ -109,6 +110,8 @@ var options struct {
 	runFileDiffer bool
 	// whether to verify diff keys through aysnc Get on clusters
 	runMutationDiffer bool
+	// Whether or not to enforce secure communications for data retrieval
+	enforceTLS bool
 }
 
 func argParse() {
@@ -198,6 +201,8 @@ func argParse() {
 		" whether to file differ")
 	flag.BoolVar(&options.runMutationDiffer, "runMutationDiffer", true,
 		" whether to verify diff keys through aysnc Get on clusters")
+	flag.BoolVar(&options.enforceTLS, "enforceTLS", false,
+		" stops executing if pre-requisites are not in place to ensure TLS communications")
 
 	flag.Parse()
 }
@@ -275,6 +280,9 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 	}
 
 	difftool.logger = xdcrLog.NewLogger("xdcrDiffTool", nil)
+
+	difftool.selfRef, _ = metadata.NewRemoteClusterReference("", base.SelfReferenceName, options.sourceUrl, options.sourceUsername, options.sourcePassword,
+		"", false, "", nil, nil, nil, nil)
 
 	if !legacyMode {
 		difftool.metadataSvc, err = metadata_svc.NewMetaKVMetadataSvc(nil, difftool.utils, true /*readOnly*/)
@@ -426,12 +434,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	if options.enforceTLS {
+		// For using certificates, the source cluster must be on a loopback device since we will be retrieving the
+		// source cluster's certificate to prevent sniffing
+		if !isURLLoopBack(options.sourceUrl) {
+			fmt.Printf("enforceTLS options requires that source addr %v to use loopback device\n", options.sourceUrl)
+			os.Exit(1)
+		}
+	}
+
 	if !legacyMode {
 		if err := difftool.retrieveReplicationSpecInfo(); err != nil {
-			fmt.Printf("%v\n", err)
 			os.Exit(1)
 		}
 	} else {
+		if options.enforceTLS {
+			fmt.Printf("enforceTLS option is not compatible with legacyMode")
+			os.Exit(1)
+		}
 		// OK to ignore metakv err in manual mode
 		if err := difftool.populateTemporarySpecAndRef(); err != nil {
 			fmt.Printf("%v\n", err)
@@ -474,6 +494,12 @@ func main() {
 	} else {
 		fmt.Printf("Skipping mutation diff since it has been disabled\n")
 	}
+}
+
+func isURLLoopBack(url string) bool {
+	IPLoopbackCheck := net.ParseIP(xdcrBase.GetHostName(url))
+	hostNameIsLocalHost := xdcrBase.GetHostName(url) == "localhost"
+	return IPLoopbackCheck.IsLoopback() || hostNameIsLocalHost
 }
 
 func setupDirectories() error {
@@ -539,9 +565,8 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		os.Exit(1)
 	}
 
-	difftool.logger.Infof("Starting source dcp clients on %v\n", options.sourceUrl)
 	difftool.sourceDcpDriver = startDcpDriver(difftool.logger, base.SourceClusterName, options.sourceUrl, difftool.specifiedSpec.SourceBucketName,
-		options.sourceUsername, options.sourcePassword, options.sourceFileDir, options.checkpointFileDir,
+		difftool.selfRef, options.sourceFileDir, options.checkpointFileDir,
 		options.oldSourceCheckpointFileName, options.newCheckpointFileName, options.numberOfSourceDcpClients,
 		options.numberOfWorkersPerSourceDcpClient, options.numberOfBins, options.sourceDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
@@ -554,7 +579,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 
 	difftool.logger.Infof("Starting target dcp clients\n")
 	difftool.targetDcpDriver = startDcpDriver(difftool.logger, base.TargetClusterName, difftool.specifiedRef.HostName_,
-		difftool.specifiedSpec.TargetBucketName, difftool.specifiedRef.UserName_, difftool.specifiedRef.Password_,
+		difftool.specifiedSpec.TargetBucketName, difftool.specifiedRef,
 		options.targetFileDir, options.checkpointFileDir, options.oldTargetCheckpointFileName, options.newCheckpointFileName,
 		options.numberOfTargetDcpClients, options.numberOfWorkersPerTargetDcpClient, options.numberOfBins, options.targetDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval, options.getStatsMaxBackoff,
@@ -613,23 +638,22 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 		return
 	}
 
-	mutationDiffer := differ.NewMutationDiffer(options.sourceUrl, difftool.specifiedSpec.SourceBucketName,
-		options.sourceUsername, options.sourcePassword, difftool.specifiedRef.HostName_,
-		difftool.specifiedSpec.TargetBucketName, difftool.specifiedRef.UserName_, difftool.specifiedRef.Password_,
+	mutationDiffer := differ.NewMutationDiffer(difftool.specifiedSpec.SourceBucketName,
+		difftool.selfRef, difftool.specifiedSpec.TargetBucketName, difftool.specifiedRef,
 		options.fileDifferDir, options.mutationDifferDir, int(options.numberOfWorkersForMutationDiffer),
 		int(options.mutationDifferBatchSize), int(options.mutationDifferTimeout), int(options.maxNumOfSendBatchRetry),
 		time.Duration(options.sendBatchRetryInterval)*time.Millisecond,
 		time.Duration(options.sendBatchMaxBackoff)*time.Second, difftool.logger, difftool.srcToTgtColIdsMap,
-		difftool.srcCapabilities, difftool.tgtCapabilities)
+		difftool.srcCapabilities, difftool.tgtCapabilities, difftool.utils)
 	err = mutationDiffer.Run()
 	if err != nil {
 		difftool.logger.Errorf("Error from runMutationDiffer = %v\n", err)
 	}
 }
 
-func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface) *dcp.DcpDriver {
+func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface) *dcp.DcpDriver {
 	waitGroup.Add(1)
-	dcpDriver := dcp.NewDcpDriver(logger, name, url, bucketName, userName, password, fileDir, checkpointFileDir, oldCheckpointFileName,
+	dcpDriver := dcp.NewDcpDriver(logger, name, url, bucketName, ref, fileDir, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBins),
 		int(dcpHandlerChanSize), time.Duration(bucketOpTimeout)*time.Second, int(maxNumOfGetStatsRetry),
 		time.Duration(getStatsRetryInterval)*time.Second, time.Duration(getStatsMaxBackoff)*time.Second,
@@ -712,11 +736,16 @@ func (difftool *xdcrDiffTool) retrieveReplicationSpecInfo() error {
 		}
 	}
 
-	if options.targetUsername != "" && options.targetPassword != "" {
-		difftool.logger.Infof("Target username and password were specified. Overriding them in the retrieved remote cluster reference")
-		difftool.specifiedRef.UserName_ = options.targetUsername
-		difftool.specifiedRef.Password_ = options.targetPassword
-		difftool.specifiedRef.HttpAuthMech_ = xdcrBase.HttpAuthMechPlain
+	if options.enforceTLS && !difftool.specifiedRef.IsHttps() {
+		err = fmt.Errorf("enforceTLS requires that the remote cluster reference %v to use Full-Encryption mode", difftool.specifiedRef.Name())
+		difftool.logger.Errorf(err.Error())
+		return err
+	}
+
+	if options.targetUsername != "" && options.targetUsername != difftool.specifiedRef.UserName() && options.targetPassword != "" && options.targetPassword != difftool.specifiedRef.Password() {
+		err = fmt.Errorf("user-specified username and password is different from that of the credentials from reference %v", difftool.specifiedRef.Name())
+		difftool.logger.Errorf(err.Error())
+		return err
 	}
 
 	specMap, err := difftool.replicationSpecSvc.AllReplicationSpecs()
@@ -791,14 +820,44 @@ func (difftool *xdcrDiffTool) monitorInterruptSignal() {
 }
 
 func (difftool *xdcrDiffTool) populateSelfRef() error {
-	var err error
-	difftool.selfRef, err = metadata.NewRemoteClusterReference("", base.SelfReferenceName, options.sourceUrl, options.sourceUsername, options.sourcePassword,
-		"", false, "", nil, nil, nil, nil)
-	atomic.StoreUint32(&difftool.selfRefPopulated, 1)
-	if err != nil {
-		return fmt.Errorf("populateSelfRef() - %v", err)
+	difftool.selfRef.HttpsHostName_ = options.sourceUrl
+	difftool.selfRef.UserName_ = options.sourceUsername
+	difftool.selfRef.Password_ = options.sourcePassword
+	difftool.selfRef.HttpAuthMech_ = xdcrBase.HttpAuthMechPlain
+
+	// Only grab certificate if on a loopback device
+	if difftool.specifiedRef.IsHttps() && isURLLoopBack(options.sourceUrl) {
+		cert, err := utils.GetCertificate(difftool.utils, options.sourceUrl, options.sourceUsername, options.sourcePassword, xdcrBase.HttpAuthMechPlain)
+		if err != nil {
+			return err
+		}
+
+		internalHttpsHostname, _, err := difftool.utils.HttpsRemoteHostAddr(options.sourceUrl, nil)
+		if err != nil {
+			return fmt.Errorf("unable to get httpsRemoteHostAddr: %v", err)
+		}
+
+		difftool.selfRef.Certificate_ = cert
+		_, refHttpAuthMech, _, _, err := difftool.utils.GetSecuritySettingsAndDefaultPoolInfo(options.sourceUrl, internalHttpsHostname, difftool.selfRef.UserName(), difftool.selfRef.Password(), difftool.selfRef.Certificate(), difftool.selfRef.ClientCertificate(), difftool.selfRef.ClientKey(), difftool.selfRef.IsHalfEncryption(), difftool.logger)
+		if err != nil {
+			return fmt.Errorf("unable to get security settings: %v", err)
+		}
+		difftool.selfRef.SetHttpAuthMech(refHttpAuthMech)
+
+		if refHttpAuthMech == xdcrBase.HttpAuthMechHttps {
+			// Need to get the secure port and attach it
+			internalSSLPort, internalSSLPortErr, _, _ := difftool.utils.GetRemoteSSLPorts(options.sourceUrl, difftool.logger)
+			if internalSSLPortErr == nil {
+				sslHostString := xdcrBase.GetHostAddr(xdcrBase.GetHostName(options.sourceUrl), internalSSLPort)
+				difftool.selfRef.SetHttpsHostName(sslHostString)
+				difftool.selfRef.SetActiveHttpsHostName(sslHostString)
+				difftool.logger.Infof("Received SSL port to be %v and setting TLS hostname to %v", internalSSLPort, sslHostString)
+			}
+		}
 	}
 
+	// Do this last
+	atomic.StoreUint32(&difftool.selfRefPopulated, 1)
 	return nil
 }
 
@@ -819,14 +878,14 @@ func (difftool *xdcrDiffTool) retrieveClustersCapabilities() error {
 	}
 	connStr, err := difftool.selfRef.MyConnectionStr()
 	if err != nil {
-		return fmt.Errorf("retrieveClusterCapabilities.myConnStr(%v) - %v", difftool.specifiedRef.Name(), err)
+		return fmt.Errorf("retrieveClusterCapabilities.myConnStr(%v) - %v", difftool.selfRef.Name(), err)
 	}
 	defaultPoolInfo, err := difftool.utils.GetClusterInfo(connStr, xdcrBase.DefaultPoolPath, difftool.selfRef.UserName(),
 		difftool.selfRef.Password(), difftool.selfRef.HttpAuthMech(), difftool.selfRef.Certificate(),
 		difftool.selfRef.SANInCertificate(), difftool.selfRef.ClientCertificate(), difftool.selfRef.ClientKey(),
 		difftool.logger)
 	if err != nil {
-		return fmt.Errorf("retrieveClusterCapabilities.getClusterInfo(%v) - %v", difftool.specifiedRef.Name(), err)
+		return fmt.Errorf("retrieveClusterCapabilities.getClusterInfo(%v) - %v", difftool.selfRef.Name(), err)
 	}
 
 	err = difftool.srcCapabilities.LoadFromDefaultPoolInfo(defaultPoolInfo, difftool.logger)
