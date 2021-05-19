@@ -10,9 +10,11 @@
 package dcp
 
 import (
+	"crypto/tls"
 	"fmt"
 	gocb "github.com/couchbase/gocb/v2"
 	gocbcore "github.com/couchbase/gocbcore/v9"
+	xdcrBase "github.com/couchbase/goxdcr/base"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/couchbase/goxdcr/metadata"
 	xdcrUtils "github.com/couchbase/goxdcr/utils"
@@ -45,6 +47,9 @@ type DcpClient struct {
 
 	gocbcoreDcpFeed *GocbcoreDCPFeed
 	utils           xdcrUtils.UtilsIface
+
+	kvSSLPortMap xdcrBase.SSLPortMap
+	kvVbMap      map[string][]uint16
 }
 
 func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.WaitGroup, startVbtsDoneChan chan bool, capabilities metadata.Capability, collectionIds []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface) *DcpClient {
@@ -185,30 +190,92 @@ func (c *DcpClient) initialize() error {
 }
 
 func (c *DcpClient) initializeCluster() (err error) {
-	clusterOpts := gocb.ClusterOptions{
-		Authenticator: gocb.PasswordAuthenticator{
-			Username: c.dcpDriver.userName,
-			Password: c.dcpDriver.password,
-		},
-	}
-
-	cluster, err := gocb.Connect(utils.PopulateCCCPConnectString(c.dcpDriver.url), clusterOpts)
+	cluster, err := initializeClusterWithSecurity(c.dcpDriver)
 	if err != nil {
-		c.logger.Errorf("Error connecting to cluster %v. err=%v\n", c.dcpDriver.url, err)
-		return
+		return err
 	}
 
 	c.cluster = cluster
+
+	c.kvVbMap, err = initializeKVVBMap(c.dcpDriver)
+	if err != nil {
+		return err
+	}
+
+	if c.dcpDriver.ref.HttpAuthMech() == xdcrBase.HttpAuthMechHttps {
+		c.kvSSLPortMap, err = initializeSSLPorts(c.dcpDriver)
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-func (c *DcpClient) initializeBucket() (err error) {
-	pwAuth := &base.PasswordAuth{
-		Username: c.dcpDriver.userName,
-		Password: c.dcpDriver.password,
+func initializeClusterWithSecurity(dcpDriver *DcpDriver) (*gocb.Cluster, error) {
+	clusterOpts := gocb.ClusterOptions{}
+
+	if dcpDriver.ref.HttpAuthMech() == xdcrBase.HttpAuthMechHttps {
+		tlsCert := tls.Certificate{Certificate: [][]byte{dcpDriver.ref.Certificate()}}
+		clusterOpts.Authenticator = gocb.CertificateAuthenticator{ClientCertificate: &tlsCert}
+	} else {
+		clusterOpts.Authenticator = gocb.PasswordAuthenticator{
+			Username: dcpDriver.ref.UserName(),
+			Password: dcpDriver.ref.Password(),
+		}
 	}
-	c.gocbcoreDcpFeed, err = NewGocbcoreDCPFeed(c.Name, []string{c.dcpDriver.url}, c.dcpDriver.bucketName, pwAuth, c.capabilities.HasCollectionSupport())
+
+	cluster, err := gocb.Connect(utils.PopulateCCCPConnectString(dcpDriver.url), clusterOpts)
+	if err != nil {
+		dcpDriver.logger.Errorf("Error connecting to cluster %v. err=%v\n", dcpDriver.url, err)
+		return nil, err
+	}
+	return cluster, nil
+}
+
+func (c *DcpClient) initializeBucket() (err error) {
+	auth, bucketConnStr, err := initializeBucketWithSecurity(c.dcpDriver, c.kvVbMap, c.kvSSLPortMap, true)
+	if err != nil {
+		return err
+	}
+
+	c.gocbcoreDcpFeed, err = NewGocbcoreDCPFeed(c.Name, []string{bucketConnStr}, c.dcpDriver.bucketName, auth, c.capabilities.HasCollectionSupport())
 	return
+}
+
+func initializeBucketWithSecurity(dcpDriver *DcpDriver, kvVbMap map[string][]uint16, kvSSLPortMap map[string]uint16, tagPrefix bool) (interface{}, string, error) {
+	var auth interface{}
+	pwAuth := base.PasswordAuth{
+		Username: dcpDriver.ref.UserName(),
+		Password: dcpDriver.ref.Password(),
+	}
+
+	var bucketConnStr string
+	for k, _ := range kvVbMap {
+		bucketConnStr = k
+		break
+	}
+
+	if dcpDriver.ref.HttpAuthMech() == xdcrBase.HttpAuthMechHttps {
+		auth = &base.CertificateAuth{
+			PasswordAuth:     pwAuth,
+			CertificateBytes: dcpDriver.ref.Certificate(),
+		}
+
+		sslPort, found := kvSSLPortMap[bucketConnStr]
+		if !found {
+			return nil, "", fmt.Errorf("Cannot find SSL port for %v in map %v", bucketConnStr, kvSSLPortMap)
+		}
+		bucketConnStr = xdcrBase.GetHostAddr(xdcrBase.GetHostName(bucketConnStr), sslPort)
+		if tagPrefix {
+			base.TagCouchbaseSecurePrefix(&bucketConnStr)
+		}
+	} else {
+		auth = &pwAuth
+		if tagPrefix {
+			bucketConnStr = fmt.Sprintf("%v%v", base.CouchbasePrefix, bucketConnStr)
+		}
+	}
+	return auth, bucketConnStr, nil
 }
 
 func (c *DcpClient) initializeDcpHandlers() error {
@@ -339,4 +406,37 @@ func (c *DcpClient) getOpenStreamOptions() (streamOpts gocbcore.OpenStreamOption
 		streamOpts.FilterOptions = filterOpts
 	}
 	return
+}
+
+func initializeSSLPorts(dcpDriver *DcpDriver) (map[string]uint16, error) {
+	var kvSSLPortMap map[string]uint16
+	connStr, err := dcpDriver.ref.MyConnectionStr()
+	if err != nil {
+		return nil, err
+	}
+	// By default the url passed in should be ns_server
+	kvSSLPortMap, err = dcpDriver.utils.GetMemcachedSSLPortMap(connStr, dcpDriver.ref.UserName(),
+		dcpDriver.ref.Password(), dcpDriver.ref.HttpAuthMech(), dcpDriver.ref.Certificate(),
+		dcpDriver.ref.SANInCertificate(), dcpDriver.ref.ClientCertificate(), dcpDriver.ref.ClientKey(),
+		dcpDriver.bucketName, dcpDriver.logger, false)
+
+	if err != nil {
+		return nil, fmt.Errorf("getMemcachedSSLPortMap %v", err)
+	}
+	return kvSSLPortMap, nil
+}
+
+func initializeKVVBMap(dcpDriver *DcpDriver) (map[string][]uint16, error) {
+	var kvVbMap map[string][]uint16
+	connStr, err := dcpDriver.ref.MyConnectionStr()
+	if err != nil {
+		return nil, err
+	}
+
+	_, _, _, _, _, kvVbMap, err = dcpDriver.utils.BucketValidationInfo(connStr, dcpDriver.bucketName, dcpDriver.ref.UserName(),
+		dcpDriver.ref.Password(), dcpDriver.ref.HttpAuthMech(), dcpDriver.ref.Certificate(),
+		dcpDriver.ref.SANInCertificate(), dcpDriver.ref.ClientCertificate(), dcpDriver.ref.ClientKey(),
+		dcpDriver.logger)
+
+	return kvVbMap, nil
 }

@@ -1,8 +1,11 @@
 package dcp
 
 import (
+	"crypto/x509"
+	"fmt"
 	gocbcore "github.com/couchbase/gocbcore/v9"
 	memd "github.com/couchbase/gocbcore/v9/memd"
+	xdcrBase "github.com/couchbase/goxdcr/base"
 	"time"
 	"xdcrDiffer/base"
 )
@@ -12,12 +15,15 @@ type GocbcoreDCPFeed struct {
 	dcpAgent *gocbcore.DCPAgent
 }
 
-func (f *GocbcoreDCPFeed) setupDCPAgent(pw *base.PasswordAuth, collections bool) error {
-	agentConfig := f.setupDCPAgentConfig(pw, collections)
+func (f *GocbcoreDCPFeed) setupDCPAgent(auth interface{}, collections bool) error {
+	agentConfig, shouldBeSecure, err := f.setupDCPAgentConfig(auth, collections)
+	if err != nil {
+		return err
+	}
 
 	connStr := base.GetConnStr(f.Servers)
 
-	err := agentConfig.FromConnStr(connStr)
+	err = agentConfig.FromConnStr(connStr)
 	if err != nil {
 		return err
 	}
@@ -33,7 +39,7 @@ func (f *GocbcoreDCPFeed) setupDCPAgent(pw *base.PasswordAuth, collections bool)
 		flags |= memd.DcpOpenFlagNoValue
 	}
 
-	err = f.setupGocbcoreDCPAgent(agentConfig, flags)
+	err = f.setupGocbcoreDCPAgent(agentConfig, flags, shouldBeSecure)
 	return err
 }
 
@@ -57,27 +63,51 @@ func NewDCPFeedParams() *DCPFeedParams {
 	return &DCPFeedParams{IncludeXAttrs: true}
 }
 
-func (f *GocbcoreDCPFeed) setupDCPAgentConfig(pw *base.PasswordAuth, collections bool) *gocbcore.DCPAgentConfig {
+func (f *GocbcoreDCPFeed) setupDCPAgentConfig(authMech interface{}, collections bool) (*gocbcore.DCPAgentConfig, bool, error) {
+	useTLS, x509Provider, auth, err := getAgentConfigs(authMech)
+	if err != nil {
+		return nil, false, err
+	}
+	return &gocbcore.DCPAgentConfig{
+		UserAgent:         f.Name,
+		BucketName:        f.BucketName,
+		Auth:              auth,
+		ConnectTimeout:    f.SetupTimeout,
+		KVConnectTimeout:  f.SetupTimeout,
+		UseCollections:    collections,
+		UseTLS:            useTLS,
+		TLSRootCAProvider: x509Provider,
+	}, useTLS, nil
+}
+
+func getAgentConfigs(authMech interface{}) (bool, func() *x509.CertPool, gocbcore.AuthProvider, error) {
+	var useTLS bool
+	x509Provider := func() *x509.CertPool {
+		return nil
+	}
 	var auth gocbcore.AuthProvider
-	if pw != nil {
+	if pw, ok := authMech.(*base.PasswordAuth); ok {
 		auth = gocbcore.PasswordAuthProvider{
 			Username: pw.Username,
 			Password: pw.Password,
 		}
+	} else if cert, ok := authMech.(*base.CertificateAuth); ok {
+		// The base.CertificateAuth should implement the methods for a provider
+		auth = cert
+		useTLS = true
+		certPool := x509.NewCertPool()
+		ok := certPool.AppendCertsFromPEM(cert.CertificateBytes)
+		if !ok {
+			return false, nil, nil, xdcrBase.InvalidCerfiticateError
+		}
+		x509Provider = func() *x509.CertPool {
+			return certPool
+		}
 	}
-
-	return &gocbcore.DCPAgentConfig{
-		UserAgent:        f.Name,
-		BucketName:       f.BucketName,
-		Auth:             auth,
-		ConnectTimeout:   f.SetupTimeout,
-		KVConnectTimeout: f.SetupTimeout,
-		UseCollections:   collections,
-		// DCPBufferSize
-	}
+	return useTLS, x509Provider, auth, nil
 }
 
-func (f *GocbcoreDCPFeed) setupGocbcoreDCPAgent(config *gocbcore.DCPAgentConfig, flags memd.DcpOpenFlag) (err error) {
+func (f *GocbcoreDCPFeed) setupGocbcoreDCPAgent(config *gocbcore.DCPAgentConfig, flags memd.DcpOpenFlag, secure bool) (err error) {
 	f.dcpAgent, err = gocbcore.CreateDcpAgent(config, f.Name, flags)
 	if err != nil {
 		return err
@@ -102,20 +132,25 @@ func (f *GocbcoreDCPFeed) setupGocbcoreDCPAgent(config *gocbcore.DCPAgentConfig,
 	if err != nil {
 		go f.dcpAgent.Close()
 	}
+
+	if secure && !f.dcpAgent.IsSecure() {
+		return fmt.Errorf("%v requested secure but agent says not secure", f.Name)
+	}
+
 	return
 }
 
-func NewGocbcoreDCPFeed(id string, servers []string, bucketName string, passwordAuth *base.PasswordAuth, collections bool) (*GocbcoreDCPFeed, error) {
+func NewGocbcoreDCPFeed(id string, servers []string, bucketName string, auth interface{}, collections bool) (*GocbcoreDCPFeed, error) {
 	gocbcoreDcpFeed := &GocbcoreDCPFeed{
 		GocbcoreAgentCommon: base.GocbcoreAgentCommon{
 			Name:         id,
 			Servers:      servers,
 			BucketName:   bucketName,
-			SetupTimeout: 5 * time.Second,
+			SetupTimeout: base.SetupTimeout,
 		},
 		dcpAgent: nil,
 	}
 
-	err := gocbcoreDcpFeed.setupDCPAgent(passwordAuth, collections)
+	err := gocbcoreDcpFeed.setupDCPAgent(auth, collections)
 	return gocbcoreDcpFeed, err
 }

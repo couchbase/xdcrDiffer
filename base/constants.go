@@ -9,6 +9,8 @@
 
 package base
 
+import "time"
+
 const NumberOfVbuckets = 1024
 const DcpHandlerChanSize = 100000
 const FileNamePrefix = "diffTool"
@@ -88,3 +90,11 @@ const (
 	Filtered       FilterResultType = iota
 	UnableToFilter FilterResultType = iota
 )
+
+// Diff tool by default allow users to enter "http://<addr>:<ns_serverPort>"
+const HttpPrefix = "http://"
+const HttpsPrefix = "https://"
+const CouchbasePrefix = "couchbase://"
+const CouchbaseSecurePrefix = "couchbases://"
+
+var SetupTimeout = 5 * time.Second
