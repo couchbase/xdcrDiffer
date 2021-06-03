@@ -57,6 +57,9 @@ const MaxNumOfSendBatchRetry = 10
 const DelayBetweenSourceAndTarget uint64 = 2
 const CheckpointInterval = 600
 
+const ClusterRunMinPortNo uint16 = 9000
+const ClusterRunMaxPortNo uint16 = 9007
+
 // length of mutation metadata + body, which consists of
 //  seqno    - 8 bytes
 //  revId    - 8 bytes

@@ -244,10 +244,15 @@ func PopulateCCCPConnectString(url string) string {
 		cccpUrl = url
 	}
 
+	// For production environment (non-cluster-run), strip off the port
+	portNo, portErr := xdcrBase.GetPortNumber(cccpUrl)
+	if portErr == nil && (portNo < base.ClusterRunMinPortNo || portNo > base.ClusterRunMaxPortNo) {
+		cccpUrl = xdcrBase.GetHostName(cccpUrl)
+	}
+
 	if !strings.HasPrefix(cccpUrl, base.CouchbasePrefix) {
 		cccpUrl = fmt.Sprintf("%v%v", base.CouchbasePrefix, cccpUrl)
 	}
-
 	return cccpUrl
 }
 
