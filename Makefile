@@ -41,3 +41,4 @@ deps:
 	$(GOGET) golang.org/x/net
 	$(GOGET) github.com/couchbase/clog
 	$(GOGET) github.com/stretchr/testify/assert
+	$(GOGET) github.com/stretchr/testify/mock
