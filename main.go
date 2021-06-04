@@ -838,7 +838,7 @@ func (difftool *xdcrDiffTool) populateSelfRef() error {
 		}
 
 		difftool.selfRef.Certificate_ = cert
-		_, refHttpAuthMech, _, _, err := difftool.utils.GetSecuritySettingsAndDefaultPoolInfo(options.sourceUrl, internalHttpsHostname, difftool.selfRef.UserName(), difftool.selfRef.Password(), difftool.selfRef.Certificate(), difftool.selfRef.ClientCertificate(), difftool.selfRef.ClientKey(), difftool.selfRef.IsHalfEncryption(), difftool.logger)
+		refHttpAuthMech, _, _, err := difftool.utils.GetSecuritySettingsAndDefaultPoolInfo(options.sourceUrl, internalHttpsHostname, difftool.selfRef.UserName(), difftool.selfRef.Password(), difftool.selfRef.Certificate(), difftool.selfRef.ClientCertificate(), difftool.selfRef.ClientKey(), difftool.selfRef.IsHalfEncryption(), difftool.logger)
 		if err != nil {
 			return fmt.Errorf("unable to get security settings: %v", err)
 		}
