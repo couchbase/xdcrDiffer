@@ -137,19 +137,19 @@ func argParse() {
 		"bucket name for target cluster")
 	flag.StringVar(&options.targetFileDir, "targetFileDir", base.TargetFileDir,
 		"directory to store mutations in target cluster")
-	flag.Uint64Var(&options.numberOfSourceDcpClients, "numberOfSourceDcpClients", 4,
+	flag.Uint64Var(&options.numberOfSourceDcpClients, "numberOfSourceDcpClients", 1,
 		"number of source dcp clients")
-	flag.Uint64Var(&options.numberOfWorkersPerSourceDcpClient, "numberOfWorkersPerSourceDcpClient", 256,
+	flag.Uint64Var(&options.numberOfWorkersPerSourceDcpClient, "numberOfWorkersPerSourceDcpClient", 64,
 		"number of workers for each source dcp client")
-	flag.Uint64Var(&options.numberOfTargetDcpClients, "numberOfTargetDcpClients", 4,
+	flag.Uint64Var(&options.numberOfTargetDcpClients, "numberOfTargetDcpClients", 1,
 		"number of target dcp clients")
-	flag.Uint64Var(&options.numberOfWorkersPerTargetDcpClient, "numberOfWorkersPerTargetDcpClient", 256,
+	flag.Uint64Var(&options.numberOfWorkersPerTargetDcpClient, "numberOfWorkersPerTargetDcpClient", 64,
 		"number of workers for each target dcp client")
 	flag.Uint64Var(&options.numberOfWorkersForFileDiffer, "numberOfWorkersForFileDiffer", 30,
 		"number of worker threads for file differ ")
 	flag.Uint64Var(&options.numberOfWorkersForMutationDiffer, "numberOfWorkersForMutationDiffer", 30,
 		"number of worker threads for mutation differ ")
-	flag.Uint64Var(&options.numberOfBins, "numberOfBins", 10,
+	flag.Uint64Var(&options.numberOfBins, "numberOfBins", 5,
 		"number of buckets per vbucket")
 	flag.Uint64Var(&options.numberOfFileDesc, "numberOfFileDesc", 500,
 		"number of file descriptors")
@@ -464,7 +464,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := difftool.retrieveClustersCapabilities(); err != nil {
+	if err := difftool.retrieveClustersCapabilities(legacyMode); err != nil {
 		fmt.Printf("%v\n", err)
 		os.Exit(1)
 	}
@@ -861,15 +861,17 @@ func (difftool *xdcrDiffTool) populateSelfRef() error {
 	return nil
 }
 
-func (difftool *xdcrDiffTool) retrieveClustersCapabilities() error {
-	ref, err := difftool.remoteClusterSvc.RemoteClusterByRefName(difftool.specifiedRef.Name(), false)
-	if err != nil {
-		return fmt.Errorf("retrieveClusterCapabilities.RemoteClusterByRefName(%v) - %v", difftool.specifiedRef.Name(), err)
-	}
+func (difftool *xdcrDiffTool) retrieveClustersCapabilities(legacyMode bool) error {
+	if !legacyMode {
+		ref, err := difftool.remoteClusterSvc.RemoteClusterByRefName(difftool.specifiedRef.Name(), false)
+		if err != nil {
+			return fmt.Errorf("retrieveClusterCapabilities.RemoteClusterByRefName(%v) - %v", difftool.specifiedRef.Name(), err)
+		}
 
-	difftool.tgtCapabilities, err = difftool.remoteClusterSvc.GetCapability(ref)
-	if err != nil {
-		return fmt.Errorf("retrieveClusterCapabilities.GetCapability(%v) - %v", difftool.specifiedRef.Name(), err)
+		difftool.tgtCapabilities, err = difftool.remoteClusterSvc.GetCapability(ref)
+		if err != nil {
+			return fmt.Errorf("retrieveClusterCapabilities.GetCapability(%v) - %v", difftool.specifiedRef.Name(), err)
+		}
 	}
 
 	// Self capabilities
