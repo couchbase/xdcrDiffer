@@ -25,7 +25,7 @@ function printHelp() {
 	findExec
 
 	cat <<EOF
-Usage: $0 -u <username> -p <password> -h <hostname:port> -r <remoteClusterName> -s <sourceBucket> -t <targetBucket> [-n <remoteClusterUsername> -q <remoteClusterPassword>] [-c clean]
+Usage: $0 -u <username> -p <password> -h <hostname:port> -s <sourceBucket> -t <targetBucket> -r <remoteClusterName> [-v <targetUrl>] [-n <remoteClusterUsername> -q <remoteClusterPassword>] [-c clean]
 
 This script will set up the necessary environment variable to allow the XDCR diff tool to connect to the metakv service in the
 specified source cluster (NOTE: over http://) and retrieve the specified replication spec and run the difftool on it.
@@ -52,7 +52,7 @@ function killBgTail {
 	fi
 }
 
-while getopts ":h:p:u:r:s:t:n:q:c" opt; do
+while getopts ":h:p:u:r:s:t:n:q:v:c" opt; do
 	case ${opt} in
 	u)
 		username=$OPTARG
@@ -80,6 +80,9 @@ while getopts ":h:p:u:r:s:t:n:q:c" opt; do
 		;;
 	c)
 		cleanBeforeRun=1
+		;;
+	v)
+		targetUrl=$OPTARG
 		;;
 	\?)
 		echo "Invalid option: $OPTARG" 1>&2
@@ -111,8 +114,8 @@ elif [[ -z "$targetBucketName" ]]; then
 	echo "Missing targetBucket"
 	printHelp
 	exit 1
-elif [[ -z "$remoteClusterName" ]]; then
-	echo "Missing remoteCluster"
+elif [[ -z "$remoteClusterName" ]] && [[ -z "$targetUrl" ]]; then
+	echo "Missing remoteCluster name or target URL"
 	printHelp
 	exit 1
 fi
@@ -152,13 +155,19 @@ execString="${execString} -sourceBucketName"
 execString="${execString} $sourceBucketName"
 execString="${execString} -targetBucketName"
 execString="${execString} $targetBucketName"
-execString="${execString} -remoteClusterName"
-execString="${execString} $remoteClusterName"
+
 if [[ ! -z "$remoteClusterUsername" ]] && [[ ! -z "$remoteClusterPassword" ]]; then
 	execString="${execString} -targetUsername"
 	execString="${execString} $remoteClusterUsername"
 	execString="${execString} -targetPassword"
 	execString="${execString} $remoteClusterPassword"
+fi
+if [[ ! -z "$remoteClusterName" ]];then
+	execString="${execString} -remoteClusterName"
+	execString="${execString} $remoteClusterName"
+elif [[ ! -z "$targetUrl" ]];then
+	execString="${execString} -targetUrl"
+	execString="${execString} $targetUrl"
 fi
 if [[ ! -z "$maxFileDescs" ]]; then
 	execString="${execString} -numberOfFileDesc"
