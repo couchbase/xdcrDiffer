@@ -48,9 +48,10 @@ type DcpHandler struct {
 	colMigrationFiltersImpl []xdcrParts.Filter
 	isSource                bool
 	utils                   xdcrUtils.UtilsIface
+	bufferCap               int
 }
 
-func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface, incReceivedCounter, incSysEvtReceived func(), colMigrationFilters []string, utils xdcrUtils.UtilsIface) (*DcpHandler, error) {
+func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface, incReceivedCounter, incSysEvtReceived func(), colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int) (*DcpHandler, error) {
 	if len(vbList) == 0 {
 		return nil, fmt.Errorf("vbList is empty for handler %v", index)
 	}
@@ -72,6 +73,7 @@ func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uin
 		colMigrationFiltersOn: len(colMigrationFilters) > 0,
 		utils:                 utils,
 		isSource:              strings.Contains(dcpClient.Name, base.SourceClusterName),
+		bufferCap:             bufferCap,
 	}, nil
 }
 
@@ -115,7 +117,7 @@ func (dh *DcpHandler) initialize() error {
 		innerMap := make(map[int]*Bucket)
 		dh.bucketMap[vbno] = innerMap
 		for i := 0; i < dh.numberOfBins; i++ {
-			bucket, err := NewBucket(dh.fileDir, vbno, i, dh.fdPool, dh.logger)
+			bucket, err := NewBucket(dh.fileDir, vbno, i, dh.fdPool, dh.logger, dh.bufferCap)
 			if err != nil {
 				return err
 			}
@@ -310,9 +312,11 @@ type Bucket struct {
 	closeOp  func() error
 
 	logger *xdcrLog.CommonLogger
+
+	bufferCap int
 }
 
-func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool fdp.FdPoolIface, logger *xdcrLog.CommonLogger) (*Bucket, error) {
+func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool fdp.FdPoolIface, logger *xdcrLog.CommonLogger, bufferCap int) (*Bucket, error) {
 	fileName := utils.GetFileName(fileDir, vbno, bucketIndex)
 	var cb fdp.FileOp
 	var closeOp func() error
@@ -334,18 +338,19 @@ func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool fdp.FdPoolIf
 		}
 	}
 	return &Bucket{
-		data:     make([]byte, base.BucketBufferCapacity),
-		index:    0,
-		file:     file,
-		fileName: fileName,
-		fdPoolCb: cb,
-		closeOp:  closeOp,
-		logger:   logger,
+		data:      make([]byte, bufferCap),
+		index:     0,
+		file:      file,
+		fileName:  fileName,
+		fdPoolCb:  cb,
+		closeOp:   closeOp,
+		logger:    logger,
+		bufferCap: bufferCap,
 	}, nil
 }
 
 func (b *Bucket) write(item []byte) error {
-	if b.index+len(item) > base.BucketBufferCapacity {
+	if b.index+len(item) > b.bufferCap {
 		err := b.flushToFile()
 		if err != nil {
 			return err
