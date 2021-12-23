@@ -194,20 +194,8 @@ func (d *DcpDriver) checkForCompletion() {
 }
 
 func (d *DcpDriver) populateCredentials() error {
-	connStr, err := d.ref.MyConnectionStr()
-	if err != nil {
-		return err
-	}
-
-	bucketInfo, err := d.utils.GetBucketInfo(connStr, d.bucketName, d.ref.UserName(), d.ref.Password(), d.ref.HttpAuthMech(), d.ref.Certificate(), d.ref.SANInCertificate(), d.ref.ClientCertificate(), d.ref.ClientKey(), d.logger)
-	if err != nil {
-		return fmt.Errorf("GetBucketInfo %v", err)
-	}
-	d.bucketPassword, err = utils.GetBucketPasswordFromBucketInfo(d.bucketName, bucketInfo)
-	if err != nil {
-		return err
-	}
-	return err
+	d.bucketPassword = d.ref.Password()
+	return nil
 }
 
 func (d *DcpDriver) Stop() error {
