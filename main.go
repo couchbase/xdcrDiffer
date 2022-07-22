@@ -624,6 +624,18 @@ func (difftool *xdcrDiffTool) diffDataFiles() error {
 	if err != nil {
 		difftool.logger.Errorf("Error from diffDataFiles = %v\n", err)
 	}
+	difftoolDriver.MapLock.RLock()
+	if difftool.colFilterOrderedKeys == nil {
+		difftool.logger.Infof("Source vb to item count map: %v", difftoolDriver.SrcVbItemCntMap)
+	}
+	difftool.logger.Infof("Target vb to item count map: %v", difftoolDriver.TgtVbItemCntMap)
+	difftoolDriver.MapLock.RUnlock()
+	if difftool.colFilterOrderedKeys == nil {
+		difftool.logger.Infof("Source bucket item count is %v (excluding %v filtered mutations)", difftoolDriver.SourceItemCount, difftool.sourceDcpDriver.FilteredCount())
+	} else {
+		difftool.logger.Infof("Replication is in migration mode from the source bucket")
+	}
+	difftool.logger.Infof("Target bucket item count is %v (excluding %v filtered mutations)", difftoolDriver.TargetItemCount, difftool.targetDcpDriver.FilteredCount())
 
 	return err
 }

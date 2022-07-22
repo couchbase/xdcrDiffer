@@ -207,6 +207,7 @@ func (cm *CheckpointManager) reportStatus() {
 		case <-ticker.C:
 			prevSum = cm.reportStatusOnce(prevSum)
 		case <-cm.finChan:
+			prevSum = cm.reportStatusOnce(prevSum)
 			return
 		}
 	}
@@ -311,7 +312,7 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() error {
 	for _, seqno := range endSeqnoMap {
 		sum += seqno
 	}
-	cm.logger.Infof("%v total docs=%v\n", cm.clusterName, sum)
+	cm.logger.Infof("%v total mutations=%v\n", cm.clusterName, sum)
 
 	cm.vbuuidMap = vbuuidMap
 

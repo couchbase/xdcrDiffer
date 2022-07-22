@@ -46,6 +46,9 @@ type FilesDiffer struct {
 	collectionIdMapping map[uint32][]uint32
 	colFilterStrings    []string
 	colFilterTgtIds     []uint32
+
+	file1ItemCount int
+	file2ItemCount int
 }
 
 type FileAttributes struct {
@@ -495,6 +498,15 @@ func (differ *FilesDiffer) Diff() (srcDiffMap, tgtDiffMap map[uint32][]string, m
 
 	srcDiffMap, tgtDiffMap, migrationHintMap = differ.diffSorted()
 	diffBytes, err = differ.diffToJson()
+
+	// Count source items
+	for _, entryMap := range differ.file1.entries {
+		differ.file1ItemCount += len(entryMap)
+	}
+	// Count target Items
+	for _, entryMap := range differ.file2.entries {
+		differ.file2ItemCount += len(entryMap)
+	}
 	return srcDiffMap, tgtDiffMap, migrationHintMap, diffBytes, err
 }
 
