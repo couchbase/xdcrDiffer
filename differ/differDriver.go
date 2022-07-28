@@ -157,6 +157,11 @@ type DifferDriver struct {
 	collectionMapping map[uint32][]uint32
 	colFilterStrings  []string
 	colFilterTgtIds   []uint32
+	SourceItemCount   int64
+	TargetItemCount   int64
+	SrcVbItemCntMap   map[uint16]int
+	TgtVbItemCntMap   map[uint16]int
+	MapLock           *sync.RWMutex
 }
 
 func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32) *DifferDriver {
@@ -182,6 +187,9 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName
 		colFilterStrings:  colFilterStrings,
 		colFilterTgtIds:   colFilterTgtIds,
 		srcMigrationHint:  MigrationHintMap{},
+		SrcVbItemCntMap:   make(map[uint16]int),
+		TgtVbItemCntMap:   make(map[uint16]int),
+		MapLock:           &sync.RWMutex{},
 	}
 }
 
@@ -365,6 +373,8 @@ func (dh *DifferHandler) run() error {
 
 	var vbno uint16
 	for _, vbno = range dh.vbList {
+		srcVbItemCnt := 0
+		tgtVbItemCnt := 0
 		for bucketIndex := 0; bucketIndex < dh.numberOfBins; bucketIndex++ {
 			sourceFileName := utils.GetFileName(dh.sourceFileDir, vbno, bucketIndex)
 			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex)
@@ -391,7 +401,16 @@ func (dh *DifferHandler) run() error {
 				}
 				dh.writeDiffBytes(diffBytes)
 			}
+			srcVbItemCnt += filesDiffer.file1ItemCount
+			tgtVbItemCnt += filesDiffer.file2ItemCount
 		}
+		atomic.AddInt64(&dh.driver.SourceItemCount, int64(srcVbItemCnt))
+		atomic.AddInt64(&dh.driver.TargetItemCount, int64(tgtVbItemCnt))
+
+		dh.driver.MapLock.Lock()
+		dh.driver.SrcVbItemCntMap[vbno] = srcVbItemCnt
+		dh.driver.TgtVbItemCntMap[vbno] = tgtVbItemCnt
+		dh.driver.MapLock.Unlock()
 		atomic.AddUint32(&dh.driver.vbCompleted, 1)
 	}
 

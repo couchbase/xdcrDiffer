@@ -235,6 +235,15 @@ func (d *DcpDriver) Stop() error {
 	return nil
 }
 
+func (d *DcpDriver) FilteredCount() int64 {
+	var vbno uint16
+	var filtered int64
+	for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
+		filtered += d.checkpointManager.filteredCnt[vbno].Count()
+	}
+	return filtered
+}
+
 func (d *DcpDriver) initializeDcpClients() {
 	d.stateLock.Lock()
 	defer d.stateLock.Unlock()
