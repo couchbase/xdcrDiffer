@@ -194,6 +194,11 @@ The limiting space factor here is the actual machine that is running the diff to
 
 The diff tool has checkpointing mechanism built in in case of interruptions. The checkpointing mechanism is pretty much the same concept as XDCR checkpoints - that it knows where in the DCP stream it was last stopped and will try to resume from that point in time.
 
+> I am hesitant to modify the purge interval or compact the bucket. What is the effect of not compacting beforehand?
+
+Compacting and/or purging is to minimize the amount of data that the differ will receive from either source or target KV. Otherwise, it is possible for the differ to receive multiple versions of the same document as it mutates over time, and storing them all as part of the diffing operation.
+It won’t affect the accuracy of the result, but it’ll cause differ to run longer and use more disk space.
+
 ## Known Limitations
 1. No dynamic topology change support. If VBs are moved during runtime, the tool does not handle it well.
 
