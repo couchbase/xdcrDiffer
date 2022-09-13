@@ -101,3 +101,5 @@ const CouchbasePrefix = "couchbase://"
 const CouchbaseSecurePrefix = "couchbases://"
 
 var SetupTimeout = 5 * time.Second
+
+const JSONDataType = 1

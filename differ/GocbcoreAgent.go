@@ -112,6 +112,16 @@ func (a *GocbcoreAgent) Get(key string, callbackFunc func(result *gocbcore.GetRe
 	return err
 }
 
+func (a *GocbcoreAgent) GetMeta(key string, callbackFunc func(result *gocbcore.GetMetaResult, err error), colId uint32) error {
+	opts := gocbcore.GetMetaOptions{
+		Key:           []byte(key),
+		RetryStrategy: nil,
+		CollectionID:  colId,
+	}
+	_, err := a.agent.GetMeta(opts, callbackFunc)
+	return err
+}
+
 func NewGocbcoreAgent(id string, servers []string, bucketName string, auth interface{}, batchSize int, capability metadata.Capability) (*GocbcoreAgent, error) {
 	gocbcoreAgent := &GocbcoreAgent{
 		GocbcoreAgentCommon: base.GocbcoreAgentCommon{
