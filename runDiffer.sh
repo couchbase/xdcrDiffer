@@ -25,12 +25,14 @@ function printHelp() {
 	findExec
 
 	cat <<EOF
-Usage: $0 -u <username> -p <password> -h <hostname:port> -s <sourceBucket> -t <targetBucket> -r <remoteClusterName> [-v <targetUrl>] [-n <remoteClusterUsername> -q <remoteClusterPassword>] [-c clean]
+Usage: $0 -u <username> -p <password> -h <hostname:port> -s <sourceBucket> -t <targetBucket> -r <remoteClusterName> [-v <targetUrl>] [-n <remoteClusterUsername> -q <remoteClusterPassword>] [-c clean] [-b ]
 
 This script will set up the necessary environment variable to allow the XDCR diff tool to connect to the metakv service in the
 specified source cluster (NOTE: over http://) and retrieve the specified replication spec and run the difftool on it.
 The difftool currently only supports connecting to remote targets with username and password. Thus, if the specified remote cluster
 reference only contains certificate, then specify the remoteClusterUsername and remoteClusterPassword accordingly.
+
+use "-b" to get document body for comparison instead of metadata. This is a slower option and it will not get tombstones
 EOF
 }
 
@@ -52,7 +54,7 @@ function killBgTail {
 	fi
 }
 
-while getopts ":h:p:u:r:s:t:n:q:v:c" opt; do
+while getopts ":h:p:u:r:s:t:n:q:v:cb" opt; do
 	case ${opt} in
 	u)
 		username=$OPTARG
@@ -80,6 +82,9 @@ while getopts ":h:p:u:r:s:t:n:q:v:c" opt; do
 		;;
 	c)
 		cleanBeforeRun=1
+		;;
+	b)
+		compareBody=true
 		;;
 	v)
 		targetUrl=$OPTARG
@@ -172,6 +177,10 @@ fi
 if [[ ! -z "$maxFileDescs" ]]; then
 	execString="${execString} -numberOfFileDesc"
 	execString="${execString} $maxFileDescs"
+fi
+if [[ ! -z "$compareBody" ]]; then
+	execString="${execString} -compareBody"
+	execString="${execString} $compareBody"
 fi
 
 # Execute the differ in background and watch the pid to be finished

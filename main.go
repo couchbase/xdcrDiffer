@@ -114,6 +114,8 @@ var options struct {
 	enforceTLS bool
 	// Number of items kept in memory per binary buffer bucket
 	bucketBufferCapacity int
+	// Use Get instead of GetMeta to compare document body
+	compareBody bool
 }
 
 func argParse() {
@@ -207,6 +209,8 @@ func argParse() {
 		" stops executing if pre-requisites are not in place to ensure TLS communications")
 	flag.IntVar(&options.bucketBufferCapacity, "bucketBufferCapacity", base.BucketBufferCapacity,
 		"  number of items kept in memory per binary buffer bucket")
+	flag.BoolVar(&options.compareBody, "compareBody", false,
+		" whether to use Get instead of GetMeta during mutationDiff")
 
 	flag.Parse()
 }
@@ -430,6 +434,7 @@ func maybeSetEnv(key, value string) {
 func main() {
 	argParse()
 
+	fmt.Printf("differ is run with options: %+v\n", options)
 	legacyMode := len(options.targetUsername) > 0
 
 	difftool, err := NewDiffTool(legacyMode)
@@ -631,17 +636,25 @@ func (difftool *xdcrDiffTool) diffDataFiles() error {
 	difftool.logger.Infof("Target vb to item count map: %v", difftoolDriver.TgtVbItemCntMap)
 	difftoolDriver.MapLock.RUnlock()
 	if difftool.colFilterOrderedKeys == nil {
-		difftool.logger.Infof("Source bucket item count is %v (excluding %v filtered mutations)", difftoolDriver.SourceItemCount, difftool.sourceDcpDriver.FilteredCount())
+		difftool.logger.Infof("Source bucket item count including tombstones is %v (excluding %v filtered mutations)", difftoolDriver.SourceItemCount, difftool.sourceDcpDriver.FilteredCount())
 	} else {
 		difftool.logger.Infof("Replication is in migration mode from the source bucket")
 	}
-	difftool.logger.Infof("Target bucket item count is %v (excluding %v filtered mutations)", difftoolDriver.TargetItemCount, difftool.targetDcpDriver.FilteredCount())
-
+	difftool.logger.Infof("Target bucket item count including tombstones is %v (excluding %v filtered mutations)", difftoolDriver.TargetItemCount, difftool.targetDcpDriver.FilteredCount())
+	if difftool.colFilterOrderedKeys == nil && difftoolDriver.SourceItemCount != difftoolDriver.TargetItemCount {
+		difftool.logger.Infof("Here are the vbuckets with different item counts:")
+		for vb, c1 := range difftoolDriver.SrcVbItemCntMap {
+			c2 := difftoolDriver.TgtVbItemCntMap[vb]
+			if c1 != c2 {
+				difftool.logger.Infof("vb:%v source count %v, target count %v", vb, c1, c2)
+			}
+		}
+	}
 	return err
 }
 
 func (difftool *xdcrDiffTool) runMutationDiffer() {
-	difftool.logger.Infof("runMutationDiffer started\n")
+	difftool.logger.Infof("runMutationDiffer started with compareBody=%v\n", options.compareBody)
 	defer difftool.logger.Infof("runMutationDiffer completed\n")
 
 	err := os.RemoveAll(options.mutationDifferDir)
@@ -659,7 +672,7 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 		options.fileDifferDir, options.mutationDifferDir, int(options.numberOfWorkersForMutationDiffer),
 		int(options.mutationDifferBatchSize), int(options.mutationDifferTimeout), int(options.maxNumOfSendBatchRetry),
 		time.Duration(options.sendBatchRetryInterval)*time.Millisecond,
-		time.Duration(options.sendBatchMaxBackoff)*time.Second, difftool.logger, difftool.srcToTgtColIdsMap,
+		time.Duration(options.sendBatchMaxBackoff)*time.Second, options.compareBody, difftool.logger, difftool.srcToTgtColIdsMap,
 		difftool.srcCapabilities, difftool.tgtCapabilities, difftool.utils)
 	err = mutationDiffer.Run()
 	if err != nil {
