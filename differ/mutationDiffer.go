@@ -45,11 +45,10 @@ type MutationDiffer struct {
 	sourceBucket *GocbcoreAgent
 	targetBucket *GocbcoreAgent
 
-	missingFromSource map[uint32]map[string]*gocbcore.GetResult
-	missingFromTarget map[uint32]map[string]*gocbcore.GetResult
-	srcDiff           map[uint32]map[string][]*gocbcore.GetResult
-	tgtDiff           map[uint32]map[string][]*gocbcore.GetResult
-
+	missingFromSource     map[uint32]map[string]*gocbcore.GetResult
+	missingFromTarget     map[uint32]map[string]*gocbcore.GetResult
+	srcDiff               map[uint32]map[string][]*gocbcore.GetResult
+	tgtDiff               map[uint32]map[string][]*gocbcore.GetResult
 	metaMissingFromSource map[uint32]map[string]*gocbcore.GetMetaResult
 	metaMissingFromTarget map[uint32]map[string]*gocbcore.GetMetaResult
 	metaSrcDiff           map[uint32]map[string][]*gocbcore.GetMetaResult
