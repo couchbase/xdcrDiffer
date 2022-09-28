@@ -809,17 +809,21 @@ func (dw *DifferWorker) diffGetMetaResult() {
 					continue
 				}
 				if isKeyNotFoundError(sourceResult.Error()) && !isKeyNotFoundError(targetResult.Error()) {
-					if _, exists := missingFromSource[srcColId]; !exists {
-						missingFromSource[srcColId] = make(map[string]*gocbcore.GetMetaResult)
+					if !isDeleted(targetResult.GoCbResult().(*gocbcore.GetMetaResult)) {
+						if _, exists := missingFromSource[srcColId]; !exists {
+							missingFromSource[srcColId] = make(map[string]*gocbcore.GetMetaResult)
+						}
+						missingFromSource[srcColId][key] = targetResult.GoCbResult().(*gocbcore.GetMetaResult)
 					}
-					missingFromSource[srcColId][key] = targetResult.GoCbResult().(*gocbcore.GetMetaResult)
 					continue
 				}
 				if !isKeyNotFoundError(sourceResult.Error()) && isKeyNotFoundError(targetResult.Error()) {
-					if _, exists := missingFromTarget[tgtColId]; !exists {
-						missingFromTarget[tgtColId] = make(map[string]*gocbcore.GetMetaResult)
+					if !isDeleted(sourceResult.GoCbResult().(*gocbcore.GetMetaResult)) {
+						if _, exists := missingFromTarget[tgtColId]; !exists {
+							missingFromTarget[tgtColId] = make(map[string]*gocbcore.GetMetaResult)
+						}
+						missingFromTarget[tgtColId][key] = sourceResult.GoCbResult().(*gocbcore.GetMetaResult)
 					}
-					missingFromTarget[tgtColId][key] = sourceResult.GoCbResult().(*gocbcore.GetMetaResult)
 					continue
 				}
 				if !areGetMetaResultsTheSame(sourceResult.GoCbResult().(*gocbcore.GetMetaResult), targetResult.GoCbResult().(*gocbcore.GetMetaResult)) {
