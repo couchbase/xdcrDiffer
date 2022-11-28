@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -79,6 +80,28 @@ func (d *DiffKeysMap) ToFetchEntries(mappings map[uint32][]uint32, migrationHint
 	}
 
 	return fetchList, index
+}
+
+func (d *DiffKeysMap) Merge(other DiffKeysMap) {
+	if d == nil || other == nil {
+		return
+	}
+	for colId, keys := range other {
+		if _, exists := (*d)[colId]; !exists {
+			(*d)[colId] = []string{}
+		}
+		sort.Strings((*d)[colId])
+		for _, key := range keys {
+			i := sort.Search(len((*d)[colId]), func(j int) bool {
+				return key < ((*d)[colId])[j]
+			})
+			if i < len((*d)[colId]) && (*d)[colId][i] == key {
+				// Found already. No need to add
+			} else {
+				(*d)[colId] = append((*d)[colId], key)
+			}
+		}
+	}
 }
 
 // An doc that needs to be fetched multiple times, once for each collectionID
