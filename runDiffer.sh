@@ -25,7 +25,7 @@ function printHelp() {
 	findExec
 
 	cat <<EOF
-Usage: $0 -u <username> -p <password> -h <hostname:port> -s <sourceBucket> -t <targetBucket> -r <remoteClusterName> [-v <targetUrl>] [-n <remoteClusterUsername> -q <remoteClusterPassword>] [-c clean] [-b ]
+Usage: $0 -u <username> -p <password> -h <hostname:port> -s <sourceBucket> -t <targetBucket> -r <remoteClusterName> [-v <targetUrl>] [-n <remoteClusterUsername> -q <remoteClusterPassword>] [-c clean] [-b ] [-e <mutationRetries>]
 
 This script will set up the necessary environment variable to allow the XDCR diff tool to connect to the metakv service in the
 specified source cluster (NOTE: over http://) and retrieve the specified replication spec and run the difftool on it.
@@ -54,7 +54,7 @@ function killBgTail {
 	fi
 }
 
-while getopts ":h:p:u:r:s:t:n:q:v:cb" opt; do
+while getopts ":h:p:u:r:s:t:n:q:v:cb:e:" opt; do
 	case ${opt} in
 	u)
 		username=$OPTARG
@@ -88,6 +88,9 @@ while getopts ":h:p:u:r:s:t:n:q:v:cb" opt; do
 		;;
 	v)
 		targetUrl=$OPTARG
+		;;
+	e)
+		mutationRetries=$OPTARG
 		;;
 	\?)
 		echo "Invalid option: $OPTARG" 1>&2
@@ -181,6 +184,10 @@ fi
 if [[ ! -z "$compareBody" ]]; then
 	execString="${execString} -compareBody"
 	execString="${execString} $compareBody"
+fi
+if [[ ! -z "$mutationRetries" ]];then
+	execString="${execString} -mutationRetries"
+	execString="${execString} $mutationRetries"
 fi
 
 # Execute the differ in background and watch the pid to be finished

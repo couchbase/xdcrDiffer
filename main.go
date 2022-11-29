@@ -116,6 +116,10 @@ var options struct {
 	bucketBufferCapacity int
 	// Use Get instead of GetMeta to compare document body
 	compareBody bool
+	// Number of times for mutationsDiffer to retry to resolve doc differences
+	mutationDifferRetries int
+	// Number of secs to wait between retries
+	mutationDifferRetriesWaitSecs int
 }
 
 func argParse() {
@@ -211,6 +215,10 @@ func argParse() {
 		"  number of items kept in memory per binary buffer bucket")
 	flag.BoolVar(&options.compareBody, "compareBody", false,
 		" whether to use Get instead of GetMeta during mutationDiff")
+	flag.IntVar(&options.mutationDifferRetries, "mutationRetries", 0,
+		"Additional number of times to retry to resolve the mutation differences")
+	flag.IntVar(&options.mutationDifferRetriesWaitSecs, "mutationRetriesWaitSecs", 60,
+		"Seconds to wait in between retries for mutation differences")
 
 	flag.Parse()
 }
@@ -673,7 +681,8 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 		int(options.mutationDifferBatchSize), int(options.mutationDifferTimeout), int(options.maxNumOfSendBatchRetry),
 		time.Duration(options.sendBatchRetryInterval)*time.Millisecond,
 		time.Duration(options.sendBatchMaxBackoff)*time.Second, options.compareBody, difftool.logger, difftool.srcToTgtColIdsMap,
-		difftool.srcCapabilities, difftool.tgtCapabilities, difftool.utils)
+		difftool.srcCapabilities, difftool.tgtCapabilities, difftool.utils, options.mutationDifferRetries,
+		options.mutationDifferRetriesWaitSecs)
 	err = mutationDiffer.Run()
 	if err != nil {
 		difftool.logger.Errorf("Error from runMutationDiffer = %v\n", err)

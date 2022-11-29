@@ -106,6 +106,10 @@ Usage of ./xdcrDiffer:
     	username for target cluster (default "Administrator")
   -verifyDiffKeys
     	whether to verify diff keys through aysnc Get on clusters (default true)
+  -mutationRetries
+        Additional number of times to retry to resolve the mutation differences
+  -mutationRetriesWaitSecs
+        Seconds to wait in between retries for mutation differences
 ```
 
 A few options worth noting:
@@ -116,6 +120,7 @@ A few options worth noting:
 - verifyDiffKeys - By default this is enabled, which uses a non-stream based, key-by-key retrieval and validation. This is what is considered the second pass of verification after the first pass.
 - numberOfBins - Each Couchbase bucket contains 1024 vbuckets. For optimizing sorting, each vbucket is also sub-divided into bins as the data are streamed before the diff operation.
 - numberOfFileDesc - If the tool has exhausted all system file descriptors, this option allows the tool to limit the max number of concurently open file descriptors.
+- mutationRetries - If there are differences, the tool will retry a specified amount of times to try to reconcile potential in-flight differences
 
 #### Running with TLS encrypted traffic
 The xdcrDiffer supports running with encrypted traffic such that no data (or metadata) is sent or received in plain text over the wire. To run TLS, the followings need to be in place:
