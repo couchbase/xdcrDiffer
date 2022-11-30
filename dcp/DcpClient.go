@@ -217,7 +217,7 @@ func initializeClusterWithSecurity(dcpDriver *DcpDriver) (*gocb.Cluster, error) 
 	clusterOpts := gocb.ClusterOptions{}
 
 	if dcpDriver.ref.HttpAuthMech() == xdcrBase.HttpAuthMechHttps {
-		tlsCert := tls.Certificate{Certificate: [][]byte{dcpDriver.ref.Certificate()}}
+		tlsCert := tls.Certificate{Certificate: [][]byte{dcpDriver.ref.Certificates()}}
 		clusterOpts.Authenticator = gocb.CertificateAuthenticator{ClientCertificate: &tlsCert}
 	} else {
 		clusterOpts.Authenticator = gocb.PasswordAuthenticator{
@@ -260,7 +260,7 @@ func initializeBucketWithSecurity(dcpDriver *DcpDriver, kvVbMap map[string][]uin
 	if dcpDriver.ref.HttpAuthMech() == xdcrBase.HttpAuthMechHttps {
 		auth = &base.CertificateAuth{
 			PasswordAuth:     pwAuth,
-			CertificateBytes: dcpDriver.ref.Certificate(),
+			CertificateBytes: dcpDriver.ref.Certificates(),
 		}
 
 		sslPort, found := kvSSLPortMap[bucketConnStr]
@@ -419,7 +419,7 @@ func initializeSSLPorts(dcpDriver *DcpDriver) (map[string]uint16, error) {
 	}
 	// By default the url passed in should be ns_server
 	kvSSLPortMap, err = dcpDriver.utils.GetMemcachedSSLPortMap(connStr, dcpDriver.ref.UserName(),
-		dcpDriver.ref.Password(), dcpDriver.ref.HttpAuthMech(), dcpDriver.ref.Certificate(),
+		dcpDriver.ref.Password(), dcpDriver.ref.HttpAuthMech(), dcpDriver.ref.Certificates(),
 		dcpDriver.ref.SANInCertificate(), dcpDriver.ref.ClientCertificate(), dcpDriver.ref.ClientKey(),
 		dcpDriver.bucketName, dcpDriver.logger, false)
 
@@ -437,7 +437,7 @@ func initializeKVVBMap(dcpDriver *DcpDriver) (map[string][]uint16, error) {
 	}
 
 	_, _, _, _, _, kvVbMap, err = dcpDriver.utils.BucketValidationInfo(connStr, dcpDriver.bucketName, dcpDriver.ref.UserName(),
-		dcpDriver.ref.Password(), dcpDriver.ref.HttpAuthMech(), dcpDriver.ref.Certificate(),
+		dcpDriver.ref.Password(), dcpDriver.ref.HttpAuthMech(), dcpDriver.ref.Certificates(),
 		dcpDriver.ref.SANInCertificate(), dcpDriver.ref.ClientCertificate(), dcpDriver.ref.ClientKey(),
 		dcpDriver.logger)
 

@@ -31,10 +31,10 @@ deps:
 	$(GOGET) github.com/couchbase/gocb
 	$(GOGET) github.com/couchbase/gocb/v2
 	$(GOGET) github.com/couchbaselabs/gojsonsm@v1.0.0
-	$(GOGET) github.com/couchbase/goxdcr@v7.1.0-1003_2
+	$(GOGET) github.com/couchbase/goxdcr@v8.0.0-1168
 	$(GOGET) github.com/rcrowley/go-metrics
 	$(GOGET) github.com/couchbase/cbauth
-	$(GOGET) github.com/couchbase/gomemcached@v0.1.3
+	$(GOGET) github.com/couchbase/gomemcached@v0.2.1
 	$(GOGET) github.com/couchbase/go-couchbase@v0.1.0
 	$(GOGET) github.com/couchbase/goutils@v0.1.0
 	$(GOGET) golang.org/x/crypto

@@ -206,6 +206,7 @@ It won’t affect the accuracy of the result, but it’ll cause differ to run lo
 
 ## Known Limitations
 1. No dynamic topology change support. If VBs are moved during runtime, the tool does not handle it well.
+2. Strict security level is not supported at this time.
 
 ## License
 
