@@ -20,12 +20,15 @@ import (
 	"github.com/couchbase/goxdcr/metadata_svc"
 	"github.com/couchbase/goxdcr/service_def"
 	service_def_mock "github.com/couchbase/goxdcr/service_def/mocks"
+	"github.com/couchbase/goxdcr/service_impl"
+	"github.com/couchbase/goxdcr/streamApiWatcher"
 	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"github.com/stretchr/testify/mock"
 	"io/ioutil"
 	"net"
 	"os"
 	"os/signal"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -251,11 +254,13 @@ type xdcrDiffTool struct {
 
 	xdcrTopologySvc service_def.XDCRCompTopologySvc
 
-	selfRef          *metadata.RemoteClusterReference
-	selfRefPopulated uint32
-	specifiedRef     *metadata.RemoteClusterReference
-	specifiedSpec    *metadata.ReplicationSpecification
-	filter           xdcrParts.Filter
+	selfRef             *metadata.RemoteClusterReference
+	selfRefPopulated    uint32
+	specifiedRef        *metadata.RemoteClusterReference
+	specifiedSpec       *metadata.ReplicationSpecification
+	filter              xdcrParts.Filter
+	selfDefaultPoolInfo map[string]interface{}
+	selfPoolsNodes      map[string]interface{}
 
 	srcCapabilities metadata.Capability
 	tgtCapabilities metadata.Capability
@@ -310,29 +315,46 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 		uiLogSvcMock.On("Write", mock.Anything).Run(func(args mock.Arguments) { fmt.Printf("%v", args.Get(0).(string)) }).Return(nil)
 		xdcrTopologyMock := &service_def_mock.XDCRCompTopologySvc{}
 		setupXdcrToplogyMock(xdcrTopologyMock, difftool)
-		clusterInfoSvcMock := &service_def_mock.ClusterInfoSvc{}
 		resolverSvcMock := &service_def_mock.ResolverSvcIface{}
 		checkpointSvcMock := &service_def_mock.CheckpointsService{}
 		manifestsSvcMock := &service_def_mock.ManifestsService{}
 		manifestsSvcMock.On("GetSourceManifests", mock.Anything).Return(nil, service_def.MetadataNotFoundErr)
 		manifestsSvcMock.On("GetTargetManifests", mock.Anything).Return(nil, service_def.MetadataNotFoundErr)
 
+		replicationSettingSvc := metadata_svc.NewReplicationSettingsSvc(difftool.metadataSvc, nil, xdcrTopologyMock)
+
 		difftool.remoteClusterSvc, err = metadata_svc.NewRemoteClusterService(uiLogSvcMock, difftool.metadataSvc, xdcrTopologyMock,
-			clusterInfoSvcMock, xdcrLog.DefaultLoggerContext, difftool.utils)
+			xdcrLog.DefaultLoggerContext, difftool.utils)
 		if err != nil {
 			return nil, err
 		}
 
 		difftool.replicationSpecSvc, err = metadata_svc.NewReplicationSpecService(uiLogSvcMock, difftool.remoteClusterSvc,
-			difftool.metadataSvc, xdcrTopologyMock, clusterInfoSvcMock,
-			resolverSvcMock, difftool.logger.LoggerContext(), difftool.utils)
+			difftool.metadataSvc, xdcrTopologyMock, resolverSvcMock, difftool.logger.LoggerContext(), difftool.utils,
+			replicationSettingSvc)
 		if err != nil {
 			return nil, err
 		}
 
+		err = difftool.retrieveReplicationSpecInfo()
+		if err != nil {
+			os.Exit(1)
+		}
+
+		securitySvc := &service_def_mock.SecuritySvc{}
+		setupSecuritySvcMock(securitySvc)
+		err = setupMyKVNodes(xdcrTopologyMock, difftool)
+		if err != nil {
+			return nil, err
+		}
+
+		bucketTopologySvc, err := service_impl.NewBucketTopologyService(xdcrTopologyMock, difftool.remoteClusterSvc,
+			difftool.utils, xdcrBase.TopologyChangeCheckInterval, difftool.logger.LoggerContext(),
+			difftool.replicationSpecSvc, xdcrBase.HealthCheckInterval, securitySvc, streamApiWatcher.GetStreamApiWatcher)
+
 		difftool.collectionsManifestsSvc, err = metadata_svc.NewCollectionsManifestService(difftool.remoteClusterSvc,
 			difftool.replicationSpecSvc, uiLogSvcMock, difftool.logger.LoggerContext(), difftool.utils, checkpointSvcMock,
-			xdcrTopologyMock, manifestsSvcMock)
+			xdcrTopologyMock, bucketTopologySvc, manifestsSvcMock)
 		if err != nil {
 			return nil, err
 		}
@@ -344,11 +366,67 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 	return difftool, err
 }
 
+func setupSecuritySvcMock(securitySvc *service_def_mock.SecuritySvc) {
+	securitySvc.On("IsClusterEncryptionLevelStrict").Return(false)
+}
+
 // This may be re-set up once self-reference is populated
 func setupXdcrToplogyMock(xdcrTopologyMock *service_def_mock.XDCRCompTopologySvc, diffTool *xdcrDiffTool) {
 	xdcrTopologyMock.On("IsMyClusterEnterprise").Return(true, nil)
+	xdcrTopologyMock.On("IsKVNode").Return(true, nil)
+	xdcrTopologyMock.On("IsMyClusterEncryptionLevelStrict").Return(false)
 	setupTopologyMockCredentials(xdcrTopologyMock, diffTool)
 	setupTopologyMockConnectionString(xdcrTopologyMock, diffTool)
+}
+
+func setupMyKVNodes(topologyMock *service_def_mock.XDCRCompTopologySvc, diffTool *xdcrDiffTool) error {
+	// As of XDCR v8, pools/nodes endpoint is gone so we need to do things the legacy way
+	nodesInfo := diffTool.selfPoolsNodes
+	if nodes, ok := nodesInfo[base.NodesKey]; !ok {
+		return fmt.Errorf("%v is not found from pools/nodes output", base.NodesKey)
+	} else if nodesList, ok := nodes.([]interface{}); !ok {
+		return fmt.Errorf("nodesList is not an interface list")
+	} else {
+		var found bool
+		for _, node := range nodesList {
+			nodeInfoMap, ok := node.(map[string]interface{})
+			if !ok {
+				// should never get here
+				return fmt.Errorf("node type is %v", reflect.TypeOf(node))
+			}
+			thisNode, ok := nodeInfoMap[xdcrBase.ThisNodeKey]
+			if ok {
+				thisNodeBool, ok := thisNode.(bool)
+				if !ok {
+					// should never get here
+					return fmt.Errorf("thisNode is %v", reflect.TypeOf(thisNode))
+				}
+				if thisNodeBool {
+					// found current node
+					found = true
+				}
+			}
+			if found {
+				ports := nodeInfoMap[xdcrBase.PortsKey]
+				portsMap := ports.(map[string]interface{})
+				directPort := portsMap[xdcrBase.DirectPortKey]
+				directPortFloat := directPort.(float64)
+				memcachedPort := uint16(directPortFloat)
+
+				hostAddr := nodeInfoMap[xdcrBase.HostNameKey]
+				hostAddrStr := hostAddr.(string)
+
+				hostName := xdcrBase.GetHostName(hostAddrStr)
+				memcachedAddr := xdcrBase.GetHostAddr(hostName, memcachedPort)
+				topologyMock.On("MyKVNodes").Return([]string{memcachedAddr}, nil)
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("Unable to set memcached port")
+		}
+	}
+	return nil
 }
 
 func setupTopologyMockConnectionString(xdcrTopologyMock *service_def_mock.XDCRCompTopologySvc, diffTool *xdcrDiffTool) {
@@ -396,7 +474,7 @@ func setupTopologyMockCredentials(xdcrTopologyMock *service_def_mock.XDCRCompTop
 	}
 	getCert := func() []byte {
 		if atomic.LoadUint32(&diffTool.selfRefPopulated) == 1 {
-			return diffTool.selfRef.Certificate()
+			return diffTool.selfRef.Certificates()
 		} else {
 			return nil
 		}
@@ -460,11 +538,7 @@ func main() {
 		}
 	}
 
-	if !legacyMode {
-		if err := difftool.retrieveReplicationSpecInfo(); err != nil {
-			os.Exit(1)
-		}
-	} else {
+	if legacyMode {
 		if options.enforceTLS {
 			fmt.Printf("enforceTLS option is not compatible with legacyMode")
 			os.Exit(1)
@@ -555,7 +629,11 @@ func (difftool *xdcrDiffTool) createFilterIfNecessary() error {
 	}
 	difftool.logger.Infof("Found filtering expression: %v\n", expr)
 
-	filter, err := xdcrParts.NewFilter("XDCRDiffToolFilter", expr, difftool.utils)
+	var filterMode xdcrBase.FilterExpDelType
+	if difftool.specifiedSpec != nil && difftool.specifiedSpec.Settings != nil {
+		filterMode = difftool.specifiedSpec.Settings.GetExpDelMode()
+	}
+	filter, err := xdcrParts.NewFilter("XDCRDiffToolFilter", expr, difftool.utils, filterMode.IsSkipReplicateUncommittedTxnSet())
 	difftool.filter = filter
 	return err
 }
@@ -866,7 +944,8 @@ func (difftool *xdcrDiffTool) populateSelfRef() error {
 
 	// Only grab certificate if on a loopback device
 	if difftool.specifiedRef.IsHttps() && isURLLoopBack(options.sourceUrl) {
-		cert, err := utils.GetCertificate(difftool.utils, options.sourceUrl, options.sourceUsername, options.sourcePassword, xdcrBase.HttpAuthMechPlain)
+		cert, err := utils.GetCertificate(difftool.utils, options.sourceUrl, options.sourceUsername,
+			options.sourcePassword, xdcrBase.HttpAuthMechPlain)
 		if err != nil {
 			return err
 		}
@@ -877,11 +956,15 @@ func (difftool *xdcrDiffTool) populateSelfRef() error {
 		}
 
 		difftool.selfRef.Certificate_ = cert
-		refHttpAuthMech, _, _, err := difftool.utils.GetSecuritySettingsAndDefaultPoolInfo(options.sourceUrl, internalHttpsHostname, difftool.selfRef.UserName(), difftool.selfRef.Password(), difftool.selfRef.Certificate(), difftool.selfRef.ClientCertificate(), difftool.selfRef.ClientKey(), difftool.selfRef.IsHalfEncryption(), difftool.logger)
+		refHttpAuthMech, defaultPoolInfo, _, err := difftool.utils.GetSecuritySettingsAndDefaultPoolInfo(options.sourceUrl,
+			internalHttpsHostname, difftool.selfRef.UserName(), difftool.selfRef.Password(),
+			difftool.selfRef.Certificates(), difftool.selfRef.ClientCertificate(), difftool.selfRef.ClientKey(),
+			difftool.selfRef.IsHalfEncryption(), difftool.logger)
 		if err != nil {
 			return fmt.Errorf("unable to get security settings: %v", err)
 		}
 		difftool.selfRef.SetHttpAuthMech(refHttpAuthMech)
+		difftool.selfDefaultPoolInfo = defaultPoolInfo
 
 		if refHttpAuthMech == xdcrBase.HttpAuthMechHttps {
 			// Need to get the secure port and attach it
@@ -893,6 +976,12 @@ func (difftool *xdcrDiffTool) populateSelfRef() error {
 				difftool.logger.Infof("Received SSL port to be %v and setting TLS hostname to %v", internalSSLPort, sslHostString)
 			}
 		}
+	}
+
+	poolsNodesPath := "/pools/nodes"
+	err, _ := difftool.utils.QueryRestApi(options.sourceUrl, poolsNodesPath, false, xdcrBase.MethodGet, "", nil, 0, &difftool.selfPoolsNodes, nil)
+	if err != nil {
+		return fmt.Errorf("unable to get pools/nodes information: %v", err)
 	}
 
 	// Do this last
@@ -922,7 +1011,7 @@ func (difftool *xdcrDiffTool) retrieveClustersCapabilities(legacyMode bool) erro
 		return fmt.Errorf("retrieveClusterCapabilities.myConnStr(%v) - %v", difftool.selfRef.Name(), err)
 	}
 	defaultPoolInfo, err := difftool.utils.GetClusterInfo(connStr, xdcrBase.DefaultPoolPath, difftool.selfRef.UserName(),
-		difftool.selfRef.Password(), difftool.selfRef.HttpAuthMech(), difftool.selfRef.Certificate(),
+		difftool.selfRef.Password(), difftool.selfRef.HttpAuthMech(), difftool.selfRef.Certificates(),
 		difftool.selfRef.SANInCertificate(), difftool.selfRef.ClientCertificate(), difftool.selfRef.ClientKey(),
 		difftool.logger)
 	if err != nil {

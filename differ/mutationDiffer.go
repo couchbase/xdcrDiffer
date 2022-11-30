@@ -1092,7 +1092,7 @@ func (d *MutationDiffer) openBucket(bucketName string, reference *metadata.Remot
 	if reference.HttpAuthMech() == xdcrBase.HttpAuthMechHttps {
 		auth = &base.CertificateAuth{
 			PasswordAuth:     pwAuth,
-			CertificateBytes: reference.Certificate(),
+			CertificateBytes: reference.Certificates(),
 		}
 		err = d.initializeKvSSLMap(source)
 		if err != nil {
@@ -1149,12 +1149,12 @@ func (d *MutationDiffer) initializeKvSSLMap(source bool) error {
 
 	if source {
 		d.srcKvSSLPortMap, err = d.utils.GetMemcachedSSLPortMap(connStr, d.sourceReference.UserName(),
-			d.sourceReference.Password(), d.sourceReference.HttpAuthMech(), d.sourceReference.Certificate(),
+			d.sourceReference.Password(), d.sourceReference.HttpAuthMech(), d.sourceReference.Certificates(),
 			d.sourceReference.SANInCertificate(), d.sourceReference.ClientCertificate(), d.sourceReference.ClientKey(),
 			d.sourceBucketName, d.logger, false)
 	} else {
 		d.tgtKvSSLPortMap, err = d.utils.GetMemcachedSSLPortMap(connStr, d.targetReference.UserName(),
-			d.targetReference.Password(), d.targetReference.HttpAuthMech(), d.targetReference.Certificate(),
+			d.targetReference.Password(), d.targetReference.HttpAuthMech(), d.targetReference.Certificates(),
 			d.targetReference.SANInCertificate(), d.targetReference.ClientCertificate(), d.targetReference.ClientKey(),
 			d.targetBucketName, d.logger, false)
 	}
@@ -1175,12 +1175,12 @@ func (d *MutationDiffer) initializeKVVBMap(source bool) error {
 
 	if source {
 		_, _, _, _, _, d.srcKvVbMap, err = d.utils.BucketValidationInfo(connStr, d.sourceBucketName, d.sourceReference.UserName(),
-			d.sourceReference.Password(), d.sourceReference.HttpAuthMech(), d.sourceReference.Certificate(),
+			d.sourceReference.Password(), d.sourceReference.HttpAuthMech(), d.sourceReference.Certificates(),
 			d.sourceReference.SANInCertificate(), d.sourceReference.ClientCertificate(), d.sourceReference.ClientKey(),
 			d.logger)
 	} else {
 		_, _, _, _, _, d.tgtKvVbMap, err = d.utils.BucketValidationInfo(connStr, d.targetBucketName, d.targetReference.UserName(),
-			d.targetReference.Password(), d.targetReference.HttpAuthMech(), d.targetReference.Certificate(),
+			d.targetReference.Password(), d.targetReference.HttpAuthMech(), d.targetReference.Certificates(),
 			d.targetReference.SANInCertificate(), d.targetReference.ClientCertificate(), d.targetReference.ClientKey(),
 			d.logger)
 	}

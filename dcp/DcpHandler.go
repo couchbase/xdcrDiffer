@@ -16,6 +16,7 @@ import (
 	gocbcore "github.com/couchbase/gocbcore/v9"
 	"github.com/couchbase/gomemcached"
 	mcc "github.com/couchbase/gomemcached/client"
+	xdcrBase "github.com/couchbase/goxdcr/base"
 	xdcrParts "github.com/couchbase/goxdcr/base/filter"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	xdcrUtils "github.com/couchbase/goxdcr/utils"
@@ -103,7 +104,7 @@ func (d *DcpHandler) compileMigrCollectionFiltersIfNeeded() error {
 	}
 
 	for i, filterStr := range d.colMigrationFilters {
-		filter, err := xdcrParts.NewFilter(fmt.Sprintf("%d", i), filterStr, d.utils)
+		filter, err := xdcrParts.NewFilter(fmt.Sprintf("%d", i), filterStr, d.utils, true)
 		if err != nil {
 			return fmt.Errorf("compiling %v resulted in: %v", filterStr, err)
 		}
@@ -446,8 +447,8 @@ func (m *Mutation) IsSystemEvent() bool {
 	return m.OpCode == gomemcached.DCP_SYSTEM_EVENT
 }
 
-func (m *Mutation) ToUprEvent() *mcc.UprEvent {
-	return &mcc.UprEvent{
+func (m *Mutation) ToUprEvent() *xdcrBase.WrappedUprEvent {
+	uprEvent := &mcc.UprEvent{
 		Opcode:       m.OpCode,
 		VBucket:      m.Vbno,
 		DataType:     m.Datatype,
@@ -459,23 +460,33 @@ func (m *Mutation) ToUprEvent() *mcc.UprEvent {
 		Seqno:        m.Seqno,
 		CollectionId: m.ColId,
 	}
+
+	return &xdcrBase.WrappedUprEvent{
+		UprEvent:     uprEvent,
+		ColNamespace: nil,
+		Flags:        0,
+		ByteSliceGetter: func(size uint64) ([]byte, error) {
+			return make([]byte, int(size)), nil
+		},
+	}
 }
 
 // serialize mutation into []byte
 // format:
-//  keyLen   - 2 bytes
-//  Key  - length specified by keyLen
-//  Seqno    - 8 bytes
-//  RevId    - 8 bytes
-//  Cas      - 8 bytes
-//  Flags    - 4 bytes
-//  Expiry   - 4 bytes
-//  opType   - 2 byte
-//  Datatype - 2 byte
-//  hash     - 64 bytes
-//  collectionId - 4 bytes
-//  colFiltersLen - 1 byte (number of collection migration filters)
-//  (per col filter) - 1 byte
+//
+//	keyLen   - 2 bytes
+//	Key  - length specified by keyLen
+//	Seqno    - 8 bytes
+//	RevId    - 8 bytes
+//	Cas      - 8 bytes
+//	Flags    - 4 bytes
+//	Expiry   - 4 bytes
+//	opType   - 2 byte
+//	Datatype - 2 byte
+//	hash     - 64 bytes
+//	collectionId - 4 bytes
+//	colFiltersLen - 1 byte (number of collection migration filters)
+//	(per col filter) - 1 byte
 func (mut *Mutation) Serialize() []byte {
 	keyLen := len(mut.Key)
 	ret := make([]byte, base.GetFixedSizeMutationLen(keyLen, mut.ColFiltersMatched))
