@@ -610,29 +610,24 @@ func setupDirectories() error {
 	return nil
 }
 
-func (difftool *xdcrDiffTool) createFilterIfNecessary() error {
+func (difftool *xdcrDiffTool) createFilter() error {
 	var ok bool
 	var expr string
 	expr, ok = difftool.specifiedSpec.Settings.Values[metadata.FilterExpressionKey].(string)
-	if !ok || len(expr) == 0 {
-		return nil
+	filterMode := difftool.specifiedSpec.Settings.GetExpDelMode()
+	if ok && len(expr) > 0 {
+		var filterVersion xdcrBase.FilterVersionType
+		if filterVersion, ok = difftool.specifiedSpec.Settings.Values[metadata.FilterVersionKey].(xdcrBase.FilterVersionType); !ok {
+			err := fmt.Errorf("Unable to find filter version given filter expression %v\nsettings:%v\n", expr, difftool.specifiedSpec.Settings)
+			return err
+		}
+
+		if filterVersion == xdcrBase.FilterVersionKeyOnly {
+			expr = xdcrBase.UpgradeFilter(expr)
+		}
+		difftool.logger.Infof("Found filtering expression: %v\n", expr)
 	}
 
-	var filterVersion xdcrBase.FilterVersionType
-	if filterVersion, ok = difftool.specifiedSpec.Settings.Values[metadata.FilterVersionKey].(xdcrBase.FilterVersionType); !ok {
-		err := fmt.Errorf("Unable to find filter version given filter expression %v\nsettings:%v\n", expr, difftool.specifiedSpec.Settings)
-		return err
-	}
-
-	if filterVersion == xdcrBase.FilterVersionKeyOnly {
-		expr = xdcrBase.UpgradeFilter(expr)
-	}
-	difftool.logger.Infof("Found filtering expression: %v\n", expr)
-
-	var filterMode xdcrBase.FilterExpDelType
-	if difftool.specifiedSpec != nil && difftool.specifiedSpec.Settings != nil {
-		filterMode = difftool.specifiedSpec.Settings.GetExpDelMode()
-	}
 	filter, err := xdcrParts.NewFilter("XDCRDiffToolFilter", expr, difftool.utils, filterMode.IsSkipReplicateUncommittedTxnSet())
 	difftool.filter = filter
 	return err
@@ -655,7 +650,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		fileDescPool = fdp.NewFileDescriptorPool(int(options.numberOfFileDesc))
 	}
 
-	if err := difftool.createFilterIfNecessary(); err != nil {
+	if err := difftool.createFilter(); err != nil {
 		difftool.logger.Errorf("Error creating filter: %v", err.Error())
 		os.Exit(1)
 	}
