@@ -23,6 +23,8 @@ import (
 	"github.com/couchbase/goxdcr/service_impl"
 	"github.com/couchbase/goxdcr/streamApiWatcher"
 	xdcrUtils "github.com/couchbase/goxdcr/utils"
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/mock"
 	"io/ioutil"
 	"net"
@@ -125,105 +127,113 @@ var options struct {
 	mutationDifferRetriesWaitSecs int
 }
 
+// Deprecated - do not add more keys, but instead, use viper
 func argParse() {
-	flag.StringVar(&options.sourceUrl, "sourceUrl", "",
+	flag.StringVar(&options.sourceUrl, base.SourceUrlKey, "",
 		"url for source cluster")
-	flag.StringVar(&options.sourceUsername, "sourceUsername", "",
+	flag.StringVar(&options.sourceUsername, base.SourceUsernameKey, "",
 		"username for source cluster")
-	flag.StringVar(&options.sourcePassword, "sourcePassword", "",
+	flag.StringVar(&options.sourcePassword, base.SourcePasswordKey, "",
 		"password for source cluster")
-	flag.StringVar(&options.sourceBucketName, "sourceBucketName", "",
+	flag.StringVar(&options.sourceBucketName, base.SourceBucketNameKey, "",
 		"bucket name for source cluster")
-	flag.StringVar(&options.remoteClusterName, "remoteClusterName", "",
+	flag.StringVar(&options.remoteClusterName, base.RemoteClusterNameKey, "",
 		"Remote cluster reference name used when creating it")
-	flag.StringVar(&options.sourceFileDir, "sourceFileDir", base.SourceFileDir,
+	flag.StringVar(&options.sourceFileDir, base.SourceFileDirKey, base.SourceFileDir,
 		"directory to store mutations in source cluster")
-	flag.StringVar(&options.targetUrl, "targetUrl", "",
+	flag.StringVar(&options.targetUrl, base.TargetUrlKey, "",
 		"url for target cluster")
-	flag.StringVar(&options.targetUsername, "targetUsername", "",
+	flag.StringVar(&options.targetUsername, base.TargetUsernameKey, "",
 		"username for target cluster")
-	flag.StringVar(&options.targetPassword, "targetPassword", "",
+	flag.StringVar(&options.targetPassword, base.TargetPasswordKey, "",
 		"password for target cluster")
-	flag.StringVar(&options.targetBucketName, "targetBucketName", "",
+	flag.StringVar(&options.targetBucketName, base.TargetBucketNameKey, "",
 		"bucket name for target cluster")
-	flag.StringVar(&options.targetFileDir, "targetFileDir", base.TargetFileDir,
+	flag.StringVar(&options.targetFileDir, base.TargetFileDirKey, base.TargetFileDir,
 		"directory to store mutations in target cluster")
-	flag.Uint64Var(&options.numberOfSourceDcpClients, "numberOfSourceDcpClients", 1,
+	flag.Uint64Var(&options.numberOfSourceDcpClients, base.NumberOfSourceDcpClientsKey, 1,
 		"number of source dcp clients")
-	flag.Uint64Var(&options.numberOfWorkersPerSourceDcpClient, "numberOfWorkersPerSourceDcpClient", 64,
+	flag.Uint64Var(&options.numberOfWorkersPerSourceDcpClient, base.NumberOfWorkersPerSourceDcpClientKey, 64,
 		"number of workers for each source dcp client")
-	flag.Uint64Var(&options.numberOfTargetDcpClients, "numberOfTargetDcpClients", 1,
+	flag.Uint64Var(&options.numberOfTargetDcpClients, base.NumberOfTargetDcpClientsKey, 1,
 		"number of target dcp clients")
-	flag.Uint64Var(&options.numberOfWorkersPerTargetDcpClient, "numberOfWorkersPerTargetDcpClient", 64,
+	flag.Uint64Var(&options.numberOfWorkersPerTargetDcpClient, base.NumberOfWorkersPerTargetDcpClientKey, 64,
 		"number of workers for each target dcp client")
 	flag.Uint64Var(&options.numberOfWorkersForFileDiffer, "numberOfWorkersForFileDiffer", 30,
 		"number of worker threads for file differ ")
-	flag.Uint64Var(&options.numberOfWorkersForMutationDiffer, "numberOfWorkersForMutationDiffer", 30,
+	flag.Uint64Var(&options.numberOfWorkersForMutationDiffer, base.NumberOfWorkersForMutationDifferKey, 30,
 		"number of worker threads for mutation differ ")
-	flag.Uint64Var(&options.numberOfBins, "numberOfBins", 5,
+	flag.Uint64Var(&options.numberOfBins, base.NumberOfBinsKey, 5,
 		"number of buckets per vbucket")
-	flag.Uint64Var(&options.numberOfFileDesc, "numberOfFileDesc", 500,
+	flag.Uint64Var(&options.numberOfFileDesc, base.NumberOfFileDescKey, 500,
 		"number of file descriptors")
-	flag.Uint64Var(&options.completeByDuration, "completeByDuration", 0,
+	flag.Uint64Var(&options.completeByDuration, base.CompleteByDurationKey, 0,
 		"duration that the tool should run")
-	flag.BoolVar(&options.completeBySeqno, "completeBySeqno", true,
+	flag.BoolVar(&options.completeBySeqno, base.CompleteBySeqnoKey, true,
 		"whether tool should automatically complete (after processing all mutations at start time)")
-	flag.StringVar(&options.checkpointFileDir, "checkpointFileDir", base.CheckpointFileDir,
+	flag.StringVar(&options.checkpointFileDir, base.CheckpointFileDirKey, base.CheckpointFileDir,
 		"directory for checkpoint files")
-	flag.StringVar(&options.oldSourceCheckpointFileName, "oldSourceCheckpointFileName", "",
+	flag.StringVar(&options.oldSourceCheckpointFileName, base.OldSourceCheckpointFileNameKey, "",
 		"old source checkpoint file to load from when tool starts")
 	flag.StringVar(&options.oldTargetCheckpointFileName, "oldTargetCheckpointFileName", "",
 		"old target checkpoint file to load from when tool starts")
-	flag.StringVar(&options.newCheckpointFileName, "newCheckpointFileName", "",
+	flag.StringVar(&options.newCheckpointFileName, base.NewCheckpointFileNameKey, "",
 		"new checkpoint file to write to when tool shuts down")
-	flag.StringVar(&options.fileDifferDir, "fileDifferDir", base.FileDifferDir,
+	flag.StringVar(&options.fileDifferDir, base.FileDifferDirKey, base.FileDifferDir,
 		" directory for storing diffs generated by file differ")
-	flag.StringVar(&options.mutationDifferDir, "mutationDifferDir", base.MutationDifferDir,
+	flag.StringVar(&options.mutationDifferDir, base.MutationDifferDirKey, base.MutationDifferDir,
 		" output directory for mutation differ")
-	flag.Uint64Var(&options.mutationDifferBatchSize, "mutationDifferBatchSize", 100,
+	flag.Uint64Var(&options.mutationDifferBatchSize, base.MutationDifferBatchSizeKey, 100,
 		"size of batch used by mutation differ")
-	flag.Uint64Var(&options.mutationDifferTimeout, "mutationDifferTimeout", 30,
+	flag.Uint64Var(&options.mutationDifferTimeout, base.MutationDifferTimeoutKey, 30,
 		"timeout, in seconds, used by mutation differ")
-	flag.Uint64Var(&options.sourceDcpHandlerChanSize, "sourceDcpHandlerChanSize", base.DcpHandlerChanSize,
+	flag.Uint64Var(&options.sourceDcpHandlerChanSize, base.SourceDcpHandlerChanSizeKey, base.DcpHandlerChanSize,
 		"size of source dcp handler channel")
-	flag.Uint64Var(&options.targetDcpHandlerChanSize, "targetDcpHandlerChanSize", base.DcpHandlerChanSize,
+	flag.Uint64Var(&options.targetDcpHandlerChanSize, base.TargetDcpHandlerChanSizeKey, base.DcpHandlerChanSize,
 		"size of target dcp handler channel")
-	flag.Uint64Var(&options.bucketOpTimeout, "bucketOpTimeout", base.BucketOpTimeout,
+	flag.Uint64Var(&options.bucketOpTimeout, base.BucketOpTimeoutKey, base.BucketOpTimeout,
 		" timeout for bucket for stats collection, in seconds")
-	flag.Uint64Var(&options.maxNumOfGetStatsRetry, "maxNumOfGetStatsRetry", base.MaxNumOfGetStatsRetry,
+	flag.Uint64Var(&options.maxNumOfGetStatsRetry, base.MaxNumOfGetStatsRetryKey, base.MaxNumOfGetStatsRetry,
 		"max number of retry for get stats")
-	flag.Uint64Var(&options.maxNumOfSendBatchRetry, "maxNumOfSendBatchRetry", base.MaxNumOfSendBatchRetry,
+	flag.Uint64Var(&options.maxNumOfSendBatchRetry, base.MaxNumOfSendBatchRetryKey, base.MaxNumOfSendBatchRetry,
 		"max number of retry for send batch")
-	flag.Uint64Var(&options.getStatsRetryInterval, "getStatsRetryInterval", base.GetStatsRetryInterval,
+	flag.Uint64Var(&options.getStatsRetryInterval, base.GetStatsRetryIntervalKey, base.GetStatsRetryInterval,
 		" retry interval for get stats, in seconds")
-	flag.Uint64Var(&options.sendBatchRetryInterval, "sendBatchRetryInterval", base.SendBatchRetryInterval,
+	flag.Uint64Var(&options.sendBatchRetryInterval, base.SendBatchRetryIntervalKey, base.SendBatchRetryInterval,
 		"retry interval for send batch, in milliseconds")
-	flag.Uint64Var(&options.getStatsMaxBackoff, "getStatsMaxBackoff", base.GetStatsMaxBackoff,
+	flag.Uint64Var(&options.getStatsMaxBackoff, base.GetStatsMaxBackoffKey, base.GetStatsMaxBackoff,
 		"max backoff for get stats, in seconds")
-	flag.Uint64Var(&options.sendBatchMaxBackoff, "sendBatchMaxBackoff", base.SendBatchMaxBackoff,
+	flag.Uint64Var(&options.sendBatchMaxBackoff, base.SendBatchMaxBackoffKey, base.SendBatchMaxBackoff,
 		"max backoff for send batch, in seconds")
-	flag.Uint64Var(&options.delayBetweenSourceAndTarget, "delayBetweenSourceAndTarget", base.DelayBetweenSourceAndTarget,
+	flag.Uint64Var(&options.delayBetweenSourceAndTarget, base.DelayBetweenSourceAndTargetKey, base.DelayBetweenSourceAndTarget,
 		"delay between source cluster start up and target cluster start up, in seconds")
-	flag.Uint64Var(&options.checkpointInterval, "checkpointInterval", base.CheckpointInterval,
+	flag.Uint64Var(&options.checkpointInterval, base.CheckpointIntervalKey, base.CheckpointInterval,
 		"interval for periodical checkpointing, in seconds")
-	flag.BoolVar(&options.runDataGeneration, "runDataGeneration", true,
+	flag.BoolVar(&options.runDataGeneration, base.RunDataGenerationKey, true,
 		" whether to run data generation")
-	flag.BoolVar(&options.runFileDiffer, "runFileDiffer", true,
+	flag.BoolVar(&options.runFileDiffer, base.RunFileDifferKey, true,
 		" whether to file differ")
-	flag.BoolVar(&options.runMutationDiffer, "runMutationDiffer", true,
+	flag.BoolVar(&options.runMutationDiffer, base.RunMutationDifferKey, true,
 		" whether to verify diff keys through aysnc Get on clusters")
-	flag.BoolVar(&options.enforceTLS, "enforceTLS", false,
+	flag.BoolVar(&options.enforceTLS, base.EnforceTLSKey, false,
 		" stops executing if pre-requisites are not in place to ensure TLS communications")
-	flag.IntVar(&options.bucketBufferCapacity, "bucketBufferCapacity", base.BucketBufferCapacity,
+	flag.IntVar(&options.bucketBufferCapacity, base.BucketBufferCapacityKey, base.BucketBufferCapacity,
 		"  number of items kept in memory per binary buffer bucket")
-	flag.BoolVar(&options.compareBody, "compareBody", false,
+	flag.BoolVar(&options.compareBody, base.CompareBodyKey, false,
 		" whether to use Get instead of GetMeta during mutationDiff")
-	flag.IntVar(&options.mutationDifferRetries, "mutationRetries", 0,
+	flag.IntVar(&options.mutationDifferRetries, base.MutationRetriesKey, 0,
 		"Additional number of times to retry to resolve the mutation differences")
-	flag.IntVar(&options.mutationDifferRetriesWaitSecs, "mutationRetriesWaitSecs", 60,
+	flag.IntVar(&options.mutationDifferRetriesWaitSecs, base.MutationRetriesWaitSecsKey, 60,
 		"Seconds to wait in between retries for mutation differences")
+	// Deprecated: The number of arguments that are being passed in is increasing
+	// Thus, we're moving towards using viper to parse a configuration JSON
+	// Note that the way viper works is that it'll parse the flags that already exist, but
+	// if a key-value pair is specified in the later config file, the config specification will
+	// overwrite the specified flag
 
 	flag.Parse()
+	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
+	viper.BindPFlags(pflag.CommandLine)
 }
 
 func usage() {
@@ -302,7 +312,8 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 
 	difftool.logger = xdcrLog.NewLogger("xdcrDiffTool", nil)
 
-	difftool.selfRef, _ = metadata.NewRemoteClusterReference("", base.SelfReferenceName, options.sourceUrl, options.sourceUsername, options.sourcePassword,
+	difftool.selfRef, _ = metadata.NewRemoteClusterReference("", base.SelfReferenceName,
+		viper.GetString(base.SourceUrlKey), viper.GetString(base.SourceUsernameKey), viper.GetString(base.SourcePasswordKey),
 		"", false, "", nil, nil, nil, nil)
 
 	if !legacyMode {
@@ -521,7 +532,7 @@ func main() {
 	argParse()
 
 	fmt.Printf("differ is run with options: %+v\n", options)
-	legacyMode := len(options.targetUsername) > 0
+	legacyMode := len(viper.GetString(base.TargetUsernameKey)) > 0
 
 	difftool, err := NewDiffTool(legacyMode)
 	if err != nil {
@@ -529,17 +540,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	if options.enforceTLS {
+	if viper.GetBool(base.EnforceTLSKey) {
 		// For using certificates, the source cluster must be on a loopback device since we will be retrieving the
 		// source cluster's certificate to prevent sniffing
-		if !isURLLoopBack(options.sourceUrl) {
-			fmt.Printf("enforceTLS options requires that source addr %v to use loopback device\n", options.sourceUrl)
+		if !isURLLoopBack(viper.GetString(base.SourceUrlKey)) {
+			fmt.Printf("enforceTLS options requires that source addr %v to use loopback device\n",
+				viper.GetString(base.SourceUrlKey))
 			os.Exit(1)
 		}
 	}
 
 	if legacyMode {
-		if options.enforceTLS {
+		if viper.GetBool(base.EnforceTLSKey) {
 			fmt.Printf("enforceTLS option is not compatible with legacyMode")
 			os.Exit(1)
 		}
@@ -560,7 +572,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if options.runDataGeneration {
+	if viper.GetBool(base.RunDataGenerationKey) {
 		err := difftool.generateDataFiles()
 		if err != nil {
 			fmt.Printf("Error generating data files. err=%v\n", err)
@@ -570,7 +582,7 @@ func main() {
 		fmt.Printf("Skipping  generating data files since it has been disabled\n")
 	}
 
-	if options.runFileDiffer {
+	if viper.GetBool(base.RunFileDifferKey) {
 		err := difftool.diffDataFiles()
 		if err != nil {
 			fmt.Printf("Error running file difftool. err=%v\n", err)
@@ -580,7 +592,7 @@ func main() {
 		fmt.Printf("Skipping file difftool since it has been disabled\n")
 	}
 
-	if options.runMutationDiffer {
+	if viper.GetBool(base.RunMutationDifferKey) {
 		difftool.runMutationDiffer()
 	} else {
 		fmt.Printf("Skipping mutation diff since it has been disabled\n")
@@ -594,15 +606,15 @@ func isURLLoopBack(url string) bool {
 }
 
 func setupDirectories() error {
-	err := os.MkdirAll(options.sourceFileDir, 0777)
+	err := os.MkdirAll(viper.GetString(base.SourceFileDirKey), 0777)
 	if err != nil {
 		fmt.Printf("Error mkdir sourceFileDir: %v\n", err)
 	}
-	err = os.MkdirAll(options.targetFileDir, 0777)
+	err = os.MkdirAll(viper.GetString(base.TargetFileDirKey), 0777)
 	if err != nil {
 		fmt.Printf("Error mkdir targetFileDir: %v\n", err)
 	}
-	err = os.MkdirAll(options.checkpointFileDir, 0777)
+	err = os.MkdirAll(viper.GetString(base.CheckpointFileDirKey), 0777)
 	if err != nil {
 		// it is ok for checkpoint dir to be existing, since we do not clean it up
 		fmt.Printf("Error mkdir checkpointFileDir: %v\n", err)
@@ -637,7 +649,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 	difftool.logger.Infof("GenerateDataFiles routine started\n")
 	defer difftool.logger.Infof("GenerateDataFiles routine completed\n")
 
-	if options.completeByDuration == 0 && !options.completeBySeqno {
+	if viper.GetUint64(base.CompleteByDurationKey) == 0 && !viper.GetBool(base.CompleteBySeqnoKey) {
 		difftool.logger.Infof("completeByDuration is required when completeBySeqno is false\n")
 		os.Exit(1)
 	}
@@ -646,8 +658,8 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 	waitGroup := &sync.WaitGroup{}
 
 	var fileDescPool fdp.FdPoolIface
-	if options.numberOfFileDesc > 0 {
-		fileDescPool = fdp.NewFileDescriptorPool(int(options.numberOfFileDesc))
+	if viper.GetInt(base.NumberOfFileDescKey) > 0 {
+		fileDescPool = fdp.NewFileDescriptorPool(viper.GetInt(base.NumberOfFileDescKey))
 	}
 
 	if err := difftool.createFilter(); err != nil {
@@ -655,36 +667,48 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		os.Exit(1)
 	}
 
-	difftool.sourceDcpDriver = startDcpDriver(difftool.logger, base.SourceClusterName, options.sourceUrl, difftool.specifiedSpec.SourceBucketName,
-		difftool.selfRef, options.sourceFileDir, options.checkpointFileDir,
-		options.oldSourceCheckpointFileName, options.newCheckpointFileName, options.numberOfSourceDcpClients,
-		options.numberOfWorkersPerSourceDcpClient, options.numberOfBins, options.sourceDcpHandlerChanSize,
-		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
-		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
-		difftool.srcCapabilities, difftool.srcCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity)
+	difftool.sourceDcpDriver = startDcpDriver(difftool.logger, base.SourceClusterName, viper.GetString(base.SourceUrlKey),
+		difftool.specifiedSpec.SourceBucketName,
+		difftool.selfRef, viper.GetString(base.SourceFileDirKey), viper.GetString(base.CheckpointFileDirKey),
+		viper.GetString(base.OldSourceCheckpointFileNameKey), viper.GetString(base.NewCheckpointFileNameKey),
+		viper.GetUint64(base.NumberOfSourceDcpClientsKey),
+		viper.GetUint64(base.NumberOfWorkersPerSourceDcpClientKey), viper.GetUint64(base.NumberOfBinsKey),
+		viper.GetUint64(base.SourceDcpHandlerChanSizeKey),
+		viper.GetUint64(base.BucketOpTimeoutKey), viper.GetUint64(base.MaxNumOfGetStatsRetryKey),
+		viper.GetUint64(base.GetStatsRetryIntervalKey),
+		viper.GetUint64(base.GetStatsMaxBackoffKey), viper.GetUint64(base.CheckpointIntervalKey), errChan, waitGroup,
+		viper.GetBool(base.CompleteBySeqnoKey), fileDescPool, difftool.filter,
+		difftool.srcCapabilities, difftool.srcCollectionIds, difftool.colFilterOrderedKeys, difftool.utils,
+		viper.GetInt(base.BucketBufferCapacityKey))
 
-	delayDurationBetweenSourceAndTarget := time.Duration(options.delayBetweenSourceAndTarget) * time.Second
+	delayDurationBetweenSourceAndTarget := time.Duration(viper.GetUint64(base.DelayBetweenSourceAndTargetKey)) * time.Second
 	difftool.logger.Infof("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
 	time.Sleep(delayDurationBetweenSourceAndTarget)
 
 	difftool.logger.Infof("Starting target dcp clients\n")
 	difftool.targetDcpDriver = startDcpDriver(difftool.logger, base.TargetClusterName, difftool.specifiedRef.HostName_,
 		difftool.specifiedSpec.TargetBucketName, difftool.specifiedRef,
-		options.targetFileDir, options.checkpointFileDir, options.oldTargetCheckpointFileName, options.newCheckpointFileName,
-		options.numberOfTargetDcpClients, options.numberOfWorkersPerTargetDcpClient, options.numberOfBins, options.targetDcpHandlerChanSize,
-		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval, options.getStatsMaxBackoff,
-		options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
-		difftool.tgtCapabilities, difftool.tgtCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity)
+		viper.GetString(base.TargetFileDirKey), viper.GetString(base.CheckpointFileDirKey),
+		viper.GetString(base.OldTargetCheckpointFileNameKey), viper.GetString(base.NewCheckpointFileNameKey),
+		viper.GetUint64(base.NumberOfTargetDcpClientsKey), viper.GetUint64(base.NumberOfWorkersPerTargetDcpClientKey),
+		viper.GetUint64(base.NumberOfBinsKey), viper.GetUint64(base.TargetDcpHandlerChanSizeKey),
+		viper.GetUint64(base.BucketOpTimeoutKey), viper.GetUint64(base.MaxNumOfGetStatsRetryKey),
+		viper.GetUint64(base.GetStatsRetryIntervalKey), viper.GetUint64(base.GetStatsMaxBackoffKey),
+		viper.GetUint64(base.CheckpointIntervalKey), errChan, waitGroup,
+		viper.GetBool(base.CompleteBySeqnoKey), fileDescPool, difftool.filter,
+		difftool.tgtCapabilities, difftool.tgtCollectionIds, difftool.colFilterOrderedKeys, difftool.utils,
+		viper.GetInt(base.BucketBufferCapacityKey))
 
 	difftool.curState.mtx.Lock()
 	difftool.curState.state = StateDcpStarted
 	difftool.curState.mtx.Unlock()
 
 	var err error
-	if options.completeBySeqno {
+	if viper.GetBool(base.CompleteBySeqnoKey) {
 		err = difftool.waitForCompletion(difftool.sourceDcpDriver, difftool.targetDcpDriver, errChan, waitGroup)
 	} else {
-		err = difftool.waitForDuration(difftool.sourceDcpDriver, difftool.targetDcpDriver, errChan, options.completeByDuration, delayDurationBetweenSourceAndTarget)
+		err = difftool.waitForDuration(difftool.sourceDcpDriver, difftool.targetDcpDriver, errChan,
+			viper.GetUint64(base.CompleteByDurationKey), delayDurationBetweenSourceAndTarget)
 	}
 
 	return err
@@ -694,18 +718,20 @@ func (difftool *xdcrDiffTool) diffDataFiles() error {
 	difftool.logger.Infof("DiffDataFiles routine started\n")
 	defer difftool.logger.Infof("DiffDataFiles routine completed\n")
 
-	err := os.RemoveAll(options.fileDifferDir)
+	err := os.RemoveAll(viper.GetString(base.FileDifferDirKey))
 	if err != nil {
 		difftool.logger.Errorf("Error removing fileDifferDir: %v\n", err)
 	}
-	err = os.MkdirAll(options.fileDifferDir, 0777)
+	err = os.MkdirAll(viper.GetString(base.FileDifferDirKey), 0777)
 	if err != nil {
 		return fmt.Errorf("Error mkdir fileDifferDir: %v\n", err)
 	}
 
-	difftoolDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.fileDifferDir,
-		base.DiffKeysFileName, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBins),
-		int(options.numberOfFileDesc), difftool.srcToTgtColIdsMap, difftool.colFilterOrderedKeys, difftool.colFilterOrderedTargetColId)
+	difftoolDriver := differ.NewDifferDriver(viper.GetString(base.SourceFileDirKey),
+		viper.GetString(base.TargetFileDirKey), viper.GetString(base.FileDifferDirKey),
+		base.DiffKeysFileName, viper.GetInt(base.NumberOfWorkersPerSourceDcpClientKey),
+		viper.GetInt(base.NumberOfBinsKey), viper.GetInt(base.NumberOfFileDescKey),
+		difftool.srcToTgtColIdsMap, difftool.colFilterOrderedKeys, difftool.colFilterOrderedTargetColId)
 	err = difftoolDriver.Run()
 	if err != nil {
 		difftool.logger.Errorf("Error from diffDataFiles = %v\n", err)
@@ -735,14 +761,14 @@ func (difftool *xdcrDiffTool) diffDataFiles() error {
 }
 
 func (difftool *xdcrDiffTool) runMutationDiffer() {
-	difftool.logger.Infof("runMutationDiffer started with compareBody=%v\n", options.compareBody)
+	difftool.logger.Infof("runMutationDiffer started with compareBody=%v\n", viper.GetBool(base.CompareBodyKey))
 	defer difftool.logger.Infof("runMutationDiffer completed\n")
 
-	err := os.RemoveAll(options.mutationDifferDir)
+	err := os.RemoveAll(viper.GetString(base.MutationDifferDirKey))
 	if err != nil {
 		difftool.logger.Errorf("Error removing mutationDifferDir: %v\n", err)
 	}
-	err = os.MkdirAll(options.mutationDifferDir, 0777)
+	err = os.MkdirAll(viper.GetString(base.MutationDifferDirKey), 0777)
 	if err != nil {
 		err = fmt.Errorf("Error mkdir mutationDifferDir: %v\n", err)
 		return
@@ -750,12 +776,14 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 
 	mutationDiffer := differ.NewMutationDiffer(difftool.specifiedSpec.SourceBucketName,
 		difftool.selfRef, difftool.specifiedSpec.TargetBucketName, difftool.specifiedRef,
-		options.fileDifferDir, options.mutationDifferDir, int(options.numberOfWorkersForMutationDiffer),
-		int(options.mutationDifferBatchSize), int(options.mutationDifferTimeout), int(options.maxNumOfSendBatchRetry),
-		time.Duration(options.sendBatchRetryInterval)*time.Millisecond,
-		time.Duration(options.sendBatchMaxBackoff)*time.Second, options.compareBody, difftool.logger, difftool.srcToTgtColIdsMap,
-		difftool.srcCapabilities, difftool.tgtCapabilities, difftool.utils, options.mutationDifferRetries,
-		options.mutationDifferRetriesWaitSecs)
+		viper.GetString(base.FileDifferDirKey), viper.GetString(base.MutationDifferDirKey),
+		int(viper.GetUint64(base.NumberOfWorkersForMutationDifferKey)),
+		int(viper.GetUint64(base.MutationDifferBatchSizeKey)), int(viper.GetUint64(base.MutationDifferTimeoutKey)),
+		int(viper.GetUint64(base.MaxNumOfSendBatchRetryKey)),
+		time.Duration(viper.GetUint64(base.SendBatchRetryIntervalKey))*time.Millisecond,
+		time.Duration(viper.GetUint64(base.SendBatchMaxBackoffKey))*time.Second, viper.GetBool(base.CompareBodyKey),
+		difftool.logger, difftool.srcToTgtColIdsMap, difftool.srcCapabilities, difftool.tgtCapabilities, difftool.utils,
+		viper.GetInt(base.MutationRetriesKey), viper.GetInt(base.MutationRetriesWaitSecsKey))
 	err = mutationDiffer.Run()
 	if err != nil {
 		difftool.logger.Errorf("Error from runMutationDiffer = %v\n", err)
@@ -835,12 +863,12 @@ func (difftool *xdcrDiffTool) waitForDuration(sourceDcpDriver, targetDcpDriver *
 func (difftool *xdcrDiffTool) retrieveReplicationSpecInfo() error {
 	// CBAUTH has already been setup
 	var err error
-	difftool.specifiedRef, err = difftool.remoteClusterSvc.RemoteClusterByRefName(options.remoteClusterName, true /*refresh*/)
+	difftool.specifiedRef, err = difftool.remoteClusterSvc.RemoteClusterByRefName(viper.GetString(base.RemoteClusterNameKey), true /*refresh*/)
 	if err != nil {
 		for err != nil && err == metadata_svc.RefreshNotEnabledYet {
 			difftool.logger.Infof("Difftool hasn't finished reaching out to remote cluster. Sleeping 5 seconds and retrying...")
 			time.Sleep(5 * time.Second)
-			difftool.specifiedRef, err = difftool.remoteClusterSvc.RemoteClusterByRefName(options.remoteClusterName, true /*refresh*/)
+			difftool.specifiedRef, err = difftool.remoteClusterSvc.RemoteClusterByRefName(viper.GetString(base.RemoteClusterNameKey), true /*refresh*/)
 		}
 		if err != nil {
 			difftool.logger.Errorf("Error retrieving remote clusters: %v\n", err)
@@ -848,13 +876,13 @@ func (difftool *xdcrDiffTool) retrieveReplicationSpecInfo() error {
 		}
 	}
 
-	if options.enforceTLS && !difftool.specifiedRef.IsHttps() {
+	if viper.GetBool(base.EnforceTLSKey) && !difftool.specifiedRef.IsHttps() {
 		err = fmt.Errorf("enforceTLS requires that the remote cluster reference %v to use Full-Encryption mode", difftool.specifiedRef.Name())
 		difftool.logger.Errorf(err.Error())
 		return err
 	}
 
-	if options.targetUsername != "" && options.targetUsername != difftool.specifiedRef.UserName() && options.targetPassword != "" && options.targetPassword != difftool.specifiedRef.Password() {
+	if viper.GetString(base.TargetUsernameKey) != "" && viper.GetString(base.TargetUsernameKey) != difftool.specifiedRef.UserName() && viper.GetString(base.TargetPasswordKey) != "" && viper.GetString(base.TargetPasswordKey) != difftool.specifiedRef.Password() {
 		err = fmt.Errorf("user-specified username and password is different from that of the credentials from reference %v", difftool.specifiedRef.Name())
 		difftool.logger.Errorf(err.Error())
 		return err
@@ -867,16 +895,16 @@ func (difftool *xdcrDiffTool) retrieveReplicationSpecInfo() error {
 	}
 
 	for _, spec := range specMap {
-		if spec.SourceBucketName == options.sourceBucketName && spec.TargetBucketName == options.targetBucketName && spec.TargetClusterUUID == difftool.specifiedRef.Uuid() {
+		if spec.SourceBucketName == viper.GetString(base.SourceBucketNameKey) && spec.TargetBucketName == viper.GetString(base.TargetBucketNameKey) && spec.TargetClusterUUID == difftool.specifiedRef.Uuid() {
 			difftool.specifiedSpec = spec
 			break
 		}
 	}
 
 	if difftool.specifiedSpec == nil {
-		difftool.logger.Warnf("Unable to find Replication Spec with source %v target %v, attempting to create a temporary one\n", options.sourceBucketName, options.targetBucketName)
+		difftool.logger.Warnf("Unable to find Replication Spec with source %v target %v, attempting to create a temporary one\n", viper.GetString(base.SourceBucketNameKey), viper.GetString(base.TargetBucketNameKey))
 		// Create a dummy spec
-		difftool.specifiedSpec, err = metadata.NewReplicationSpecification(options.sourceBucketName, "" /*sourceBucketUUID*/, difftool.specifiedRef.Uuid(), options.targetBucketName, "" /*targetBucketUUID*/)
+		difftool.specifiedSpec, err = metadata.NewReplicationSpecification(viper.GetString(base.SourceBucketNameKey), "" /*sourceBucketUUID*/, difftool.specifiedRef.Uuid(), viper.GetString(base.TargetBucketNameKey), "" /*targetBucketUUID*/)
 		if err != nil {
 			difftool.logger.Errorf(err.Error())
 		}
@@ -890,13 +918,14 @@ func (difftool *xdcrDiffTool) retrieveReplicationSpecInfo() error {
 
 func (difftool *xdcrDiffTool) populateTemporarySpecAndRef() error {
 	var err error
-	difftool.specifiedSpec, err = metadata.NewReplicationSpecification(options.sourceBucketName, "", /*sourceBucketUUID*/
-		"" /*targetClusterUUID*/, options.targetBucketName, "" /*targetBucketUUID*/)
+	difftool.specifiedSpec, err = metadata.NewReplicationSpecification(viper.GetString(base.SourceBucketNameKey),
+		"" /*sourceBucketUUID*/, "" /*targetClusterUUID*/, viper.GetString(base.TargetBucketNameKey), "" /*targetBucketUUID*/)
 	if err != nil {
 		return fmt.Errorf("populateTemporarySpecAndRef() - %v", err)
 	}
 
-	difftool.specifiedRef, err = metadata.NewRemoteClusterReference("" /*uuid*/, options.remoteClusterName /*name*/, options.targetUrl, options.targetUsername, options.targetPassword,
+	difftool.specifiedRef, err = metadata.NewRemoteClusterReference("" /*uuid*/, viper.GetString(base.RemoteClusterNameKey), /*name*/
+		viper.GetString(base.TargetUrlKey), viper.GetString(base.TargetUsernameKey), viper.GetString(base.TargetPasswordKey),
 		"", false, "", nil, nil, nil, nil)
 	if err != nil {
 		return fmt.Errorf("populateTemporarySpecAndRef() - %v", err)
@@ -932,26 +961,26 @@ func (difftool *xdcrDiffTool) monitorInterruptSignal() {
 }
 
 func (difftool *xdcrDiffTool) populateSelfRef() error {
-	difftool.selfRef.HttpsHostName_ = options.sourceUrl
-	difftool.selfRef.UserName_ = options.sourceUsername
-	difftool.selfRef.Password_ = options.sourcePassword
+	difftool.selfRef.HttpsHostName_ = viper.GetString(base.SourceUrlKey)
+	difftool.selfRef.UserName_ = viper.GetString(base.SourceUsernameKey)
+	difftool.selfRef.Password_ = viper.GetString(base.SourcePasswordKey)
 	difftool.selfRef.HttpAuthMech_ = xdcrBase.HttpAuthMechPlain
 
 	// Only grab certificate if on a loopback device
-	if difftool.specifiedRef.IsHttps() && isURLLoopBack(options.sourceUrl) {
-		cert, err := utils.GetCertificate(difftool.utils, options.sourceUrl, options.sourceUsername,
-			options.sourcePassword, xdcrBase.HttpAuthMechPlain)
+	if difftool.specifiedRef.IsHttps() && isURLLoopBack(viper.GetString(base.SourceUrlKey)) {
+		cert, err := utils.GetCertificate(difftool.utils, viper.GetString(base.SourceUrlKey),
+			viper.GetString(base.SourceUsernameKey), viper.GetString(base.SourcePasswordKey), xdcrBase.HttpAuthMechPlain)
 		if err != nil {
 			return err
 		}
 
-		internalHttpsHostname, _, err := difftool.utils.HttpsRemoteHostAddr(options.sourceUrl, nil)
+		internalHttpsHostname, _, err := difftool.utils.HttpsRemoteHostAddr(viper.GetString(base.SourceUrlKey), nil)
 		if err != nil {
 			return fmt.Errorf("unable to get httpsRemoteHostAddr: %v", err)
 		}
 
 		difftool.selfRef.Certificate_ = cert
-		refHttpAuthMech, defaultPoolInfo, _, err := difftool.utils.GetSecuritySettingsAndDefaultPoolInfo(options.sourceUrl,
+		refHttpAuthMech, defaultPoolInfo, _, err := difftool.utils.GetSecuritySettingsAndDefaultPoolInfo(viper.GetString(base.SourceUrlKey),
 			internalHttpsHostname, difftool.selfRef.UserName(), difftool.selfRef.Password(),
 			difftool.selfRef.Certificates(), difftool.selfRef.ClientCertificate(), difftool.selfRef.ClientKey(),
 			difftool.selfRef.IsHalfEncryption(), difftool.logger)
@@ -963,9 +992,9 @@ func (difftool *xdcrDiffTool) populateSelfRef() error {
 
 		if refHttpAuthMech == xdcrBase.HttpAuthMechHttps {
 			// Need to get the secure port and attach it
-			internalSSLPort, internalSSLPortErr, _, _ := difftool.utils.GetRemoteSSLPorts(options.sourceUrl, difftool.logger)
+			internalSSLPort, internalSSLPortErr, _, _ := difftool.utils.GetRemoteSSLPorts(viper.GetString(base.SourceUrlKey), difftool.logger)
 			if internalSSLPortErr == nil {
-				sslHostString := xdcrBase.GetHostAddr(xdcrBase.GetHostName(options.sourceUrl), internalSSLPort)
+				sslHostString := xdcrBase.GetHostAddr(xdcrBase.GetHostName(viper.GetString(base.SourceUrlKey)), internalSSLPort)
 				difftool.selfRef.SetHttpsHostName(sslHostString)
 				difftool.selfRef.SetActiveHttpsHostName(sslHostString)
 				difftool.logger.Infof("Received SSL port to be %v and setting TLS hostname to %v", internalSSLPort, sslHostString)
@@ -974,7 +1003,7 @@ func (difftool *xdcrDiffTool) populateSelfRef() error {
 	}
 
 	poolsNodesPath := "/pools/nodes"
-	err, _ := difftool.utils.QueryRestApi(options.sourceUrl, poolsNodesPath, false, xdcrBase.MethodGet, "", nil, 0, &difftool.selfPoolsNodes, nil)
+	err, _ := difftool.utils.QueryRestApi(viper.GetString(base.SourceUrlKey), poolsNodesPath, false, xdcrBase.MethodGet, "", nil, 0, &difftool.selfPoolsNodes, nil)
 	if err != nil {
 		return fmt.Errorf("unable to get pools/nodes information: %v", err)
 	}
@@ -1103,13 +1132,13 @@ func (difftool *xdcrDiffTool) outputManifestsToFiles(err error) error {
 		return err
 	}
 
-	err = ioutil.WriteFile(utils.GetManifestFileName(options.sourceFileDir), srcManJson, 0644)
+	err = ioutil.WriteFile(utils.GetManifestFileName(viper.GetString(base.SourceFileDirKey)), srcManJson, 0644)
 	if err != nil {
 		difftool.logger.Errorf("SrcManifestWrite - %v\n", err)
 		return err
 	}
 
-	err = ioutil.WriteFile(utils.GetManifestFileName(options.targetFileDir), tgtManJson, 0644)
+	err = ioutil.WriteFile(utils.GetManifestFileName(viper.GetString(base.TargetFileDirKey)), tgtManJson, 0644)
 	if err != nil {
 		difftool.logger.Errorf("TgtManifestWrite - %v\n", err)
 		return err

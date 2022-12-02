@@ -42,3 +42,4 @@ deps:
 	$(GOGET) github.com/couchbase/clog
 	$(GOGET) github.com/stretchr/testify/assert
 	$(GOGET) github.com/stretchr/testify/mock
+	$(GOGET) github.com/spf13/viper@v1.14.0
