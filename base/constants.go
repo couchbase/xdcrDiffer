@@ -154,4 +154,7 @@ const (
 	SendBatchMaxBackoffKey               = "sendBatchMaxBackoff"
 	MutationRetriesKey                   = "mutationRetries"
 	MutationRetriesWaitSecsKey           = "mutationRetriesWaitSecs"
+	ObserveModeKey                       = "observeMode"
 )
+
+const ViperConfigFile = "config.json"

@@ -1,0 +1,12 @@
+{
+  "sourceUrl": null,
+  "sourceBucketName": null,
+  "remoteClusterName": null,
+  "targetBucketName": null,
+  "observeMode": false,
+  "observeKeys": {
+    "_default": {
+      "_default": []
+    }
+  }
+}

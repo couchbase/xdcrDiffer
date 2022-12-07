@@ -128,7 +128,7 @@ var options struct {
 }
 
 // Deprecated - do not add more keys, but instead, use viper
-func argParse() {
+func argParse() error {
 	flag.StringVar(&options.sourceUrl, base.SourceUrlKey, "",
 		"url for source cluster")
 	flag.StringVar(&options.sourceUsername, base.SourceUsernameKey, "",
@@ -229,16 +229,18 @@ func argParse() {
 	// Thus, we're moving towards using viper to parse a configuration JSON
 	// Note that the way viper works is that it'll parse the flags that already exist, but
 	// if a key-value pair is specified in the later config file, the config specification will
-	// overwrite the specified flag
+	// be overwritten by the specified flag in the command line argument
+	// This is to ensure backwards-compatibility with potential existing customer scripts
+	viper.SetConfigFile(base.ViperConfigFile)
+	viper.AddConfigPath(".")
+	err := viper.ReadInConfig()
+	if err != nil {
+		return fmt.Errorf("Unable to read in viper config file: %v", err)
+	}
 
 	flag.Parse()
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
-	viper.BindPFlags(pflag.CommandLine)
-}
-
-func usage() {
-	fmt.Fprintf(os.Stderr, "Usage : %s [OPTIONS] \n", os.Args[0])
-	flag.PrintDefaults()
+	return viper.BindPFlags(pflag.CommandLine)
 }
 
 type diffToolStateType int
@@ -529,7 +531,10 @@ func maybeSetEnv(key, value string) {
 }
 
 func main() {
-	argParse()
+	if err := argParse(); err != nil {
+		fmt.Printf("%v\n", err)
+		os.Exit(1)
+	}
 
 	fmt.Printf("differ is run with options: %+v\n", options)
 	legacyMode := len(viper.GetString(base.TargetUsernameKey)) > 0
