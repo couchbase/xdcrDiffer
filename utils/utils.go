@@ -18,6 +18,7 @@ import (
 	"io/ioutil"
 	"math"
 	mrand "math/rand"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -56,8 +57,10 @@ func GetBucketIndexFromKey(key []byte, numberOfBins int) int {
 // evenly distribute load across workers
 // assumes that num_of_worker <= num_of_load
 // returns load_distribution [][]int, where
-//     load_distribution[i][0] is the start index, inclusive, of load for ith worker
-//     load_distribution[i][1] is the end index, exclusive, of load for ith worker
+//
+//	load_distribution[i][0] is the start index, inclusive, of load for ith worker
+//	load_distribution[i][1] is the end index, exclusive, of load for ith worker
+//
 // note that load is zero indexed, i.e., indexed as 0, 1, .. N-1 for N loads
 func BalanceLoad(num_of_worker int, num_of_load int) [][]int {
 	load_distribution := make([][]int, 0)
@@ -283,4 +286,10 @@ func GetCertificate(u xdcrUtils.UtilsIface, hostname string, username, password 
 	}
 
 	return ioutil.ReadAll(res.Body)
+}
+
+func IsURLLoopBack(url string) bool {
+	IPLoopbackCheck := net.ParseIP(xdcrBase.GetHostName(url))
+	hostNameIsLocalHost := xdcrBase.GetHostName(url) == "localhost"
+	return IPLoopbackCheck.IsLoopback() || hostNameIsLocalHost
 }
