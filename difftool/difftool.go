@@ -341,3 +341,20 @@ func (difftool *XdcrDiffTool) MonitorInterruptSignal() {
 		}
 	}
 }
+
+func (difftool *XdcrDiffTool) SetupDirectories() error {
+	err := os.MkdirAll(viper.GetString(base2.SourceFileDirKey), 0777)
+	if err != nil {
+		fmt.Printf("Error mkdir sourceFileDir: %v\n", err)
+	}
+	err = os.MkdirAll(viper.GetString(base2.TargetFileDirKey), 0777)
+	if err != nil {
+		fmt.Printf("Error mkdir targetFileDir: %v\n", err)
+	}
+	err = os.MkdirAll(viper.GetString(base2.CheckpointFileDirKey), 0777)
+	if err != nil {
+		// it is ok for checkpoint dir to be existing, since we do not clean it up
+		fmt.Printf("Error mkdir checkpointFileDir: %v\n", err)
+	}
+	return nil
+}

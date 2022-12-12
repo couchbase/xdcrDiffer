@@ -13,13 +13,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"xdcrDiffer/utils"
 
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 
 	"xdcrDiffer/base"
 	"xdcrDiffer/difftool"
-	"xdcrDiffer/utils"
 )
 
 var done = make(chan bool)
@@ -237,6 +237,26 @@ func main() {
 		os.Exit(1)
 	}
 
+	if viper.GetBool(base.EnforceTLSKey) {
+		// For using certificates, the source cluster must be on a loopback device since we will be retrieving the
+		// source cluster's certificate to prevent sniffing
+		if !utils.IsURLLoopBack(viper.GetString(base.SourceUrlKey)) {
+			fmt.Printf("enforceTLS options requires that source addr %v to use loopback device\n",
+				viper.GetString(base.SourceUrlKey))
+			os.Exit(1)
+		}
+	}
+
+	// Launch appropriate modes
+	switch viper.GetBool(base.ObserveModeKey) {
+	case true:
+		panic("Not implemented yet")
+	case false:
+		runDiffer()
+	}
+}
+
+func runDiffer() {
 	fmt.Printf("differ is run with options: %+v\n", options)
 	legacyMode := len(viper.GetString(base.TargetUsernameKey)) > 0
 
@@ -248,16 +268,6 @@ func main() {
 
 	// Capture any Ctrl-C for continuing to next steps or cleanup
 	go difftool.MonitorInterruptSignal()
-
-	if viper.GetBool(base.EnforceTLSKey) {
-		// For using certificates, the source cluster must be on a loopback device since we will be retrieving the
-		// source cluster's certificate to prevent sniffing
-		if !utils.IsURLLoopBack(viper.GetString(base.SourceUrlKey)) {
-			fmt.Printf("enforceTLS options requires that source addr %v to use loopback device\n",
-				viper.GetString(base.SourceUrlKey))
-			os.Exit(1)
-		}
-	}
 
 	if legacyMode {
 		if viper.GetBool(base.EnforceTLSKey) {
@@ -271,7 +281,7 @@ func main() {
 		}
 	}
 
-	if err := setupDirectories(); err != nil {
+	if err := difftool.SetupDirectories(); err != nil {
 		difftool.Logger().Errorf("Unable to set up directory structure: %v\n", err)
 		os.Exit(1)
 	}
@@ -306,21 +316,4 @@ func main() {
 	} else {
 		fmt.Printf("Skipping mutation diff since it has been disabled\n")
 	}
-}
-
-func setupDirectories() error {
-	err := os.MkdirAll(viper.GetString(base.SourceFileDirKey), 0777)
-	if err != nil {
-		fmt.Printf("Error mkdir sourceFileDir: %v\n", err)
-	}
-	err = os.MkdirAll(viper.GetString(base.TargetFileDirKey), 0777)
-	if err != nil {
-		fmt.Printf("Error mkdir targetFileDir: %v\n", err)
-	}
-	err = os.MkdirAll(viper.GetString(base.CheckpointFileDirKey), 0777)
-	if err != nil {
-		// it is ok for checkpoint dir to be existing, since we do not clean it up
-		fmt.Printf("Error mkdir checkpointFileDir: %v\n", err)
-	}
-	return nil
 }
