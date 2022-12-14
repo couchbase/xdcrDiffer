@@ -25,14 +25,11 @@ function printHelp() {
 	findExec
 
 	cat <<EOF
-Usage: $0 -u <username> -p <password> -h <hostname:port> -s <sourceBucket> -t <targetBucket> -r <remoteClusterName> [-v <targetUrl>] [-n <remoteClusterUsername> -q <remoteClusterPassword>] [-c clean] [-b ] [-e <mutationRetries>]
+Usage: $0 -u <username> -p <password> -h <hostname:port> [-c clean] 
 
 This script will set up the necessary environment variable to allow the XDCR diff tool to connect to the metakv service in the
-specified source cluster (NOTE: over http://) and retrieve the specified replication spec and run the difftool on it.
-The difftool currently only supports connecting to remote targets with username and password. Thus, if the specified remote cluster
-reference only contains certificate, then specify the remoteClusterUsername and remoteClusterPassword accordingly.
+specified source cluster (NOTE: over http://) and retrieve the specified replication spec and start the tool in observation mode.
 
-use "-b" to get document body for comparison instead of metadata. This is a slower option and it will not get tombstones
 EOF
 }
 
@@ -54,7 +51,7 @@ function killBgTail {
 	fi
 }
 
-while getopts ":h:p:u:r:s:t:n:q:v:cbe:" opt; do
+while getopts ":h:p:u:c" opt; do
 	case ${opt} in
 	u)
 		username=$OPTARG
@@ -65,32 +62,8 @@ while getopts ":h:p:u:r:s:t:n:q:v:cbe:" opt; do
 	h)
 		hostname=$OPTARG
 		;;
-	r)
-		remoteClusterName=$OPTARG
-		;;
-	s)
-		sourceBucketName=$OPTARG
-		;;
-	t)
-		targetBucketName=$OPTARG
-		;;
-	n)
-		remoteClusterUsername=$OPTARG
-		;;
-	q)
-		remoteClusterPassword=$OPTARG
-		;;
 	c)
 		cleanBeforeRun=1
-		;;
-	b)
-		compareBody=true
-		;;
-	v)
-		targetUrl=$OPTARG
-		;;
-	e)
-		mutationRetries=$OPTARG
 		;;
 	\?)
 		echo "Invalid option: $OPTARG" 1>&2
@@ -114,23 +87,11 @@ elif [[ -z "$hostname" ]]; then
 	echo "Missing hostname and port"
 	printHelp
 	exit 1
-elif [[ -z "$sourceBucketName" ]]; then
-	echo "Missing sourceBucket"
-	printHelp
-	exit 1
-elif [[ -z "$targetBucketName" ]]; then
-	echo "Missing targetBucket"
-	printHelp
-	exit 1
-elif [[ -z "$remoteClusterName" ]] && [[ -z "$targetUrl" ]]; then
-	echo "Missing remoteCluster name or target URL"
-	printHelp
-	exit 1
 fi
 
 findExec
 
-export CBAUTH_REVRPC_URL="http://$username:$password@$hostname/xdcrDiffer"
+export CBAUTH_REVRPC_URL="http://$username:$password@$hostname/xdcrDifferObserve"
 echo "Exporting $CBAUTH_REVRPC_URL"
 
 if [[ ! -z "$cleanBeforeRun" ]]; then
@@ -159,35 +120,9 @@ execString="${execString} -sourceUsername"
 execString="${execString} $username"
 execString="${execString} -sourcePassword"
 execString="${execString} $password"
-execString="${execString} -sourceBucketName"
-execString="${execString} $sourceBucketName"
-execString="${execString} -targetBucketName"
-execString="${execString} $targetBucketName"
-
-if [[ ! -z "$remoteClusterUsername" ]] && [[ ! -z "$remoteClusterPassword" ]]; then
-	execString="${execString} -targetUsername"
-	execString="${execString} $remoteClusterUsername"
-	execString="${execString} -targetPassword"
-	execString="${execString} $remoteClusterPassword"
-fi
-if [[ ! -z "$remoteClusterName" ]];then
-	execString="${execString} -remoteClusterName"
-	execString="${execString} $remoteClusterName"
-elif [[ ! -z "$targetUrl" ]];then
-	execString="${execString} -targetUrl"
-	execString="${execString} $targetUrl"
-fi
 if [[ ! -z "$maxFileDescs" ]]; then
 	execString="${execString} -numberOfFileDesc"
 	execString="${execString} $maxFileDescs"
-fi
-if [[ ! -z "$compareBody" ]]; then
-	execString="${execString} -compareBody"
-	execString="${execString} $compareBody"
-fi
-if [[ ! -z "$mutationRetries" ]];then
-	execString="${execString} -mutationRetries"
-	execString="${execString} $mutationRetries"
 fi
 
 # Execute the differ in background and watch the pid to be finished
