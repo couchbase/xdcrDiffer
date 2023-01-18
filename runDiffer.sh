@@ -130,7 +130,7 @@ fi
 
 findExec
 
-export CBAUTH_REVRPC_URL="http://$username:$password@$hostname/xdcrDiffer"
+export CBAUTH_REVRPC_URL="http://$username:$password@$hostname"
 echo "Exporting $CBAUTH_REVRPC_URL"
 
 if [[ ! -z "$cleanBeforeRun" ]]; then
