@@ -262,8 +262,9 @@ type xdcrDiffTool struct {
 	selfDefaultPoolInfo map[string]interface{}
 	selfPoolsNodes      map[string]interface{}
 
-	srcCapabilities metadata.Capability
-	tgtCapabilities metadata.Capability
+	srcCapabilities  metadata.Capability
+	tgtCapabilities  metadata.Capability
+	srcClusterCompat int
 
 	srcBucketManifest *metadata.CollectionsManifest
 	tgtBucketManifest *metadata.CollectionsManifest
@@ -314,7 +315,9 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 		uiLogSvcMock := &service_def_mock.UILogSvc{}
 		uiLogSvcMock.On("Write", mock.Anything).Run(func(args mock.Arguments) { fmt.Printf("%v", args.Get(0).(string)) }).Return(nil)
 		xdcrTopologyMock := &service_def_mock.XDCRCompTopologySvc{}
-		setupXdcrToplogyMock(xdcrTopologyMock, difftool)
+		xdcrTopologyMockSetupCb := func() {
+			setupXdcrToplogyMock(xdcrTopologyMock, difftool)
+		}
 		resolverSvcMock := &service_def_mock.ResolverSvcIface{}
 		checkpointSvcMock := &service_def_mock.CheckpointsService{}
 		manifestsSvcMock := &service_def_mock.ManifestsService{}
@@ -329,6 +332,10 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 			return nil, err
 		}
 
+		if err = difftool.retrieveClustersCapabilities(legacyMode, xdcrTopologyMockSetupCb); err != nil {
+			return nil, err
+		}
+
 		difftool.replicationSpecSvc, err = metadata_svc.NewReplicationSpecService(uiLogSvcMock, difftool.remoteClusterSvc,
 			difftool.metadataSvc, xdcrTopologyMock, resolverSvcMock, difftool.logger.LoggerContext(), difftool.utils,
 			replicationSettingSvc)
@@ -338,7 +345,7 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 
 		err = difftool.retrieveReplicationSpecInfo()
 		if err != nil {
-			os.Exit(1)
+			return nil, err
 		}
 
 		securitySvc := &service_def_mock.SecuritySvc{}
@@ -358,6 +365,21 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 		if err != nil {
 			return nil, err
 		}
+
+		difftool.logger.Infof("Source cluster supports collections: %v Target cluster supports collections: %v\n",
+			difftool.srcCapabilities.HasCollectionSupport(), difftool.tgtCapabilities.HasCollectionSupport())
+
+		if difftool.srcCapabilities.HasCollectionSupport() || difftool.tgtCapabilities.HasCollectionSupport() {
+			err = difftool.populateCollectionsPreReq()
+			if err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		// Need to do this outside of legacy mode
+		if err := difftool.retrieveClustersCapabilities(legacyMode, nil); err != nil {
+			return nil, err
+		}
 	}
 
 	// Capture any Ctrl-C for continuing to next steps or cleanup
@@ -375,6 +397,7 @@ func setupXdcrToplogyMock(xdcrTopologyMock *service_def_mock.XDCRCompTopologySvc
 	xdcrTopologyMock.On("IsMyClusterEnterprise").Return(true, nil)
 	xdcrTopologyMock.On("IsKVNode").Return(true, nil)
 	xdcrTopologyMock.On("IsMyClusterEncryptionLevelStrict").Return(false)
+	xdcrTopologyMock.On("MyClusterCompatibility").Return(diffTool.srcClusterCompat, nil)
 	setupTopologyMockCredentials(xdcrTopologyMock, diffTool)
 	setupTopologyMockConnectionString(xdcrTopologyMock, diffTool)
 }
@@ -523,6 +546,11 @@ func main() {
 	fmt.Printf("differ is run with options: %+v\n", options)
 	legacyMode := len(options.targetUsername) > 0
 
+	if err := setupDirectories(); err != nil {
+		fmt.Printf("Unable to set up directory structure: %v\n", err)
+		os.Exit(1)
+	}
+
 	difftool, err := NewDiffTool(legacyMode)
 	if err != nil {
 		fmt.Printf("Error creating difftool: %v\n", err)
@@ -548,16 +576,6 @@ func main() {
 			fmt.Printf("%v\n", err)
 			os.Exit(1)
 		}
-	}
-
-	if err := setupDirectories(); err != nil {
-		difftool.logger.Errorf("Unable to set up directory structure: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := difftool.retrieveClustersCapabilities(legacyMode); err != nil {
-		fmt.Printf("%v\n", err)
-		os.Exit(1)
 	}
 
 	if options.runDataGeneration {
@@ -835,18 +853,18 @@ func (difftool *xdcrDiffTool) waitForDuration(sourceDcpDriver, targetDcpDriver *
 func (difftool *xdcrDiffTool) retrieveReplicationSpecInfo() error {
 	// CBAUTH has already been setup
 	var err error
-	difftool.specifiedRef, err = difftool.remoteClusterSvc.RemoteClusterByRefName(options.remoteClusterName, true /*refresh*/)
-	if err != nil {
-		for err != nil && err == metadata_svc.RefreshNotEnabledYet {
-			difftool.logger.Infof("Difftool hasn't finished reaching out to remote cluster. Sleeping 5 seconds and retrying...")
-			time.Sleep(5 * time.Second)
-			difftool.specifiedRef, err = difftool.remoteClusterSvc.RemoteClusterByRefName(options.remoteClusterName, true /*refresh*/)
-		}
-		if err != nil {
-			difftool.logger.Errorf("Error retrieving remote clusters: %v\n", err)
-			return err
-		}
-	}
+	//difftool.specifiedRef, err = difftool.remoteClusterSvc.RemoteClusterByRefName(options.remoteClusterName, true /*refresh*/)
+	//if err != nil {
+	//	for err != nil && err == metadata_svc.RefreshNotEnabledYet {
+	//		difftool.logger.Infof("Difftool hasn't finished reaching out to remote cluster. Sleeping 5 seconds and retrying...")
+	//		time.Sleep(5 * time.Second)
+	//		difftool.specifiedRef, err = difftool.remoteClusterSvc.RemoteClusterByRefName(options.remoteClusterName, true /*refresh*/)
+	//	}
+	//	if err != nil {
+	//		difftool.logger.Errorf("Error retrieving remote clusters: %v\n", err)
+	//		return err
+	//	}
+	//}
 
 	if options.enforceTLS && !difftool.specifiedRef.IsHttps() {
 		err = fmt.Errorf("enforceTLS requires that the remote cluster reference %v to use Full-Encryption mode", difftool.specifiedRef.Name())
@@ -884,8 +902,7 @@ func (difftool *xdcrDiffTool) retrieveReplicationSpecInfo() error {
 	}
 
 	difftool.logger.Infof("Found Remote Cluster: %v and Replication Spec: %v\n", difftool.specifiedRef.String(), difftool.specifiedSpec.String())
-
-	return difftool.populateSelfRef()
+	return nil
 }
 
 func (difftool *xdcrDiffTool) populateTemporarySpecAndRef() error {
@@ -984,7 +1001,24 @@ func (difftool *xdcrDiffTool) populateSelfRef() error {
 	return nil
 }
 
-func (difftool *xdcrDiffTool) retrieveClustersCapabilities(legacyMode bool) error {
+func (difftool *xdcrDiffTool) retrieveClustersCapabilities(legacyMode bool, xdcrCompTopologyMockCb func()) error {
+	var err error
+	difftool.specifiedRef, err = difftool.remoteClusterSvc.RemoteClusterByRefName(options.remoteClusterName, true /*refresh*/)
+	if err != nil {
+		for err != nil && err == metadata_svc.RefreshNotEnabledYet {
+			difftool.logger.Infof("Difftool hasn't finished reaching out to remote cluster. Sleeping 5 seconds and retrying...")
+			time.Sleep(5 * time.Second)
+			difftool.specifiedRef, err = difftool.remoteClusterSvc.RemoteClusterByRefName(options.remoteClusterName, true /*refresh*/)
+		}
+		if err != nil {
+			difftool.logger.Errorf("Error retrieving remote clusters: %v\n", err)
+			return err
+		}
+	}
+	if err = difftool.populateSelfRef(); err != nil {
+		return err
+	}
+
 	if !legacyMode {
 		ref, err := difftool.remoteClusterSvc.RemoteClusterByRefName(difftool.specifiedRef.Name(), false)
 		if err != nil {
@@ -1016,16 +1050,14 @@ func (difftool *xdcrDiffTool) retrieveClustersCapabilities(legacyMode bool) erro
 	err = difftool.srcCapabilities.LoadFromDefaultPoolInfo(defaultPoolInfo, difftool.logger)
 	if err != nil {
 		return fmt.Errorf("retrieveClusterCapabilities.LoadFromDefaultPoolInfo(%v) - %v", defaultPoolInfo, err)
+	} else {
+		// At this point, clusterCompat is parsable and just cache it for later mocks
+		nodeList, _ := xdcrBase.GetNodeListFromInfoMap(defaultPoolInfo, difftool.logger)
+		difftool.srcClusterCompat, _ = xdcrBase.GetClusterCompatibilityFromNodeList(nodeList)
 	}
 
-	difftool.logger.Infof("Source cluster supports collections: %v Target cluster supports collections: %v\n",
-		difftool.srcCapabilities.HasCollectionSupport(), difftool.tgtCapabilities.HasCollectionSupport())
-
-	if difftool.srcCapabilities.HasCollectionSupport() || difftool.tgtCapabilities.HasCollectionSupport() {
-		err = difftool.populateCollectionsPreReq()
-		if err != nil {
-			return err
-		}
+	if xdcrCompTopologyMockCb != nil {
+		xdcrCompTopologyMockCb()
 	}
 	return nil
 }
