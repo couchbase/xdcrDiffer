@@ -13,6 +13,22 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/ioutil"
+	"net"
+	"os"
+	"os/signal"
+	"reflect"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"xdcrDiffer/base"
+	"xdcrDiffer/dcp"
+	"xdcrDiffer/differ"
+	fdp "xdcrDiffer/fileDescriptorPool"
+	"xdcrDiffer/filterPool"
+	"xdcrDiffer/utils"
+
 	xdcrBase "github.com/couchbase/goxdcr/base"
 	xdcrParts "github.com/couchbase/goxdcr/base/filter"
 	xdcrLog "github.com/couchbase/goxdcr/log"
@@ -24,19 +40,6 @@ import (
 	"github.com/couchbase/goxdcr/streamApiWatcher"
 	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"github.com/stretchr/testify/mock"
-	"io/ioutil"
-	"net"
-	"os"
-	"os/signal"
-	"reflect"
-	"sync"
-	"sync/atomic"
-	"time"
-	"xdcrDiffer/base"
-	"xdcrDiffer/dcp"
-	"xdcrDiffer/differ"
-	fdp "xdcrDiffer/fileDescriptorPool"
-	"xdcrDiffer/utils"
 )
 
 var done = make(chan bool)
@@ -123,6 +126,8 @@ var options struct {
 	mutationDifferRetries int
 	// Number of secs to wait between retries
 	mutationDifferRetriesWaitSecs int
+	// Number of filters to be created for the filter pool to be shared
+	numOfFiltersInFilterPool int
 }
 
 func argParse() {
@@ -222,6 +227,8 @@ func argParse() {
 		"Additional number of times to retry to resolve the mutation differences")
 	flag.IntVar(&options.mutationDifferRetriesWaitSecs, "mutationRetriesWaitSecs", 60,
 		"Seconds to wait in between retries for mutation differences")
+	flag.IntVar(&options.numOfFiltersInFilterPool, "numOfFiltersInFilterPool", 32,
+		"Number of filters to be created and shared among all DCP handlers")
 
 	flag.Parse()
 }
@@ -646,7 +653,7 @@ func (difftool *xdcrDiffTool) createFilter() error {
 		difftool.logger.Infof("Found filtering expression: %v\n", expr)
 	}
 
-	filter, err := xdcrParts.NewFilter("XDCRDiffToolFilter", expr, difftool.utils, filterMode.IsSkipReplicateUncommittedTxnSet())
+	filter, err := filterPool.NewFilterPool(5, expr, difftool.utils, filterMode.IsSkipReplicateUncommittedTxnSet())
 	difftool.filter = filter
 	return err
 }
@@ -853,19 +860,6 @@ func (difftool *xdcrDiffTool) waitForDuration(sourceDcpDriver, targetDcpDriver *
 func (difftool *xdcrDiffTool) retrieveReplicationSpecInfo() error {
 	// CBAUTH has already been setup
 	var err error
-	//difftool.specifiedRef, err = difftool.remoteClusterSvc.RemoteClusterByRefName(options.remoteClusterName, true /*refresh*/)
-	//if err != nil {
-	//	for err != nil && err == metadata_svc.RefreshNotEnabledYet {
-	//		difftool.logger.Infof("Difftool hasn't finished reaching out to remote cluster. Sleeping 5 seconds and retrying...")
-	//		time.Sleep(5 * time.Second)
-	//		difftool.specifiedRef, err = difftool.remoteClusterSvc.RemoteClusterByRefName(options.remoteClusterName, true /*refresh*/)
-	//	}
-	//	if err != nil {
-	//		difftool.logger.Errorf("Error retrieving remote clusters: %v\n", err)
-	//		return err
-	//	}
-	//}
-
 	if options.enforceTLS && !difftool.specifiedRef.IsHttps() {
 		err = fmt.Errorf("enforceTLS requires that the remote cluster reference %v to use Full-Encryption mode", difftool.specifiedRef.Name())
 		difftool.logger.Errorf(err.Error())
