@@ -653,7 +653,7 @@ func (difftool *xdcrDiffTool) createFilter() error {
 		difftool.logger.Infof("Found filtering expression: %v\n", expr)
 	}
 
-	filter, err := filterPool.NewFilterPool(5, expr, difftool.utils, filterMode.IsSkipReplicateUncommittedTxnSet())
+	filter, err := filterPool.NewFilterPool(options.numOfFiltersInFilterPool, expr, difftool.utils, filterMode.IsSkipReplicateUncommittedTxnSet())
 	difftool.filter = filter
 	return err
 }
