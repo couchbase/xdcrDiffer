@@ -128,6 +128,8 @@ var options struct {
 	mutationDifferRetriesWaitSecs int
 	// Number of filters to be created for the filter pool to be shared
 	numOfFiltersInFilterPool int
+	// DebugLogLevel set to true will show debug logs
+	debugLogLevel bool
 }
 
 func argParse() {
@@ -229,6 +231,8 @@ func argParse() {
 		"Seconds to wait in between retries for mutation differences")
 	flag.IntVar(&options.numOfFiltersInFilterPool, "numOfFiltersInFilterPool", 32,
 		"Number of filters to be created and shared among all DCP handlers")
+	flag.BoolVar(&options.debugLogLevel, "debugLogLevel", false,
+		"The differ to be run with debug log level")
 
 	flag.Parse()
 }
@@ -308,7 +312,11 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 		colFilterToTgtColIdsMap: map[string][]uint32{},
 	}
 
-	difftool.logger = xdcrLog.NewLogger("xdcrDiffTool", nil)
+	logCtx := xdcrLog.DefaultLoggerContext
+	difftool.logger = xdcrLog.NewLogger("xdcrDiffTool", xdcrLog.DefaultLoggerContext)
+	if options.debugLogLevel {
+		logCtx.SetLogLevel(xdcrLog.LogLevelDebug)
+	}
 
 	difftool.selfRef, _ = metadata.NewRemoteClusterReference("", base.SelfReferenceName, options.sourceUrl, options.sourceUsername, options.sourcePassword,
 		"", false, "", nil, nil, nil, nil)

@@ -347,29 +347,45 @@ func (cm *CheckpointManager) getStatsWithRetry() (map[string]map[string]string, 
 		callback := func(result *gocbcore.StatsResult, cbErr error) {
 			defer waitGroup.Done()
 			if cbErr != nil {
+				cm.logger.Debugf("StatsMap received callback err: %v\n", cbErr)
 				err = cbErr
 			} else {
+				errMap := make(xdcrBase.ErrorMap)
 				for server, singleServerStats := range result.Servers {
 					if singleServerStats.Error != nil {
-						err = singleServerStats.Error
-						return
+						errMap[server] = singleServerStats.Error
+						// Even if there is one error, we should continue
+						cm.logger.Errorf("StatsMap for server %v received err: %v", server,
+							singleServerStats.Error)
+						continue
 					}
+					cm.logger.Debugf("Server %v received stats %v", server, singleServerStats.Stats)
 					statsMap[server] = make(map[string]string)
 					for k, v := range singleServerStats.Stats {
 						statsMap[server][k] = v
 					}
 				}
+				if len(errMap) > 0 {
+					cm.logger.Errorf("Errors map for stats: %v", errMap)
+					err = fmt.Errorf(xdcrBase.FlattenErrorMap(errMap))
+				}
 			}
 		}
 
 		waitGroup.Add(1)
-		cm.agent.Stats(gocbcore.StatsOptions{
+		_, enqErr := cm.agent.Stats(gocbcore.StatsOptions{
 			Key:           base.VbucketSeqnoStatName,
 			Deadline:      time.Now().Add(cm.bucketOpTimeout),
 			RetryStrategy: &base.RetryStrategy{},
 		}, callback)
-
 		waitGroup.Wait()
+
+		if enqErr != nil {
+			cm.logger.Errorf("cm.agent.Stats err %v", enqErr)
+			if err == nil {
+				err = enqErr
+			}
+		}
 		return err
 	}
 
@@ -378,7 +394,7 @@ func (cm *CheckpointManager) getStatsWithRetry() (map[string]map[string]string, 
 	if opErr != nil {
 		return nil, opErr
 	} else {
-		return statsMap, nil
+		return statsMap, err
 	}
 }
 
@@ -549,9 +565,9 @@ func (cm *CheckpointManager) RecordFilterEvent(vbno uint16, filterResult base.Fi
 }
 
 // no need to lock seqoMap since
-// 1. MutationProcessedEvent on a Vbno are serialized
-// 2. checkpointManager reads seqnoMap when it saves checkpoints.
-//    This is done after all DcpHandlers are stopped and MutationProcessedEvent cease to happen
+//  1. MutationProcessedEvent on a Vbno are serialized
+//  2. checkpointManager reads seqnoMap when it saves checkpoints.
+//     This is done after all DcpHandlers are stopped and MutationProcessedEvent cease to happen
 func (cm *CheckpointManager) HandleMutationEvent(mut *Mutation, filterResult base.FilterResultType) bool {
 	if cm.dcpDriver.completeBySeqno {
 		endSeqno := cm.endSeqnoMap[mut.Vbno]
