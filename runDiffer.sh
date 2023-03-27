@@ -190,6 +190,11 @@ if [[ ! -z "$mutationRetries" ]];then
 	execString="${execString} $mutationRetries"
 fi
 
+# ---
+# Uncomment below line for debug log level
+#execString="${execString} -debugLogLevel true"
+# ---
+
 # Execute the differ in background and watch the pid to be finished
 $execString >$differLogFileName 2>&1 &
 bgPid=$(jobs -p)
