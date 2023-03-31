@@ -360,7 +360,7 @@ func (cm *CheckpointManager) getStatsWithRetry() (map[string]map[string]string, 
 							singleServerStats.Error)
 						continue
 					}
-					cm.logger.Infof("Server %v received stats %v", server, singleServerStats.Stats)
+					cm.logger.Debugf("Server %v received stats %v", server, singleServerStats.Stats)
 					statsMap[server] = make(map[string]string)
 					for k, v := range singleServerStats.Stats {
 						statsMap[server][k] = v
@@ -374,6 +374,11 @@ func (cm *CheckpointManager) getStatsWithRetry() (map[string]map[string]string, 
 				vbuuidMap := make(map[uint16]uint64)
 				endSeqnoMap := make(map[uint16]uint64)
 				err = utils.ParseHighSeqnoStat(statsMap, endSeqnoMap, vbuuidMap, true)
+				if err != nil {
+					for server, singleServerStats := range result.Servers {
+						cm.logger.Infof("Server %v received stats %v", server, singleServerStats.Stats)
+					}
+				}
 			}
 		}
 
