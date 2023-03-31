@@ -3,16 +3,17 @@ package dcp
 import (
 	"encoding/json"
 	"fmt"
-	gocb "github.com/couchbase/gocb/v2"
-	"github.com/couchbase/gocbcore/v9"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	xdcrLog "github.com/couchbase/goxdcr/log"
-	"github.com/rcrowley/go-metrics"
 	"io/ioutil"
 	"math"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/couchbase/gocb/v2"
+	"github.com/couchbase/gocbcore/v9"
+	xdcrBase "github.com/couchbase/goxdcr/base"
+	xdcrLog "github.com/couchbase/goxdcr/log"
+	"github.com/rcrowley/go-metrics"
 	"xdcrDiffer/base"
 	"xdcrDiffer/utils"
 )
@@ -359,7 +360,7 @@ func (cm *CheckpointManager) getStatsWithRetry() (map[string]map[string]string, 
 							singleServerStats.Error)
 						continue
 					}
-					cm.logger.Debugf("Server %v received stats %v", server, singleServerStats.Stats)
+					cm.logger.Infof("Server %v received stats %v", server, singleServerStats.Stats)
 					statsMap[server] = make(map[string]string)
 					for k, v := range singleServerStats.Stats {
 						statsMap[server][k] = v
@@ -369,6 +370,10 @@ func (cm *CheckpointManager) getStatsWithRetry() (map[string]map[string]string, 
 					cm.logger.Errorf("Errors map for stats: %v", errMap)
 					err = fmt.Errorf(xdcrBase.FlattenErrorMap(errMap))
 				}
+				// Make sure we get all the vbuuid and seqno
+				vbuuidMap := make(map[uint16]uint64)
+				endSeqnoMap := make(map[uint16]uint64)
+				err = utils.ParseHighSeqnoStat(statsMap, endSeqnoMap, vbuuidMap, true)
 			}
 		}
 
