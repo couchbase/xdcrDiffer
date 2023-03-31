@@ -4,6 +4,26 @@ This tool first contacts the specified clusters first the DCP protocol to extrac
 
 If an XDCR is ongoing, it is quite possible that the tool will show documents as missing even though they are in transit. The tool then will do a second round of verification on these missing documents to make sure they are false positives.
 
+# Table Of Contents
+- [Getting Started](#getting-started)
+    * [Prerequisites](#prerequisites)
+    * [Compiling](#compiling)
+    * [Running](#running)
+        + [Preparing Couchbase Clusters](#preparing-couchbase-clusters)
+        + [runDiffer](#rundiffer)
+        + [Preparing xdcrDiffer host for running differ](#preparing-xdcrdiffer-host-for-running-differ)
+        + [Tool binary](#tool-binary)
+        + [Running with TLS encrypted traffic](#running-with-tls-encrypted-traffic)
+- [DiffTool Process Flow](#difftool-process-flow)
+- [Output](#output)
+    * [Manifests](#manifests)
+    * [Collection Mapping](#collection-mapping)
+    * [Collection Migration Debugging](#collection-migration-debugging)
+        + [How to interpret multi-target migration differ result](#how-to-interpret-multi-target-migration-differ-result)
+- [Detailed Q&A's](#detailed-q-a-s)
+- [Known Limitations](#known-limitations)
+- [License](#license)
+
 ## Getting Started
 
 
@@ -183,6 +203,44 @@ The xdcrDiffer is going to compile various collection-to-collection mapping, and
 2021-05-11T17:03:49.564-07:00 INFO GOXDCR.xdcrDiffTool: Replication spec is using implicit mapping
 2021-05-11T17:03:49.564-07:00 INFO GOXDCR.xdcrDiffTool: Collection namespace mapping: map[S1.col1:|Scope: S1 Collection: col1|  S1.col2:|Scope: S1 Collection: col2|  _default._default:|Scope: _default Collection: _default| ] idsMap: map[0:[0] 8:[8] 9:[9]]
 ```
+
+### Collection Migration Debugging
+In certain scenarios, collections migration mode could lead to a single document being replicated to two or more target collections.
+This is explained in the [official documentation](https://docs.couchbase.com/server/current/learn/clusters-and-availability/xdcr-with-scopes-and-collections.html#migration) page.
+The xdcrDiffer can detect when these happen and showcase the information. The following will indicate how to read the output of a differ in this case.
+
+#### How to interpret multi-target migration differ result
+1. Refer to the `xdcrDiffer.log`. It shows a specific order of the migration filters that are used. The index is used as the key to interpret the results.
+ ```
+2023-03-30T14:45:30.512-07:00 INFO GOXDCR.xdcrDiffTool: 0 : type="brewery" -> S3.col3
+2023-03-30T14:45:30.512-07:00 INFO GOXDCR.xdcrDiffTool: 1 : (country == "United States" OR country = "Canada") AND type="brewery" -> S3.col1
+2023-03-30T14:45:30.512-07:00 INFO GOXDCR.xdcrDiffTool: 2 : country != "United States" AND country != "Canada" AND type="brewery" -> S3.col2
+```
+2. There is a file called `mutationMigrationDetails`. The file contains a map of `docKey` -> `indexes that match`. For example:
+```
+$ jsonpp mutationDiff/mutationMigrationDetails | head -n 30
+{
+  "21st_amendment_brewery_cafe": [
+    0,
+    1
+  ],
+  "357": [
+    0,
+    2
+  ],
+  "3_fonteinen_brouwerij_ambachtelijke_geuzestekerij": [
+    0,
+    2
+  ],
+  "512_brewing_company": [
+    0,
+    1
+  ],
+  ...
+```
+
+In the above example, a document named `512_brewing_company` had passed migration filters 0 and 1, and has been replicated to the corresponding target collections of `S3.col3` and `S3.col1`.
+
 
 ## Detailed Q&A's
 > Does the tool just match keys or the values of documents as well?

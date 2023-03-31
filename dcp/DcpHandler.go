@@ -19,6 +19,7 @@ import (
 	xdcrBase "github.com/couchbase/goxdcr/base"
 	xdcrParts "github.com/couchbase/goxdcr/base/filter"
 	xdcrLog "github.com/couchbase/goxdcr/log"
+	"github.com/couchbase/goxdcr/metadata"
 	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"os"
 	"strings"
@@ -50,9 +51,10 @@ type DcpHandler struct {
 	isSource                bool
 	utils                   xdcrUtils.UtilsIface
 	bufferCap               int
+	migrationMapping        metadata.CollectionNamespaceMapping
 }
 
-func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface, incReceivedCounter, incSysEvtReceived func(), colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int) (*DcpHandler, error) {
+func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface, incReceivedCounter, incSysEvtReceived func(), colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping) (*DcpHandler, error) {
 	if len(vbList) == 0 {
 		return nil, fmt.Errorf("vbList is empty for handler %v", index)
 	}
@@ -75,6 +77,7 @@ func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uin
 		utils:                 utils,
 		isSource:              strings.Contains(dcpClient.Name, base.SourceClusterName),
 		bufferCap:             bufferCap,
+		migrationMapping:      migrationMapping,
 	}, nil
 }
 
@@ -188,6 +191,8 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 
 	var filterIdsMatched []uint8
 	if dh.colMigrationFiltersOn && dh.isSource {
+		dh.checkColMigrationDataCloned(mut)
+
 		filterIdsMatched = dh.checkColMigrationFilters(mut)
 		if len(filterIdsMatched) == 0 {
 			return
@@ -300,6 +305,21 @@ func (dh *DcpHandler) checkColMigrationFilters(mut *Mutation) []uint8 {
 		}
 	}
 	return filterIdsMatched
+}
+
+func (dh *DcpHandler) checkColMigrationDataCloned(mut *Mutation) {
+	if dh.logger.GetLogLevel() != xdcrLog.LogLevelDebug {
+		return
+	}
+
+	uprEvent := mut.ToUprEvent()
+	dummyReq := &xdcrBase.WrappedMCRequest{}
+	dummyReq.Req = &gomemcached.MCRequest{}
+	matchedNamespaces, errMap, errMCReqMap := dh.migrationMapping.GetTargetUsingMigrationFilter(uprEvent, dummyReq, dh.logger)
+	if len(matchedNamespaces) > 1 {
+		dh.logger.Debugf("Document %v matched more than once: %v, errMap %v, errMCReqMap %v",
+			matchedNamespaces.String(), errMap, errMCReqMap)
+	}
 }
 
 type Bucket struct {
@@ -485,8 +505,8 @@ func (m *Mutation) ToUprEvent() *xdcrBase.WrappedUprEvent {
 //	Datatype - 2 byte
 //	hash     - 64 bytes
 //	collectionId - 4 bytes
-//	colFiltersLen - 1 byte (number of collection migration filters)
-//	(per col filter) - 1 byte
+//	colFiltersLen - 2 byte (number of collection migration filters)
+//	(per col filter) - 2 byte
 func (mut *Mutation) Serialize() []byte {
 	keyLen := len(mut.Key)
 	ret := make([]byte, base.GetFixedSizeMutationLen(keyLen, mut.ColFiltersMatched))
