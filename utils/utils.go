@@ -18,6 +18,7 @@ import (
 	"io/ioutil"
 	"math"
 	mrand "math/rand"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -56,8 +57,10 @@ func GetBucketIndexFromKey(key []byte, numberOfBins int) int {
 // evenly distribute load across workers
 // assumes that num_of_worker <= num_of_load
 // returns load_distribution [][]int, where
-//     load_distribution[i][0] is the start index, inclusive, of load for ith worker
-//     load_distribution[i][1] is the end index, exclusive, of load for ith worker
+//
+//	load_distribution[i][0] is the start index, inclusive, of load for ith worker
+//	load_distribution[i][1] is the end index, exclusive, of load for ith worker
+//
 // note that load is zero indexed, i.e., indexed as 0, 1, .. N-1 for N loads
 func BalanceLoad(num_of_worker int, num_of_load int) [][]int {
 	load_distribution := make([][]int, 0)
@@ -283,4 +286,27 @@ func GetCertificate(u xdcrUtils.UtilsIface, hostname string, username, password 
 	}
 
 	return ioutil.ReadAll(res.Body)
+}
+
+// type to facilitate the sorting of uint16 lists
+type Uint8List []uint8
+
+func (u Uint8List) Len() int           { return len(u) }
+func (u Uint8List) Swap(i, j int)      { u[i], u[j] = u[j], u[i] }
+func (u Uint8List) Less(i, j int) bool { return u[i] < u[j] }
+
+func SortUint8List(list []uint8) []uint8 {
+	sort.Sort(Uint8List(list))
+	return list
+}
+
+func SearchUint8List(seqno_list []uint8, seqno uint8) (int, bool) {
+	index := sort.Search(len(seqno_list), func(i int) bool {
+		return seqno_list[i] >= seqno
+	})
+	if index < len(seqno_list) && seqno_list[index] == seqno {
+		return index, true
+	} else {
+		return index, false
+	}
 }
