@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	fdp "xdcrDiffer/fileDescriptorPool"
+	"xdcrDiffer/utils"
 )
 
 // Given two DCP Dump files, perform necessary diffing task
@@ -45,10 +46,45 @@ type FilesDiffer struct {
 
 	collectionIdMapping map[uint32][]uint32
 	colFilterStrings    []string
-	colFilterTgtIds     []uint32
+	colFilterTgtIds     []uint32 // target collection IDs
 
 	file1ItemCount int
 	file2ItemCount int
+
+	// For 1->N,  it is possible for doc is mapped to multiple filter IDs
+	duplicatedHintMap DuplicatedHintMap
+}
+
+type DuplicatedHintMap map[string][]uint8
+
+func (d DuplicatedHintMap) Merge(other DuplicatedHintMap) {
+	for k, v := range other {
+		if _, exists := d[k]; !exists {
+			d[k] = v
+		} else {
+			replacement := utils.SortUint8List(d[k])
+			for _, j := range v {
+				_, found := utils.SearchUint8List(replacement, j)
+				if !found {
+					replacement = append(replacement, j)
+					replacement = utils.SortUint8List(replacement)
+				}
+			}
+			d[k] = replacement
+		}
+	}
+}
+
+func (d DuplicatedHintMap) ToIntMap() map[string][]int {
+	outputMap := make(map[string][]int)
+	for k, v := range d {
+		var intSlice []int
+		for _, j := range v {
+			intSlice = append(intSlice, int(j))
+		}
+		outputMap[k] = intSlice
+	}
+	return outputMap
 }
 
 type FileAttributes struct {
@@ -104,8 +140,10 @@ func shaCompare(a, b [sha512.Size]byte) bool {
 // Note Expiry is not used for conflict resolution
 // Returns a boolean to showcase if the values all match
 // For int return val:
-//  0 - Names are the same
-//  1 - If entry name > other name
+//
+//	0 - Names are the same
+//	1 - If entry name > other name
+//
 // -1 - If entry name < other name
 func (entry oneEntry) Diff(other oneEntry) (int, bool) {
 	if entry.Key != other.Key {
@@ -161,6 +199,7 @@ func NewFilesDiffer(file1, file2 string, collectionMapping map[uint32][]uint32, 
 		collectionIdMapping: collectionMapping,
 		colFilterStrings:    colFilterStrings,
 		colFilterTgtIds:     colFilterTgtIds,
+		duplicatedHintMap:   map[string][]uint8{},
 	}
 	if len(collectionMapping) == 0 {
 		// This means this is legacy mode - no collection support
@@ -476,12 +515,12 @@ func addToSrcDiffMapIfNotAdded(srcDedupMap map[string]bool, key string, srcDiffM
 }
 
 // Diff Returns:
-// 1. srcDiffMap - a map of <colId> -> []<key> : For a collection ID <colId>, the keys that shows some inconsistency
-// 2. tgtDiffMap - a map of <colId> -> []<key> : For a target side colId, the keys that show inconsistency with source counterpart
-// 3. migrationHintMap - map of <string] -> []<colId> :
-//                       Under collections migration mode, this map will allow a quick index of which source document
-//                       should belong in which target collection ID. This is needed because fileDiffer ingested this
-//                       information from actual DCP binary dump and needs to pass this to mutationDiffer for display
+//  1. srcDiffMap - a map of <colId> -> []<key> : For a collection ID <colId>, the keys that shows some inconsistency
+//  2. tgtDiffMap - a map of <colId> -> []<key> : For a target side colId, the keys that show inconsistency with source counterpart
+//  3. migrationHintMap - map of <string] -> []<colId> :
+//     Under collections migration mode, this map will allow a quick index of which source document
+//     should belong in which target collection ID. This is needed because fileDiffer ingested this
+//     information from actual DCP binary dump and needs to pass this to mutationDiffer for display
 func (differ *FilesDiffer) Diff() (srcDiffMap, tgtDiffMap map[uint32][]string, migrationHintMap map[string][]uint32, diffBytes []byte, err error) {
 	differ.dataLoadWg.Add(1)
 	go differ.asyncLoad(&differ.file1, &differ.err1)
@@ -573,5 +612,8 @@ func (differ *FilesDiffer) addMigrationHintIfNeeded(migrationMode bool, item1 *o
 			tgtColIds = append(tgtColIds, differ.colFilterTgtIds[filterIdxMatched])
 		}
 		hintMap[item1.Key] = tgtColIds
+		if item1.ColMigrFilterLen > 1 {
+			differ.duplicatedHintMap[item1.Key] = item1.ColFiltersMatched
+		}
 	}
 }

@@ -295,6 +295,10 @@ type xdcrDiffTool struct {
 	colFilterOrderedTargetNs    []*xdcrBase.CollectionNamespace
 	colFilterOrderedTargetColId []uint32
 
+	// Used for migration mapping
+	migrationMapping  metadata.CollectionNamespaceMapping
+	duplicatedMapping differ.DuplicatedHintMap
+
 	sourceDcpDriver *dcp.DcpDriver
 	targetDcpDriver *dcp.DcpDriver
 
@@ -694,7 +698,8 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.numberOfWorkersPerSourceDcpClient, options.numberOfBins, options.sourceDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
-		difftool.srcCapabilities, difftool.srcCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity)
+		difftool.srcCapabilities, difftool.srcCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity,
+		difftool.migrationMapping)
 
 	delayDurationBetweenSourceAndTarget := time.Duration(options.delayBetweenSourceAndTarget) * time.Second
 	difftool.logger.Infof("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
@@ -707,7 +712,8 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.numberOfTargetDcpClients, options.numberOfWorkersPerTargetDcpClient, options.numberOfBins, options.targetDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval, options.getStatsMaxBackoff,
 		options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
-		difftool.tgtCapabilities, difftool.tgtCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity)
+		difftool.tgtCapabilities, difftool.tgtCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity,
+		difftool.migrationMapping)
 
 	difftool.curState.mtx.Lock()
 	difftool.curState.state = StateDcpStarted
@@ -764,6 +770,7 @@ func (difftool *xdcrDiffTool) diffDataFiles() error {
 			}
 		}
 	}
+	difftool.duplicatedMapping = difftoolDriver.DuplicatedHint
 	return err
 }
 
@@ -788,21 +795,21 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 		time.Duration(options.sendBatchRetryInterval)*time.Millisecond,
 		time.Duration(options.sendBatchMaxBackoff)*time.Second, options.compareBody, difftool.logger, difftool.srcToTgtColIdsMap,
 		difftool.srcCapabilities, difftool.tgtCapabilities, difftool.utils, options.mutationDifferRetries,
-		options.mutationDifferRetriesWaitSecs)
+		options.mutationDifferRetriesWaitSecs, difftool.duplicatedMapping)
 	err = mutationDiffer.Run()
 	if err != nil {
 		difftool.logger.Errorf("Error from runMutationDiffer = %v\n", err)
 	}
 }
 
-func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bucketBufferCap int) *dcp.DcpDriver {
+func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bucketBufferCap int, migrationMapping metadata.CollectionNamespaceMapping) *dcp.DcpDriver {
 	waitGroup.Add(1)
 	dcpDriver := dcp.NewDcpDriver(logger, name, url, bucketName, ref, fileDir, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBins),
 		int(dcpHandlerChanSize), time.Duration(bucketOpTimeout)*time.Second, int(maxNumOfGetStatsRetry),
 		time.Duration(getStatsRetryInterval)*time.Second, time.Duration(getStatsMaxBackoff)*time.Second,
 		int(checkpointInterval), errChan, waitGroup, completeBySeqno, fdPool, filter, capabilities, collectionIDs, colMigrationFilters,
-		utils, bucketBufferCap)
+		utils, bucketBufferCap, migrationMapping)
 	// dcp driver startup may take some time. Do it asynchronously
 	go startDcpDriverAysnc(dcpDriver, errChan, logger)
 	return dcpDriver
@@ -1257,7 +1264,7 @@ func (difftool *xdcrDiffTool) compileMigrationMapping(nsMappings metadata.Collec
 		difftool.colFilterOrderedKeys = append(difftool.colFilterOrderedKeys, srcNs.String())
 	}
 
-	difftool.logger.Infof("Collections Migrations filters:\n")
+	difftool.logger.Infof("Collections Migrations filters ordered list:\n")
 	for i, filterStr := range difftool.colFilterOrderedKeys {
 		difftool.logger.Infof("%v : %v -> %v", i, filterStr, difftool.colFilterOrderedTargetNs[i].ToIndexString())
 	}
@@ -1271,5 +1278,7 @@ func (difftool *xdcrDiffTool) compileMigrationMapping(nsMappings metadata.Collec
 		difftool.srcToTgtColIdsMap[0] = append(difftool.srcToTgtColIdsMap[0], targetColId)
 		difftool.colFilterOrderedTargetColId = append(difftool.colFilterOrderedTargetColId, targetColId)
 	}
+
+	difftool.migrationMapping = nsMappings
 	return nil
 }

@@ -45,6 +45,7 @@ type DcpClient struct {
 	collectionIds       []uint32
 	colMigrationFilters []string
 	bufferCap           int
+	migrationMapping    metadata.CollectionNamespaceMapping
 
 	gocbcoreDcpFeed *GocbcoreDCPFeed
 	utils           xdcrUtils.UtilsIface
@@ -53,7 +54,7 @@ type DcpClient struct {
 	kvVbMap      map[string][]uint16
 }
 
-func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.WaitGroup, startVbtsDoneChan chan bool, capabilities metadata.Capability, collectionIds []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int) *DcpClient {
+func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.WaitGroup, startVbtsDoneChan chan bool, capabilities metadata.Capability, collectionIds []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping) *DcpClient {
 	return &DcpClient{
 		Name:                fmt.Sprintf("%v_%v", dcpDriver.Name, i),
 		dcpDriver:           dcpDriver,
@@ -70,6 +71,7 @@ func NewDcpClient(dcpDriver *DcpDriver, i int, vbList []uint16, waitGroup *sync.
 		colMigrationFilters: colMigrationFilters,
 		utils:               utils,
 		bufferCap:           bufferCap,
+		migrationMapping:    migrationMapping,
 	}
 }
 
@@ -292,7 +294,8 @@ func (c *DcpClient) initializeDcpHandlers() error {
 
 		dcpHandler, err := NewDcpHandler(c, c.dcpDriver.fileDir, i, vbList, c.dcpDriver.numberOfBins,
 			c.dcpDriver.dcpHandlerChanSize, c.dcpDriver.fdPool, c.dcpDriver.IncrementDocReceived,
-			c.dcpDriver.IncrementSysEventReceived, c.colMigrationFilters, c.utils, c.bufferCap)
+			c.dcpDriver.IncrementSysEventReceived, c.colMigrationFilters, c.utils, c.bufferCap,
+			c.migrationMapping)
 		if err != nil {
 			c.logger.Errorf("Error constructing dcp handler. err=%v\n", err)
 			return err
