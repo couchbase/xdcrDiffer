@@ -13,7 +13,11 @@ import (
 	"crypto/sha512"
 	"encoding/binary"
 	"fmt"
-	gocbcore "github.com/couchbase/gocbcore/v9"
+	"os"
+	"strings"
+	"sync"
+
+	"github.com/couchbase/gocbcore/v9"
 	"github.com/couchbase/gomemcached"
 	mcc "github.com/couchbase/gomemcached/client"
 	xdcrBase "github.com/couchbase/goxdcr/base"
@@ -21,9 +25,6 @@ import (
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/couchbase/goxdcr/metadata"
 	xdcrUtils "github.com/couchbase/goxdcr/utils"
-	"os"
-	"strings"
-	"sync"
 	"xdcrDiffer/base"
 	fdp "xdcrDiffer/fileDescriptorPool"
 	"xdcrDiffer/utils"
@@ -296,6 +297,10 @@ func (dh *DcpHandler) SeqNoAdvanced(vbID uint16, bySeqno uint64, streamID uint16
 }
 
 func (dh *DcpHandler) checkColMigrationFilters(mut *Mutation) []uint8 {
+	// We don't diff deletion/expiration for migration. Otherwise it is confusing.
+	if mut.OpCode == gomemcached.UPR_EXPIRATION || mut.OpCode == gomemcached.UPR_DELETION {
+		return []uint8{}
+	}
 	var filterIdsMatched []uint8
 	for i, filter := range dh.colMigrationFiltersImpl {
 		// If at least one passed, let it through
@@ -317,8 +322,8 @@ func (dh *DcpHandler) checkColMigrationDataCloned(mut *Mutation) {
 	dummyReq.Req = &gomemcached.MCRequest{}
 	matchedNamespaces, errMap, errMCReqMap := dh.migrationMapping.GetTargetUsingMigrationFilter(uprEvent, dummyReq, dh.logger)
 	if len(matchedNamespaces) > 1 {
-		dh.logger.Debugf("Document %v matched more than once: %v, errMap %v, errMCReqMap %v",
-			matchedNamespaces.String(), errMap, errMCReqMap)
+		dh.logger.Debugf("Document %s with opCode %v matched more than once: %v, errMap %v, errMCReqMap %v",
+			uprEvent.UprEvent.Key, uprEvent.UprEvent.Opcode, matchedNamespaces.String(), errMap, errMCReqMap)
 	}
 }
 
