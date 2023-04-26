@@ -322,7 +322,7 @@ func (dh *DcpHandler) checkColMigrationDataCloned(mut *Mutation) {
 	dummyReq.Req = &gomemcached.MCRequest{}
 	matchedNamespaces, errMap, errMCReqMap := dh.migrationMapping.GetTargetUsingMigrationFilter(uprEvent, dummyReq, dh.logger)
 	if len(matchedNamespaces) > 1 {
-		dh.logger.Debugf("Document %s (%v) with length %v opCode %v matched more than once: %v, errMap %v, errMCReqMap %v",
+		dh.logger.Debugf("Document %s (%x) with length %v opCode %v matched more than once: %v, errMap %v, errMCReqMap %v",
 			uprEvent.UprEvent.Key, uprEvent.UprEvent.Key, len(uprEvent.UprEvent.Key), uprEvent.UprEvent.Opcode, matchedNamespaces.String(), errMap, errMCReqMap)
 	}
 }
