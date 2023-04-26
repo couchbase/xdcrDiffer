@@ -31,7 +31,7 @@ deps:
 	$(GOGET) github.com/couchbase/gocb
 	$(GOGET) github.com/couchbase/gocb/v2
 	$(GOGET) github.com/couchbaselabs/gojsonsm@v1.0.0
-	$(GOGET) github.com/couchbase/goxdcr@v8.0.0-1168
+	$(GOGET) github.com/couchbase/goxdcr@v7.5.0-4222
 	$(GOGET) github.com/rcrowley/go-metrics
 	$(GOGET) github.com/couchbase/cbauth@v0.1.5
 	$(GOGET) github.com/couchbase/gomemcached@v0.2.1

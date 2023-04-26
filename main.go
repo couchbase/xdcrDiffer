@@ -1279,6 +1279,21 @@ func (difftool *xdcrDiffTool) compileMigrationMapping(nsMappings metadata.Collec
 		difftool.colFilterOrderedTargetColId = append(difftool.colFilterOrderedTargetColId, targetColId)
 	}
 
-	difftool.migrationMapping = nsMappings
+	// The migrationMapping will be shared among many components, so we need to make sure it is sharable
+	return difftool.populateMigrationMapping(nsMappings)
+}
+
+func (difftool *xdcrDiffTool) populateMigrationMapping(namespaceMappings metadata.CollectionNamespaceMapping) error {
+	difftool.migrationMapping = namespaceMappings.Clone()
+	filterMode := difftool.specifiedSpec.Settings.GetExpDelMode()
+	for srcNamespacePtr, _ := range difftool.migrationMapping {
+		// For each sourceNamespace, its filter needs to be a pool
+		expr := srcNamespacePtr.GetFilterString()
+		pool, err := filterPool.NewFilterPool(options.numOfFiltersInFilterPool, expr, difftool.utils, filterMode.IsSkipReplicateUncommittedTxnSet())
+		if err != nil {
+			return err
+		}
+		srcNamespacePtr.ReplaceFilter(pool)
+	}
 	return nil
 }
