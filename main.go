@@ -120,8 +120,8 @@ var options struct {
 	enforceTLS bool
 	// Number of items kept in memory per binary buffer bucket
 	bucketBufferCapacity int
-	// Use Get instead of GetMeta to compare document body
-	compareBody bool
+	// Compare metadata, or body, or both
+	compareType string
 	// Number of times for mutationsDiffer to retry to resolve doc differences
 	mutationDifferRetries int
 	// Number of secs to wait between retries
@@ -223,8 +223,8 @@ func argParse() {
 		" stops executing if pre-requisites are not in place to ensure TLS communications")
 	flag.IntVar(&options.bucketBufferCapacity, "bucketBufferCapacity", base.BucketBufferCapacity,
 		"  number of items kept in memory per binary buffer bucket")
-	flag.BoolVar(&options.compareBody, "compareBody", false,
-		" whether to use Get instead of GetMeta during mutationDiff")
+	flag.StringVar(&options.compareType, "compareType", base.MutationCompareTypeMetadata,
+		" whether to compare meta, body, or both. Default meta")
 	flag.IntVar(&options.mutationDifferRetries, "mutationRetries", 0,
 		"Additional number of times to retry to resolve the mutation differences")
 	flag.IntVar(&options.mutationDifferRetriesWaitSecs, "mutationRetriesWaitSecs", 60,
@@ -235,6 +235,16 @@ func argParse() {
 		"The differ to be run with debug log level")
 
 	flag.Parse()
+}
+
+func validateCompareType(method string) {
+	for _, str := range base.MutationDiffCompareType {
+		if method == str {
+			return
+		}
+	}
+	fmt.Fprintf(os.Stderr, "Invalid compareType '%v'. Accepted values are %v\n", options.compareType, base.MutationDiffCompareType)
+	os.Exit(1)
 }
 
 func usage() {
@@ -561,6 +571,7 @@ func maybeSetEnv(key, value string) {
 
 func main() {
 	argParse()
+	validateCompareType(options.compareType)
 
 	fmt.Printf("differ is run with options: %+v\n", options)
 	legacyMode := len(options.targetUsername) > 0
@@ -775,7 +786,7 @@ func (difftool *xdcrDiffTool) diffDataFiles() error {
 }
 
 func (difftool *xdcrDiffTool) runMutationDiffer() {
-	difftool.logger.Infof("runMutationDiffer started with compareBody=%v\n", options.compareBody)
+	difftool.logger.Infof("runMutationDiffer started with compareBody=%v\n", options.compareType)
 	defer difftool.logger.Infof("runMutationDiffer completed\n")
 
 	err := os.RemoveAll(options.mutationDifferDir)
@@ -793,7 +804,7 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 		options.fileDifferDir, options.mutationDifferDir, int(options.numberOfWorkersForMutationDiffer),
 		int(options.mutationDifferBatchSize), int(options.mutationDifferTimeout), int(options.maxNumOfSendBatchRetry),
 		time.Duration(options.sendBatchRetryInterval)*time.Millisecond,
-		time.Duration(options.sendBatchMaxBackoff)*time.Second, options.compareBody, difftool.logger, difftool.srcToTgtColIdsMap,
+		time.Duration(options.sendBatchMaxBackoff)*time.Second, options.compareType, difftool.logger, difftool.srcToTgtColIdsMap,
 		difftool.srcCapabilities, difftool.tgtCapabilities, difftool.utils, options.mutationDifferRetries,
 		options.mutationDifferRetriesWaitSecs, difftool.duplicatedMapping)
 	err = mutationDiffer.Run()

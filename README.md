@@ -130,6 +130,8 @@ Usage of ./xdcrDiffer:
         Additional number of times to retry to resolve the mutation differences
   -mutationRetriesWaitSecs
         Seconds to wait in between retries for mutation differences
+  -compareType string
+        What to compare during mutationDiff. Accepted values are: meta (default), body, both
 ```
 
 A few options worth noting:
@@ -141,6 +143,10 @@ A few options worth noting:
 - numberOfBins - Each Couchbase bucket contains 1024 vbuckets. For optimizing sorting, each vbucket is also sub-divided into bins as the data are streamed before the diff operation.
 - numberOfFileDesc - If the tool has exhausted all system file descriptors, this option allows the tool to limit the max number of concurently open file descriptors.
 - mutationRetries - If there are differences, the tool will retry a specified amount of times to try to reconcile potential in-flight differences
+- compareType - This specifies what to compare during mutationDiff. Accepted values are
+  - meta: This is the default. It will get metadata for comparison. This is faster and includes tombstones.
+  - body: It will get document body and only compare the document body. This is slower and does not include tombstones.
+  - both: It will get document body and compare both document body and metadata. This is slower and does not include tombstones.
 
 #### Running with TLS encrypted traffic
 The xdcrDiffer supports running with encrypted traffic such that no data (or metadata) is sent or received in plain text over the wire. To run TLS, the followings need to be in place:

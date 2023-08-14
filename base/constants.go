@@ -105,3 +105,11 @@ const CouchbaseSecurePrefix = "couchbases://"
 var SetupTimeout = 5 * time.Second
 
 const JSONDataType = 1
+
+const (
+	MutationCompareTypeMetadata    = "meta" // This is the default
+	MutationCompareTypeBodyAndMeta = "both" // This is the original method
+	MutationCompareTypeBodyOnly    = "body"
+)
+
+var MutationDiffCompareType = []string{MutationCompareTypeMetadata, MutationCompareTypeBodyOnly, MutationCompareTypeBodyAndMeta}
