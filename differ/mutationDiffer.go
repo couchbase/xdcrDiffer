@@ -12,11 +12,6 @@ package differ
 import (
 	"encoding/json"
 	"fmt"
-	gocbcore "github.com/couchbase/gocbcore/v9"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	xdcrLog "github.com/couchbase/goxdcr/log"
-	"github.com/couchbase/goxdcr/metadata"
-	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"io/ioutil"
 	"math"
 	"os"
@@ -25,6 +20,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/couchbase/gocbcore/v9"
+	xdcrBase "github.com/couchbase/goxdcr/base"
+	xdcrLog "github.com/couchbase/goxdcr/log"
+	"github.com/couchbase/goxdcr/metadata"
+	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"xdcrDiffer/base"
 	"xdcrDiffer/utils"
 )
@@ -90,6 +91,15 @@ type MutationDiffer struct {
 type GocbResult struct {
 	*gocbcore.GetResult
 	*gocbcore.GetMetaResult
+}
+
+func (r *GocbResult) MarshalJSON() ([]byte, error) {
+	if r.GetResult != nil {
+		return json.Marshal(r.GetResult)
+	} else if r.GetMetaResult != nil {
+		return json.Marshal(r.GetMetaResult)
+	}
+	return nil, nil
 }
 
 func NewMutationDiffer(sourceBucketName string, sourceRef *metadata.RemoteClusterReference, targetBucketName string, targetRef *metadata.RemoteClusterReference, fileDifferDir string, mutationDifferFileDir string, numberOfWorkers int, batchSize int, timeout int, maxNumOfSendBatchRetry int, sendBatchRetryInterval time.Duration, sendBatchMaxBackoff time.Duration, compareBody bool, logger *xdcrLog.CommonLogger, colIdsMap map[uint32][]uint32, srcCapability metadata.Capability, tgtCapability metadata.Capability, xdcrUtils xdcrUtils.UtilsIface, retries int, retriesWaitSecs int, duplMapping DuplicatedHintMap) *MutationDiffer {
