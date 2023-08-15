@@ -32,7 +32,7 @@ specified source cluster (NOTE: over http://) and retrieve the specified replica
 The difftool currently only supports connecting to remote targets with username and password. Thus, if the specified remote cluster
 reference only contains certificate, then specify the remoteClusterUsername and remoteClusterPassword accordingly.
 
-use "-b" to get document body for comparison. This is equivalent to "-m both"
+use "-b" to get document body for comparison. This is equivalent to "-m both". This option will be deprecated in future release.
 use "-m" to specify what to compare during mutationDiff.
  meta (default) will get metadata for comparison. This is faster and includes tombstones.
  body will get document body and only compare the document body. This is slower and does not include tombstones
@@ -201,8 +201,6 @@ fi
 # Uncomment below line for debug log level
 #execString="${execString} -debugLogLevel true"
 # ---
-
-echo "running $execString"
 
 # Execute the differ in background and watch the pid to be finished
 $execString >$differLogFileName 2>&1 &

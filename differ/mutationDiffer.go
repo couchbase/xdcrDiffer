@@ -845,7 +845,8 @@ func NewBatch(dw *DifferWorker, startIndex, endIndex int) *batch {
 			case base.MutationCompareTypeMetadata:
 				b.targetResults[tgtColId][fetchItem.Key] = &GetMetaResult{}
 			default:
-				b.targetResults[tgtColId][fetchItem.Key] = &GetMetaResult{}
+				// This will never happen since the input check is done in the beginning in main()
+				panic(fmt.Sprintf("Invalid comparetype %v", dw.differ.compareType))
 			}
 		}
 	}
