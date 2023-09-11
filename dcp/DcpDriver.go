@@ -11,18 +11,19 @@ package dcp
 
 import (
 	"fmt"
-	gocbcore "github.com/couchbase/gocbcore/v9"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	xdcrParts "github.com/couchbase/goxdcr/base/filter"
-	xdcrLog "github.com/couchbase/goxdcr/log"
-	"github.com/couchbase/goxdcr/metadata"
-	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"sync"
 	"sync/atomic"
 	"time"
 	"xdcrDiffer/base"
 	fdp "xdcrDiffer/fileDescriptorPool"
 	"xdcrDiffer/utils"
+
+	gocbcore "github.com/couchbase/gocbcore/v9"
+	xdcrBase "github.com/couchbase/goxdcr/base"
+	xdcrParts "github.com/couchbase/goxdcr/base/filter"
+	xdcrLog "github.com/couchbase/goxdcr/log"
+	"github.com/couchbase/goxdcr/metadata"
+	xdcrUtils "github.com/couchbase/goxdcr/utils"
 )
 
 type DcpDriver struct {
@@ -63,8 +64,8 @@ type DcpDriver struct {
 	migrationMapping    metadata.CollectionNamespaceMapping
 
 	// various counters
-	totalNumReceivedFromDCP      uint64
-	totalSysEventReceivedFromDCP uint64
+	totalNumReceivedFromDCP                uint64
+	totalSysOrUnsubbedEventReceivedFromDCP uint64
 }
 
 type VBStateWithLock struct {
@@ -209,8 +210,8 @@ func (d *DcpDriver) Stop() error {
 		return nil
 	}
 
-	d.logger.Infof("Dcp driver %v stopping after receiving %v mutations (%v system events)\n", d.Name,
-		atomic.LoadUint64(&d.totalNumReceivedFromDCP), atomic.LoadUint64(&d.totalSysEventReceivedFromDCP))
+	d.logger.Infof("Dcp driver %v stopping after receiving %v mutations (%v system + unsubscribed events)\n", d.Name,
+		atomic.LoadUint64(&d.totalNumReceivedFromDCP), atomic.LoadUint64(&d.totalSysOrUnsubbedEventReceivedFromDCP))
 	defer d.logger.Infof("Dcp driver %v stopped\n", d.Name)
 	defer d.waitGroup.Done()
 
@@ -351,6 +352,6 @@ func (d *DcpDriver) IncrementDocReceived() {
 	atomic.AddUint64(&d.totalNumReceivedFromDCP, 1)
 }
 
-func (d *DcpDriver) IncrementSysEventReceived() {
-	atomic.AddUint64(&d.totalSysEventReceivedFromDCP, 1)
+func (d *DcpDriver) IncrementSysOrUnsubbedEventReceived() {
+	atomic.AddUint64(&d.totalSysOrUnsubbedEventReceivedFromDCP, 1)
 }
