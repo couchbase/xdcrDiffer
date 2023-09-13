@@ -1249,7 +1249,7 @@ func (difftool *xdcrDiffTool) populateDedupColIds(tgtColIds []uint32, tgtColIdDe
 		_, exists := tgtColIdDedupMap[tgtColId]
 		if !exists {
 			tgtColIdDedupMap[tgtColId] = true
-			difftool.tgtCollectionIds = append(difftool.tgtCollectionIds)
+			difftool.tgtCollectionIds = append(difftool.tgtCollectionIds, tgtColId)
 		}
 	}
 }

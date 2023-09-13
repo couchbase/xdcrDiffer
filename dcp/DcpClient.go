@@ -12,18 +12,19 @@ package dcp
 import (
 	"crypto/tls"
 	"fmt"
-	gocb "github.com/couchbase/gocb/v2"
-	gocbcore "github.com/couchbase/gocbcore/v9"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	xdcrLog "github.com/couchbase/goxdcr/log"
-	"github.com/couchbase/goxdcr/metadata"
-	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 	"xdcrDiffer/base"
 	"xdcrDiffer/utils"
+
+	gocb "github.com/couchbase/gocb/v2"
+	gocbcore "github.com/couchbase/gocbcore/v9"
+	xdcrBase "github.com/couchbase/goxdcr/base"
+	xdcrLog "github.com/couchbase/goxdcr/log"
+	"github.com/couchbase/goxdcr/metadata"
+	xdcrUtils "github.com/couchbase/goxdcr/utils"
 )
 
 type DcpClient struct {
@@ -294,7 +295,7 @@ func (c *DcpClient) initializeDcpHandlers() error {
 
 		dcpHandler, err := NewDcpHandler(c, c.dcpDriver.fileDir, i, vbList, c.dcpDriver.numberOfBins,
 			c.dcpDriver.dcpHandlerChanSize, c.dcpDriver.fdPool, c.dcpDriver.IncrementDocReceived,
-			c.dcpDriver.IncrementSysEventReceived, c.colMigrationFilters, c.utils, c.bufferCap,
+			c.dcpDriver.IncrementSysOrUnsubbedEventReceived, c.colMigrationFilters, c.utils, c.bufferCap,
 			c.migrationMapping)
 		if err != nil {
 			c.logger.Errorf("Error constructing dcp handler. err=%v\n", err)

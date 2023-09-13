@@ -102,7 +102,7 @@ const HttpsPrefix = "https://"
 const CouchbasePrefix = "couchbase://"
 const CouchbaseSecurePrefix = "couchbases://"
 
-var SetupTimeout = 5 * time.Second
+var SetupTimeout = 10 * time.Second
 
 const JSONDataType = 1
 
@@ -113,3 +113,5 @@ const (
 )
 
 var MutationDiffCompareType = []string{MutationCompareTypeMetadata, MutationCompareTypeBodyOnly, MutationCompareTypeBodyAndMeta}
+
+const Uint32MaxVal uint32 = 1<<32 - 1

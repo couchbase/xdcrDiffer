@@ -17,6 +17,10 @@ import (
 	"strings"
 	"sync"
 
+	"xdcrDiffer/base"
+	fdp "xdcrDiffer/fileDescriptorPool"
+	"xdcrDiffer/utils"
+
 	"github.com/couchbase/gocbcore/v9"
 	"github.com/couchbase/gomemcached"
 	mcc "github.com/couchbase/gomemcached/client"
@@ -25,60 +29,57 @@ import (
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/couchbase/goxdcr/metadata"
 	xdcrUtils "github.com/couchbase/goxdcr/utils"
-	"xdcrDiffer/base"
-	fdp "xdcrDiffer/fileDescriptorPool"
-	"xdcrDiffer/utils"
 )
 
 // implements StreamObserver
 type DcpHandler struct {
-	dcpClient               *DcpClient
-	fileDir                 string
-	index                   int
-	vbList                  []uint16
-	numberOfBins            int
-	dataChan                chan *Mutation
-	waitGrp                 sync.WaitGroup
-	finChan                 chan bool
-	bucketMap               map[uint16]map[int]*Bucket
-	fdPool                  fdp.FdPoolIface
-	logger                  *xdcrLog.CommonLogger
-	filter                  xdcrParts.Filter
-	incrementCounter        func()
-	incrementSysCounter     func()
-	colMigrationFilters     []string
-	colMigrationFiltersOn   bool // shortcut to avoid len() check
-	colMigrationFiltersImpl []xdcrParts.Filter
-	isSource                bool
-	utils                   xdcrUtils.UtilsIface
-	bufferCap               int
-	migrationMapping        metadata.CollectionNamespaceMapping
+	dcpClient                     *DcpClient
+	fileDir                       string
+	index                         int
+	vbList                        []uint16
+	numberOfBins                  int
+	dataChan                      chan *Mutation
+	waitGrp                       sync.WaitGroup
+	finChan                       chan bool
+	bucketMap                     map[uint16]map[int]*Bucket
+	fdPool                        fdp.FdPoolIface
+	logger                        *xdcrLog.CommonLogger
+	filter                        xdcrParts.Filter
+	incrementCounter              func()
+	incrementSysOrUnsubbedCounter func()
+	colMigrationFilters           []string
+	colMigrationFiltersOn         bool // shortcut to avoid len() check
+	colMigrationFiltersImpl       []xdcrParts.Filter
+	isSource                      bool
+	utils                         xdcrUtils.UtilsIface
+	bufferCap                     int
+	migrationMapping              metadata.CollectionNamespaceMapping
 }
 
-func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface, incReceivedCounter, incSysEvtReceived func(), colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping) (*DcpHandler, error) {
+func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface, incReceivedCounter, incSysOrUnsubbedEvtReceived func(), colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping) (*DcpHandler, error) {
 	if len(vbList) == 0 {
 		return nil, fmt.Errorf("vbList is empty for handler %v", index)
 	}
 	return &DcpHandler{
-		dcpClient:             dcpClient,
-		fileDir:               fileDir,
-		index:                 index,
-		vbList:                vbList,
-		numberOfBins:          numberOfBins,
-		dataChan:              make(chan *Mutation, dataChanSize),
-		finChan:               make(chan bool),
-		bucketMap:             make(map[uint16]map[int]*Bucket),
-		fdPool:                fdPool,
-		logger:                dcpClient.logger,
-		filter:                dcpClient.dcpDriver.filter,
-		incrementCounter:      incReceivedCounter,
-		incrementSysCounter:   incSysEvtReceived,
-		colMigrationFilters:   colMigrationFilters,
-		colMigrationFiltersOn: len(colMigrationFilters) > 0,
-		utils:                 utils,
-		isSource:              strings.Contains(dcpClient.Name, base.SourceClusterName),
-		bufferCap:             bufferCap,
-		migrationMapping:      migrationMapping,
+		dcpClient:                     dcpClient,
+		fileDir:                       fileDir,
+		index:                         index,
+		vbList:                        vbList,
+		numberOfBins:                  numberOfBins,
+		dataChan:                      make(chan *Mutation, dataChanSize),
+		finChan:                       make(chan bool),
+		bucketMap:                     make(map[uint16]map[int]*Bucket),
+		fdPool:                        fdPool,
+		logger:                        dcpClient.logger,
+		filter:                        dcpClient.dcpDriver.filter,
+		incrementCounter:              incReceivedCounter,
+		incrementSysOrUnsubbedCounter: incSysOrUnsubbedEvtReceived,
+		colMigrationFilters:           colMigrationFilters,
+		colMigrationFiltersOn:         len(colMigrationFilters) > 0,
+		utils:                         utils,
+		isSource:                      strings.Contains(dcpClient.Name, base.SourceClusterName),
+		bufferCap:                     bufferCap,
+		migrationMapping:              migrationMapping,
 	}, nil
 }
 
@@ -184,9 +185,11 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 
 	dh.incrementCounter()
 
-	// Ignore system events - we only care about actual data
-	if mut.IsSystemEvent() {
-		dh.incrementSysCounter()
+	// Ignore system events
+	// Ignore unsubscribed events - mutations/events from collections not subscribed during OpenStream
+	// we only care about actual data
+	if mut.IsSystemOrUnsubbedEvent() {
+		dh.incrementSysOrUnsubbedCounter()
 		return
 	}
 
@@ -293,7 +296,11 @@ func (dh *DcpHandler) OSOSnapshot(vbID uint16, snapshotType uint32, streamID uin
 }
 
 func (dh *DcpHandler) SeqNoAdvanced(vbID uint16, bySeqno uint64, streamID uint16) {
-	// Don't care
+	// This is needed because the seqnos of mutations/events of collections to which the consumer is not subscribed during OpenStream() has to be recorded
+	// Eventhough such mutations/events are not streamed by the producer
+	// bySeqno stores the value of the current high seqno of the vbucket
+	// collectionId parameter of CreateMutation() is insignificant
+	dh.writeToDataChan(CreateMutation(vbID, nil, bySeqno, 0, 0, 0, 0, gomemcached.DCP_SEQNO_ADV, nil, 0, base.Uint32MaxVal))
 }
 
 func (dh *DcpHandler) checkColMigrationFilters(mut *Mutation) []uint8 {
@@ -468,8 +475,8 @@ func (m *Mutation) IsMutation() bool {
 	return m.OpCode == gomemcached.UPR_MUTATION
 }
 
-func (m *Mutation) IsSystemEvent() bool {
-	return m.OpCode == gomemcached.DCP_SYSTEM_EVENT
+func (m *Mutation) IsSystemOrUnsubbedEvent() bool {
+	return m.OpCode == gomemcached.DCP_SYSTEM_EVENT || m.OpCode == gomemcached.DCP_SEQNO_ADV
 }
 
 func (m *Mutation) ToUprEvent() *xdcrBase.WrappedUprEvent {
