@@ -21,7 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/couchbase/gocbcore/v9"
+	"github.com/couchbase/gocbcore/v10"
 	xdcrBase "github.com/couchbase/goxdcr/base"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/couchbase/goxdcr/metadata"

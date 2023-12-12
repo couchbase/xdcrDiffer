@@ -27,7 +27,7 @@ clean:
 	$(GOCLEAN) -modcache
 deps:
 	$(GOMOD) init xdcrDiffer
-	$(GOGET) github.com/couchbase/gocbcore/v9
+	$(GOGET) github.com/couchbase/gocbcore/v10
 	$(GOGET) github.com/couchbase/gocb
 	$(GOGET) github.com/couchbase/gocb/v2
 	$(GOGET) github.com/couchbaselabs/gojsonsm@v1.0.0

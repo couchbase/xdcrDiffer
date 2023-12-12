@@ -18,7 +18,7 @@ import (
 	fdp "xdcrDiffer/fileDescriptorPool"
 	"xdcrDiffer/utils"
 
-	gocbcore "github.com/couchbase/gocbcore/v9"
+	gocbcore "github.com/couchbase/gocbcore/v10"
 	xdcrBase "github.com/couchbase/goxdcr/base"
 	xdcrParts "github.com/couchbase/goxdcr/base/filter"
 	xdcrLog "github.com/couchbase/goxdcr/log"

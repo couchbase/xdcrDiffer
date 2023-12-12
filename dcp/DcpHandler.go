@@ -21,7 +21,7 @@ import (
 	fdp "xdcrDiffer/fileDescriptorPool"
 	"xdcrDiffer/utils"
 
-	"github.com/couchbase/gocbcore/v9"
+	"github.com/couchbase/gocbcore/v10"
 	"github.com/couchbase/gomemcached"
 	mcc "github.com/couchbase/gomemcached/client"
 	xdcrBase "github.com/couchbase/goxdcr/base"
@@ -248,63 +248,64 @@ func (dh *DcpHandler) writeToDataChan(mut *Mutation) {
 	}
 }
 
-func (dh *DcpHandler) SnapshotMarker(startSeqno, endSeqno uint64, vbno uint16, streamID uint16, snapshotType gocbcore.SnapshotState) {
-	dh.dcpClient.dcpDriver.checkpointManager.updateSnapshot(vbno, startSeqno, endSeqno)
+func (dh *DcpHandler) SnapshotMarker(snapshot gocbcore.DcpSnapshotMarker) {
+	dh.dcpClient.dcpDriver.checkpointManager.updateSnapshot(snapshot.VbID, snapshot.StartSeqNo, snapshot.EndSeqNo)
 }
 
-func (dh *DcpHandler) Mutation(seqno, revId uint64, flags, expiry, lockTime uint32, cas uint64, datatype uint8, vbno uint16, collectionID uint32, streamID uint16, key, value []byte) {
-	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, flags, expiry, gomemcached.UPR_MUTATION, value, datatype, collectionID))
+func (dh *DcpHandler) Mutation(mutation gocbcore.DcpMutation) {
+	dh.writeToDataChan(CreateMutation(mutation.VbID, mutation.Key, mutation.SeqNo, mutation.RevNo, mutation.Cas, mutation.Flags, mutation.Expiry, gomemcached.UPR_MUTATION, mutation.Value, mutation.Datatype, mutation.CollectionID))
 }
 
-func (dh *DcpHandler) Deletion(seqno, revId uint64, deleteTime uint32, cas uint64, datatype uint8, vbno uint16, collectionID uint32, streamID uint16, key, value []byte) {
-	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, 0, 0, gomemcached.UPR_DELETION, value, datatype, collectionID))
+func (dh *DcpHandler) Deletion(deletion gocbcore.DcpDeletion) {
+	dh.writeToDataChan(CreateMutation(deletion.VbID, deletion.Key, deletion.SeqNo, deletion.RevNo, deletion.Cas, 0, 0, gomemcached.UPR_DELETION, deletion.Value, deletion.Datatype, deletion.CollectionID))
 }
 
-func (dh *DcpHandler) Expiration(seqno, revId uint64, deleteTime uint32, cas uint64, vbno uint16, collectionID uint32, streamID uint16, key []byte) {
-	dh.writeToDataChan(CreateMutation(vbno, key, seqno, revId, cas, 0, 0, gomemcached.UPR_EXPIRATION, nil, 0, collectionID))
+func (dh *DcpHandler) Expiration(expiration gocbcore.DcpExpiration) {
+	dh.writeToDataChan(CreateMutation(expiration.VbID, expiration.Key, expiration.SeqNo, expiration.RevNo, expiration.Cas, 0, 0, gomemcached.UPR_EXPIRATION, nil, 0, expiration.CollectionID))
 }
 
-func (dh *DcpHandler) End(vbno uint16, streamID uint16, err error) {
-	dh.dcpClient.dcpDriver.handleVbucketCompletion(vbno, err, "dcp stream ended")
+func (dh *DcpHandler) End(streamEnd gocbcore.DcpStreamEnd, err error) {
+	dh.dcpClient.dcpDriver.handleVbucketCompletion(streamEnd.VbID, err, "dcp stream ended")
 }
 
-func (dh *DcpHandler) CreateCollection(seqNo uint64, version uint8, vbID uint16, manifestUID uint64, scopeID uint32, collectionID uint32, ttl uint32, streamID uint16, key []byte) {
-	dh.writeToDataChan(CreateMutation(vbID, key, seqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, collectionID))
+// want CreateCollection("github.com/couchbase/gocbcore/v10".DcpCollectionCreation)
+func (dh *DcpHandler) CreateCollection(creation gocbcore.DcpCollectionCreation) {
+	dh.writeToDataChan(CreateMutation(creation.VbID, creation.Key, creation.SeqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, creation.CollectionID))
 }
 
-func (dh *DcpHandler) DeleteCollection(seqNo uint64, version uint8, vbID uint16, manifestUID uint64, scopeID uint32, collectionID uint32, streamID uint16) {
-	dh.writeToDataChan(CreateMutation(vbID, nil, seqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, collectionID))
+func (dh *DcpHandler) DeleteCollection(deletion gocbcore.DcpCollectionDeletion) {
+	dh.writeToDataChan(CreateMutation(deletion.VbID, nil, deletion.SeqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, deletion.CollectionID))
 }
 
-func (dh *DcpHandler) FlushCollection(seqNo uint64, version uint8, vbID uint16, manifestUID uint64, collectionID uint32) {
+func (dh *DcpHandler) FlushCollection(flush gocbcore.DcpCollectionFlush) {
 	// Don't care - not implemented anyway
 }
 
-func (dh *DcpHandler) CreateScope(seqNo uint64, version uint8, vbID uint16, manifestUID uint64, scopeID uint32, streamID uint16, key []byte) {
+func (dh *DcpHandler) CreateScope(creation gocbcore.DcpScopeCreation) {
 	// Overloading collectionID field for scopeID because differ doesn't care
-	dh.writeToDataChan(CreateMutation(vbID, nil, seqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, scopeID))
+	dh.writeToDataChan(CreateMutation(creation.VbID, nil, creation.SeqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, creation.ScopeID))
 }
 
-func (dh *DcpHandler) DeleteScope(seqNo uint64, version uint8, vbID uint16, manifestUID uint64, scopeID uint32, streamID uint16) {
+func (dh *DcpHandler) DeleteScope(deletion gocbcore.DcpScopeDeletion) {
 	// Overloading collectionID field for scopeID because differ doesn't care
-	dh.writeToDataChan(CreateMutation(vbID, nil, seqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, scopeID))
+	dh.writeToDataChan(CreateMutation(deletion.VbID, nil, deletion.SeqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, deletion.ScopeID))
 }
 
-func (dh *DcpHandler) ModifyCollection(seqNo uint64, version uint8, vbID uint16, manifestUID uint64, collectionID uint32, ttl uint32, streamID uint16) {
+func (dh *DcpHandler) ModifyCollection(modify gocbcore.DcpCollectionModification) {
 	// Overloading collectionID field for scopeID because differ doesn't care
-	dh.writeToDataChan(CreateMutation(vbID, nil, seqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, collectionID))
+	dh.writeToDataChan(CreateMutation(modify.VbID, nil, modify.SeqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, modify.CollectionID))
 }
 
-func (dh *DcpHandler) OSOSnapshot(vbID uint16, snapshotType uint32, streamID uint16) {
+func (dh *DcpHandler) OSOSnapshot(oso gocbcore.DcpOSOSnapshot) {
 	// Don't care
 }
 
-func (dh *DcpHandler) SeqNoAdvanced(vbID uint16, bySeqno uint64, streamID uint16) {
+func (dh *DcpHandler) SeqNoAdvanced(seqnoAdv gocbcore.DcpSeqNoAdvanced) {
 	// This is needed because the seqnos of mutations/events of collections to which the consumer is not subscribed during OpenStream() has to be recorded
 	// Eventhough such mutations/events are not streamed by the producer
 	// bySeqno stores the value of the current high seqno of the vbucket
 	// collectionId parameter of CreateMutation() is insignificant
-	dh.writeToDataChan(CreateMutation(vbID, nil, bySeqno, 0, 0, 0, 0, gomemcached.DCP_SEQNO_ADV, nil, 0, base.Uint32MaxVal))
+	dh.writeToDataChan(CreateMutation(seqnoAdv.VbID, nil, seqnoAdv.SeqNo, 0, 0, 0, 0, gomemcached.DCP_SEQNO_ADV, nil, 0, base.Uint32MaxVal))
 }
 
 func (dh *DcpHandler) checkColMigrationFilters(mut *Mutation) []uint8 {
