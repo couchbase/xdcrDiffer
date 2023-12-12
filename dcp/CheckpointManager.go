@@ -376,7 +376,7 @@ func (cm *CheckpointManager) getStatsWithRetry() (map[string]map[string]string, 
 				err = utils.ParseHighSeqnoStat(statsMap, endSeqnoMap, vbuuidMap, true)
 				if err != nil {
 					for server, singleServerStats := range result.Servers {
-						cm.logger.Infof("Server %v received stats %v", server, singleServerStats.Stats)
+						cm.logger.Warnf("server %v received stats %v", server, singleServerStats.Stats)
 					}
 				}
 			}

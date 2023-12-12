@@ -54,6 +54,8 @@ type DcpHandler struct {
 	utils                         xdcrUtils.UtilsIface
 	bufferCap                     int
 	migrationMapping              metadata.CollectionNamespaceMapping
+	mobileCompatible              int
+	expDelMode                    xdcrBase.FilterExpDelType
 }
 
 func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface, incReceivedCounter, incSysOrUnsubbedEvtReceived func(), colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping) (*DcpHandler, error) {
@@ -80,6 +82,8 @@ func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uin
 		isSource:                      strings.Contains(dcpClient.Name, base.SourceClusterName),
 		bufferCap:                     bufferCap,
 		migrationMapping:              migrationMapping,
+		mobileCompatible:              dcpClient.dcpDriver.mobileCompatible,
+		expDelMode:                    dcpClient.dcpDriver.expDelMode,
 	}, nil
 }
 
@@ -109,7 +113,7 @@ func (d *DcpHandler) compileMigrCollectionFiltersIfNeeded() error {
 	}
 
 	for i, filterStr := range d.colMigrationFilters {
-		filter, err := xdcrParts.NewFilter(fmt.Sprintf("%d", i), filterStr, d.utils, true)
+		filter, err := xdcrParts.NewFilter(fmt.Sprintf("%d", i), filterStr, d.utils, d.expDelMode, d.mobileCompatible)
 		if err != nil {
 			return fmt.Errorf("compiling %v resulted in: %v", filterStr, err)
 		}
@@ -224,7 +228,7 @@ func (dh *DcpHandler) replicationFilter(mut *Mutation, matched bool, filterResul
 	var err error
 	var errStr string
 	if dh.filter != nil && mut.IsMutation() {
-		matched, err, errStr, _ = dh.filter.FilterUprEvent(mut.ToUprEvent())
+		matched, err, errStr, _, _ = dh.filter.FilterUprEvent(mut.ToUprEvent())
 		if !matched {
 			filterResult = base.Filtered
 		}
@@ -311,7 +315,7 @@ func (dh *DcpHandler) checkColMigrationFilters(mut *Mutation) []uint8 {
 	var filterIdsMatched []uint8
 	for i, filter := range dh.colMigrationFiltersImpl {
 		// If at least one passed, let it through
-		matched, _, _, _ := filter.FilterUprEvent(mut.ToUprEvent())
+		matched, _, _, _, _ := filter.FilterUprEvent(mut.ToUprEvent())
 		if matched {
 			filterIdsMatched = append(filterIdsMatched, uint8(i))
 		}
