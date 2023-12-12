@@ -675,8 +675,9 @@ func (difftool *xdcrDiffTool) createFilter() error {
 		}
 		difftool.logger.Infof("Found filtering expression: %v\n", expr)
 	}
+	mobileCompat := difftool.specifiedSpec.Settings.GetMobileCompatible()
 
-	filter, err := filterPool.NewFilterPool(options.numOfFiltersInFilterPool, expr, difftool.utils, filterMode.IsSkipReplicateUncommittedTxnSet())
+	filter, err := filterPool.NewFilterPool(options.numOfFiltersInFilterPool, expr, difftool.utils, filterMode, mobileCompat)
 	difftool.filter = filter
 	return err
 }
@@ -710,7 +711,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
 		difftool.srcCapabilities, difftool.srcCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity,
-		difftool.migrationMapping)
+		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode())
 
 	delayDurationBetweenSourceAndTarget := time.Duration(options.delayBetweenSourceAndTarget) * time.Second
 	difftool.logger.Infof("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
@@ -724,7 +725,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval, options.getStatsMaxBackoff,
 		options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
 		difftool.tgtCapabilities, difftool.tgtCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity,
-		difftool.migrationMapping)
+		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode())
 
 	difftool.curState.mtx.Lock()
 	difftool.curState.state = StateDcpStarted
@@ -813,14 +814,14 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 	}
 }
 
-func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bucketBufferCap int, migrationMapping metadata.CollectionNamespaceMapping) *dcp.DcpDriver {
+func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bucketBufferCap int, migrationMapping metadata.CollectionNamespaceMapping, mobileCompat int, expDelMode xdcrBase.FilterExpDelType) *dcp.DcpDriver {
 	waitGroup.Add(1)
 	dcpDriver := dcp.NewDcpDriver(logger, name, url, bucketName, ref, fileDir, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBins),
 		int(dcpHandlerChanSize), time.Duration(bucketOpTimeout)*time.Second, int(maxNumOfGetStatsRetry),
 		time.Duration(getStatsRetryInterval)*time.Second, time.Duration(getStatsMaxBackoff)*time.Second,
 		int(checkpointInterval), errChan, waitGroup, completeBySeqno, fdPool, filter, capabilities, collectionIDs, colMigrationFilters,
-		utils, bucketBufferCap, migrationMapping)
+		utils, bucketBufferCap, migrationMapping, mobileCompat, expDelMode)
 	// dcp driver startup may take some time. Do it asynchronously
 	go startDcpDriverAysnc(dcpDriver, errChan, logger)
 	return dcpDriver
@@ -1297,10 +1298,11 @@ func (difftool *xdcrDiffTool) compileMigrationMapping(nsMappings metadata.Collec
 func (difftool *xdcrDiffTool) populateMigrationMapping(namespaceMappings metadata.CollectionNamespaceMapping) error {
 	difftool.migrationMapping = namespaceMappings.Clone()
 	filterMode := difftool.specifiedSpec.Settings.GetExpDelMode()
+	mobileCompat := difftool.specifiedSpec.Settings.GetMobileCompatible()
 	for srcNamespacePtr, _ := range difftool.migrationMapping {
 		// For each sourceNamespace, its filter needs to be a pool
 		expr := srcNamespacePtr.GetFilterString()
-		pool, err := filterPool.NewFilterPool(options.numOfFiltersInFilterPool, expr, difftool.utils, filterMode.IsSkipReplicateUncommittedTxnSet())
+		pool, err := filterPool.NewFilterPool(options.numOfFiltersInFilterPool, expr, difftool.utils, filterMode, mobileCompat)
 		if err != nil {
 			return err
 		}

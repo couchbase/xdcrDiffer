@@ -62,6 +62,8 @@ type DcpDriver struct {
 	utils               xdcrUtils.UtilsIface
 	bufferCapacity      int
 	migrationMapping    metadata.CollectionNamespaceMapping
+	mobileCompatible    int
+	expDelMode          xdcrBase.FilterExpDelType
 
 	// various counters
 	totalNumReceivedFromDCP                uint64
@@ -89,7 +91,7 @@ const (
 	DriverStateStopped DriverState = iota
 )
 
-func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration, checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIds []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping) *DcpDriver {
+func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration, checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIds []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping, mobileCompat int, expDelMode xdcrBase.FilterExpDelType) *DcpDriver {
 	dcpDriver := &DcpDriver{
 		Name:                name,
 		url:                 url,
@@ -118,6 +120,8 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, re
 		utils:               utils,
 		bufferCapacity:      bufferCap,
 		migrationMapping:    migrationMapping,
+		mobileCompatible:    mobileCompat,
+		expDelMode:          expDelMode,
 	}
 
 	var vbno uint16

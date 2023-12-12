@@ -29,7 +29,19 @@ type FilterPool struct {
 	tokenCh     chan int
 }
 
-func (f *FilterPool) FilterUprEvent(wrappedUprEvent *xdcrBase.WrappedUprEvent) (bool, error, string, int64) {
+func (f *FilterPool) SetShouldSkipBinaryDocs(val bool) {
+	for i := 0; i < len(f.filtersList); i++ {
+		f.filtersList[i].filter.SetShouldSkipBinaryDocs(val)
+	}
+}
+
+func (f *FilterPool) SetMobileCompatibility(val uint32) {
+	for i := 0; i < len(f.filtersList); i++ {
+		f.filtersList[i].filter.SetMobileCompatibility(val)
+	}
+}
+
+func (f *FilterPool) FilterUprEvent(wrappedUprEvent *xdcrBase.WrappedUprEvent) (bool, error, string, int64, xdcrBase.FilteringStatusType) {
 	// Get an index token to use
 	idxToUse := <-f.tokenCh
 	// Ensure that the index is returned at the end for reuse
@@ -48,7 +60,7 @@ func (f *FilterPool) SetShouldSkipUncommittedTxn(val bool) {
 	}
 }
 
-func NewFilterPool(numOfFilters int, expr string, utils xdcrUtils.UtilsIface, skipUncommittedTxn bool) (*FilterPool, error) {
+func NewFilterPool(numOfFilters int, expr string, utils xdcrUtils.UtilsIface, expDelType xdcrBase.FilterExpDelType, mobileCompat int) (*FilterPool, error) {
 	fp := &FilterPool{
 		dataPool:    xdcrBase.NewDataPool(),
 		filtersList: make([]*filterWithState, numOfFilters, numOfFilters),
@@ -56,7 +68,7 @@ func NewFilterPool(numOfFilters int, expr string, utils xdcrUtils.UtilsIface, sk
 	}
 
 	for i := 0; i < numOfFilters; i++ {
-		filter, err := xdcrParts.NewFilter(fmt.Sprintf("XDCRDiffToolFilter_%v", i), expr, utils, skipUncommittedTxn)
+		filter, err := xdcrParts.NewFilter(fmt.Sprintf("XDCRDiffToolFilter_%v", i), expr, utils, expDelType, mobileCompat)
 		if err != nil {
 			return nil, err
 		}
