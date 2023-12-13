@@ -3,7 +3,7 @@ package differ
 import (
 	"crypto/x509"
 	"fmt"
-	"github.com/couchbase/gocbcore/v9"
+	"github.com/couchbase/gocbcore/v10"
 	xdcrBase "github.com/couchbase/goxdcr/base"
 	"github.com/couchbase/goxdcr/metadata"
 	"reflect"
@@ -17,11 +17,10 @@ type GocbcoreAgent struct {
 }
 
 func (a *GocbcoreAgent) setupAgent(auth interface{}, batchSize int, capability metadata.Capability) error {
-	agentConfig, err := a.setupAgentConfig(auth, capability)
+	agentConfig, err := a.setupAgentConfig(auth, capability, batchSize)
 	if err != nil {
 		return err
 	}
-	agentConfig.MaxQueueSize = batchSize * 50 // Give SDK some breathing room
 
 	connStr := base.GetConnStr(a.Servers)
 
@@ -33,12 +32,14 @@ func (a *GocbcoreAgent) setupAgent(auth interface{}, batchSize int, capability m
 	return a.setupGocbcoreAgent(agentConfig)
 }
 
-func (a *GocbcoreAgent) setupAgentConfig(authIn interface{}, capability metadata.Capability) (*gocbcore.AgentConfig, error) {
+func (a *GocbcoreAgent) setupAgentConfig(authIn interface{}, capability metadata.Capability, batchSize int) (*gocbcore.AgentConfig, error) {
 	var auth gocbcore.AuthProvider
 	var useTLS bool
+
 	x509Provider := func() *x509.CertPool {
 		return nil
 	}
+
 	if authIn != nil {
 		if pwAuth, ok := authIn.(*base.PasswordAuth); ok {
 			auth = gocbcore.PasswordAuthProvider{
@@ -62,15 +63,22 @@ func (a *GocbcoreAgent) setupAgentConfig(authIn interface{}, capability metadata
 	}
 
 	return &gocbcore.AgentConfig{
-		HTTPAddrs:         a.Servers,
-		BucketName:        a.BucketName,
-		UserAgent:         a.Name,
-		Auth:              auth,
-		UseCollections:    capability.HasCollectionSupport(),
-		ConnectTimeout:    a.SetupTimeout,
-		KVConnectTimeout:  a.SetupTimeout,
-		UseTLS:            useTLS,
-		TLSRootCAProvider: x509Provider,
+		SeedConfig: gocbcore.SeedConfig{MemdAddrs: a.Servers},
+		BucketName: a.BucketName,
+		UserAgent:  a.Name,
+		SecurityConfig: gocbcore.SecurityConfig{
+			UseTLS:            useTLS,
+			TLSRootCAProvider: x509Provider,
+			Auth:              auth,
+			AuthMechanisms:    base.ScramShaAuth,
+		},
+		KVConfig: gocbcore.KVConfig{
+			ConnectTimeout: a.SetupTimeout,
+			MaxQueueSize:   batchSize * 50, // Give SDK some breathing room
+		},
+		CompressionConfig: gocbcore.CompressionConfig{Enabled: true},
+		HTTPConfig:        gocbcore.HTTPConfig{ConnectTimeout: a.SetupTimeout},
+		IoConfig:          gocbcore.IoConfig{UseCollections: capability.HasCollectionSupport()},
 	}, nil
 }
 

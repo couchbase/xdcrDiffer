@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/couchbase/gocb/v2"
-	"github.com/couchbase/gocbcore/v9"
+	"github.com/couchbase/gocbcore/v10"
 	xdcrBase "github.com/couchbase/goxdcr/base"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/rcrowley/go-metrics"
@@ -622,13 +622,16 @@ func (cm *CheckpointManager) initializeBucket() error {
 	useTLS, x509Provider, authProvider, err := getAgentConfigs(auth)
 
 	agentConfig := &gocbcore.AgentConfig{
-		MemdAddrs:         []string{bucketConnStr},
-		BucketName:        cm.dcpDriver.bucketName,
-		UserAgent:         fmt.Sprintf("xdcrDifferCheckpointMgr"),
-		UseTLS:            useTLS,
-		Auth:              authProvider,
-		TLSRootCAProvider: x509Provider,
-		UseCollections:    cm.dcpDriver.capabilities.HasCollectionSupport(),
+		SeedConfig: gocbcore.SeedConfig{MemdAddrs: []string{bucketConnStr}},
+		BucketName: cm.dcpDriver.bucketName,
+		UserAgent:  fmt.Sprintf("xdcrDifferCheckpointMgr"),
+		SecurityConfig: gocbcore.SecurityConfig{
+			UseTLS:            useTLS,
+			TLSRootCAProvider: x509Provider,
+			Auth:              authProvider,
+			AuthMechanisms:    base.ScramShaAuth,
+		},
+		IoConfig: gocbcore.IoConfig{UseCollections: cm.dcpDriver.capabilities.HasCollectionSupport()},
 	}
 
 	agent, err := gocbcore.CreateAgent(agentConfig)
