@@ -29,6 +29,7 @@ import (
 	"xdcrDiffer/filterPool"
 	"xdcrDiffer/utils"
 
+	"github.com/couchbase/gocb"
 	xdcrBase "github.com/couchbase/goxdcr/base"
 	xdcrParts "github.com/couchbase/goxdcr/base/filter"
 	xdcrLog "github.com/couchbase/goxdcr/log"
@@ -128,8 +129,10 @@ var options struct {
 	mutationDifferRetriesWaitSecs int
 	// Number of filters to be created for the filter pool to be shared
 	numOfFiltersInFilterPool int
-	// DebugLogLevel set to true will show debug logs
-	debugLogLevel bool
+	// Enables DEBUG level logs for xdcrDiffer and gocb verbose logging
+	debugMode bool
+	// a common setup timeout duration - in seconds
+	setupTimeout int
 }
 
 func argParse() {
@@ -231,8 +234,10 @@ func argParse() {
 		"Seconds to wait in between retries for mutation differences")
 	flag.IntVar(&options.numOfFiltersInFilterPool, "numOfFiltersInFilterPool", 32,
 		"Number of filters to be created and shared among all DCP handlers")
-	flag.BoolVar(&options.debugLogLevel, "debugLogLevel", false,
-		"The differ to be run with debug log level")
+	flag.BoolVar(&options.debugMode, "debugMode", false,
+		"The differ to be run with debug log level and the SDK/gocb logging will also be enabled.")
+	flag.IntVar(&options.setupTimeout, "setupTimeout", base.SetupTimeoutSeconds,
+		"Common setup timeout duration in seconds")
 
 	flag.Parse()
 }
@@ -328,8 +333,9 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 
 	logCtx := xdcrLog.DefaultLoggerContext
 	difftool.logger = xdcrLog.NewLogger("xdcrDiffTool", xdcrLog.DefaultLoggerContext)
-	if options.debugLogLevel {
+	if options.debugMode {
 		logCtx.SetLogLevel(xdcrLog.LogLevelDebug)
+		gocb.SetLogger(gocb.VerboseStdioLogger())
 	}
 
 	difftool.selfRef, _ = metadata.NewRemoteClusterReference("", base.SelfReferenceName, options.sourceUrl, options.sourceUsername, options.sourcePassword,
@@ -571,6 +577,9 @@ func maybeSetEnv(key, value string) {
 
 func main() {
 	argParse()
+
+	base.SetupTimeoutSeconds = options.setupTimeout
+
 	validateCompareType(options.compareType)
 
 	fmt.Printf("differ is run with options: %+v\n", options)
