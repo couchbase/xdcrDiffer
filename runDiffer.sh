@@ -25,7 +25,7 @@ function printHelp() {
 	findExec
 
 	cat <<EOF
-Usage: $0 -u <username> -p <password> -h <hostname:port> -s <sourceBucket> -t <targetBucket> -r <remoteClusterName> [-v <targetUrl>] [-n <remoteClusterUsername> -q <remoteClusterPassword>] [-c clean] [-b ] [-e <mutationRetries>]
+Usage: $0 -u <username> -p <password> -h <hostname:port> -s <sourceBucket> -t <targetBucket> -r <remoteClusterName> [-v <targetUrl>] [-n <remoteClusterUsername> -q <remoteClusterPassword>] [-c clean] [-b ] [-e <mutationRetries>] [-w <setupTimeoutInSeconds>]
 
 This script will set up the necessary environment variable to allow the XDCR diff tool to connect to the metakv service in the
 specified source cluster (NOTE: over http://) and retrieve the specified replication spec and run the difftool on it.
@@ -54,7 +54,7 @@ function killBgTail {
 	fi
 }
 
-while getopts ":h:p:u:r:s:t:n:q:v:cbe:" opt; do
+while getopts ":h:p:u:r:s:t:n:q:v:cbe:w:" opt; do
 	case ${opt} in
 	u)
 		username=$OPTARG
@@ -91,6 +91,12 @@ while getopts ":h:p:u:r:s:t:n:q:v:cbe:" opt; do
 		;;
 	e)
 		mutationRetries=$OPTARG
+		;;
+	d)
+		debugMode=1
+		;;
+	w)
+		setupTimeout=$OPTARG
 		;;
 	\?)
 		echo "Invalid option: $OPTARG" 1>&2
@@ -170,10 +176,10 @@ if [[ ! -z "$remoteClusterUsername" ]] && [[ ! -z "$remoteClusterPassword" ]]; t
 	execString="${execString} -targetPassword"
 	execString="${execString} $remoteClusterPassword"
 fi
-if [[ ! -z "$remoteClusterName" ]];then
+if [[ ! -z "$remoteClusterName" ]]; then
 	execString="${execString} -remoteClusterName"
 	execString="${execString} $remoteClusterName"
-elif [[ ! -z "$targetUrl" ]];then
+elif [[ ! -z "$targetUrl" ]]; then
 	execString="${execString} -targetUrl"
 	execString="${execString} $targetUrl"
 fi
@@ -185,9 +191,13 @@ if [[ ! -z "$compareBody" ]]; then
 	execString="${execString} -compareBody"
 	execString="${execString} $compareBody"
 fi
-if [[ ! -z "$mutationRetries" ]];then
+if [[ ! -z "$mutationRetries" ]]; then
 	execString="${execString} -mutationRetries"
 	execString="${execString} $mutationRetries"
+fi
+if [[ ! -z "$setupTimeout" ]]; then
+	execString="${execString} -setupTimeout"
+	execString="${execString} $setupTimeout"
 fi
 
 # Execute the differ in background and watch the pid to be finished

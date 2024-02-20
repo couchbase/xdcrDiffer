@@ -120,6 +120,12 @@ var options struct {
 	mutationDifferRetries int
 	// Number of secs to wait between retries
 	mutationDifferRetriesWaitSecs int
+	// Number of filters to be created for the filter pool to be shared
+	numOfFiltersInFilterPool int
+	// Enables DEBUG level logs for xdcrDiffer and gocb verbose logging
+	debugMode bool
+	// a common setup timeout duration - in seconds
+	setupTimeout int
 }
 
 func argParse() {
@@ -219,6 +225,12 @@ func argParse() {
 		"Additional number of times to retry to resolve the mutation differences")
 	flag.IntVar(&options.mutationDifferRetriesWaitSecs, "mutationRetriesWaitSecs", 60,
 		"Seconds to wait in between retries for mutation differences")
+	flag.IntVar(&options.numOfFiltersInFilterPool, "numOfFiltersInFilterPool", 32,
+		"Number of filters to be created and shared among all DCP handlers")
+	flag.BoolVar(&options.debugMode, "debugMode", false,
+		"The differ to be run with debug log level and the SDK/gocb logging will also be enabled.")
+	flag.IntVar(&options.setupTimeout, "setupTimeout", base.SetupTimeoutSeconds,
+		"Common setup timeout duration in seconds")
 
 	flag.Parse()
 }
@@ -441,6 +453,8 @@ func maybeSetEnv(key, value string) {
 
 func main() {
 	argParse()
+
+	base.SetupTimeoutSeconds = options.setupTimeout
 
 	fmt.Printf("differ is run with options: %+v\n", options)
 	legacyMode := len(options.targetUsername) > 0

@@ -106,10 +106,23 @@ Usage of ./xdcrDiffer:
     	username for target cluster (default "Administrator")
   -verifyDiffKeys
     	whether to verify diff keys through aysnc Get on clusters (default true)
+<<<<<<< HEAD
   -mutationRetries
         Additional number of times to retry to resolve the mutation differences
   -mutationRetriesWaitSecs
         Seconds to wait in between retries for mutation differences
+=======
+  -mutationRetries int
+      Additional number of times to retry to resolve the mutation differences
+  -mutationRetriesWaitSecs int
+      Seconds to wait in between retries for mutation differences
+  -compareType string
+      What to compare during mutationDiff. Accepted values are: meta (default), body, both
+  -setupTimeout int
+      Common setup timeout duration in seconds. Default is 10 (seconds)
+  -debugMode
+      Set xdcrDiffer to DEBUG log level and also enable SDK (gocb) verbose logging.
+>>>>>>> 840a1cd (Fixes #90: Avoid using the agent after it is closed and improve logging (#92))
 ```
 
 A few options worth noting:

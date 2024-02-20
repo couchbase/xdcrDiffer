@@ -9,8 +9,6 @@
 
 package base
 
-import "time"
-
 const NumberOfVbuckets = 1024
 const DcpHandlerChanSize = 100000
 const FileNamePrefix = "diffTool"
@@ -61,17 +59,18 @@ const ClusterRunMinPortNo uint16 = 9000
 const ClusterRunMaxPortNo uint16 = 9007
 
 // length of mutation metadata + body, which consists of
-//  seqno    - 8 bytes
-//  revId    - 8 bytes
-//  cas      - 8 bytes
-//  flags    - 4 bytes
-//  expiry   - 4 bytes
-//  opCode   - 2 bytes
-//  datatype - 2 byte
-//  hash     - 64 bytes
-//  collectionId - 4 bytes
-//  migrationFilterLen - 2 bytes
-//  (variable) - each filterID is 2 bytes
+//
+//	seqno    - 8 bytes
+//	revId    - 8 bytes
+//	cas      - 8 bytes
+//	flags    - 4 bytes
+//	expiry   - 4 bytes
+//	opCode   - 2 bytes
+//	datatype - 2 byte
+//	hash     - 64 bytes
+//	collectionId - 4 bytes
+//	migrationFilterLen - 2 bytes
+//	(variable) - each filterID is 2 bytes
 const BodyLength = 104
 const KeyLenVariable = 2
 const MigrationFilterLen = 2
@@ -100,6 +99,6 @@ const HttpsPrefix = "https://"
 const CouchbasePrefix = "couchbase://"
 const CouchbaseSecurePrefix = "couchbases://"
 
-var SetupTimeout = 5 * time.Second
+var SetupTimeoutSeconds int = 10
 
 const JSONDataType = 1

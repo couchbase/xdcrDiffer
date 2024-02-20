@@ -3,11 +3,12 @@ package dcp
 import (
 	"crypto/x509"
 	"fmt"
+	"time"
+	"xdcrDiffer/base"
+
 	gocbcore "github.com/couchbase/gocbcore/v9"
 	memd "github.com/couchbase/gocbcore/v9/memd"
 	xdcrBase "github.com/couchbase/goxdcr/base"
-	"time"
-	"xdcrDiffer/base"
 )
 
 type GocbcoreDCPFeed struct {
@@ -110,7 +111,7 @@ func getAgentConfigs(authMech interface{}) (bool, func() *x509.CertPool, gocbcor
 func (f *GocbcoreDCPFeed) setupGocbcoreDCPAgent(config *gocbcore.DCPAgentConfig, flags memd.DcpOpenFlag, secure bool) (err error) {
 	f.dcpAgent, err = gocbcore.CreateDcpAgent(config, f.Name, flags)
 	if err != nil {
-		return err
+		return
 	}
 
 	options := gocbcore.WaitUntilReadyOptions{
@@ -130,11 +131,14 @@ func (f *GocbcoreDCPFeed) setupGocbcoreDCPAgent(config *gocbcore.DCPAgentConfig,
 	}
 
 	if err != nil {
-		go f.dcpAgent.Close()
+		errClosing := f.dcpAgent.Close()
+		err = fmt.Errorf("Closing GocbcoreDCPFeed.agent because of err=%v, error while closing=%v", err, errClosing)
+		return
 	}
 
 	if secure && !f.dcpAgent.IsSecure() {
-		return fmt.Errorf("%v requested secure but agent says not secure", f.Name)
+		err = fmt.Errorf("%v requested secure but agent says not secure", f.Name)
+		return
 	}
 
 	return
@@ -146,7 +150,7 @@ func NewGocbcoreDCPFeed(id string, servers []string, bucketName string, auth int
 			Name:         id,
 			Servers:      servers,
 			BucketName:   bucketName,
-			SetupTimeout: base.SetupTimeout,
+			SetupTimeout: time.Duration(base.SetupTimeoutSeconds) * time.Second,
 		},
 		dcpAgent: nil,
 	}
