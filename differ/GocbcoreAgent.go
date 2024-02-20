@@ -3,12 +3,13 @@ package differ
 import (
 	"crypto/x509"
 	"fmt"
-	"github.com/couchbase/gocbcore/v10"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	"github.com/couchbase/goxdcr/metadata"
 	"reflect"
 	"time"
 	"xdcrDiffer/base"
+
+	"github.com/couchbase/gocbcore/v10"
+	xdcrBase "github.com/couchbase/goxdcr/base"
+	"github.com/couchbase/goxdcr/metadata"
 )
 
 type GocbcoreAgent struct {
@@ -105,7 +106,8 @@ func (a *GocbcoreAgent) setupGocbcoreAgent(config *gocbcore.AgentConfig) (err er
 	}
 
 	if err != nil {
-		go a.agent.Close()
+		errClosing := a.agent.Close()
+		err = fmt.Errorf("Closing GocbcoreAgent.agent because of err=%v, error while closing=%v", err, errClosing)
 	}
 	return
 }
@@ -136,7 +138,7 @@ func NewGocbcoreAgent(id string, servers []string, bucketName string, auth inter
 			Name:         id,
 			Servers:      servers,
 			BucketName:   bucketName,
-			SetupTimeout: 5 * time.Second,
+			SetupTimeout: time.Duration(base.SetupTimeoutSeconds) * time.Second,
 		},
 		agent: nil,
 	}

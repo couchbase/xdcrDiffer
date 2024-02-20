@@ -9,8 +9,6 @@
 
 package base
 
-import "time"
-
 const NumberOfVbuckets = 1024
 const DcpHandlerChanSize = 100000
 const FileNamePrefix = "diffTool"
@@ -102,7 +100,7 @@ const HttpsPrefix = "https://"
 const CouchbasePrefix = "couchbase://"
 const CouchbaseSecurePrefix = "couchbases://"
 
-var SetupTimeout = 10 * time.Second
+var SetupTimeoutSeconds int = 10
 
 const JSONDataType = 1
 

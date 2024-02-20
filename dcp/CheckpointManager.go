@@ -9,13 +9,14 @@ import (
 	"sync"
 	"time"
 
+	"xdcrDiffer/base"
+	"xdcrDiffer/utils"
+
 	"github.com/couchbase/gocb/v2"
 	"github.com/couchbase/gocbcore/v10"
 	xdcrBase "github.com/couchbase/goxdcr/base"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/rcrowley/go-metrics"
-	"xdcrDiffer/base"
-	"xdcrDiffer/utils"
 )
 
 type CheckpointManager struct {
@@ -613,10 +614,10 @@ func (cm *CheckpointManager) getSnapshot(vbno uint16) (startSeqno, endSeqno uint
 	return snapshot.startSeqno, snapshot.endSeqno
 }
 
-func (cm *CheckpointManager) initializeBucket() error {
+func (cm *CheckpointManager) initializeBucket() (err error) {
 	auth, bucketConnStr, err := initializeBucketWithSecurity(cm.dcpDriver, cm.kvVbMap, cm.kvSSLPortMap, false)
 	if err != nil {
-		return err
+		return
 	}
 
 	useTLS, x509Provider, authProvider, err := getAgentConfigs(auth)
@@ -636,7 +637,7 @@ func (cm *CheckpointManager) initializeBucket() error {
 
 	agent, err := gocbcore.CreateAgent(agentConfig)
 	if err != nil {
-		return err
+		return
 	}
 	cm.agent = agent
 
@@ -647,7 +648,7 @@ func (cm *CheckpointManager) initializeBucket() error {
 	}
 
 	signal := make(chan error, 1)
-	_, err = cm.agent.WaitUntilReady(time.Now().Add(base.SetupTimeout),
+	_, err = cm.agent.WaitUntilReady(time.Now().Add(time.Duration(base.SetupTimeoutSeconds)*time.Second),
 		options, func(res *gocbcore.WaitUntilReadyResult, er error) {
 			signal <- er
 		})
@@ -657,14 +658,17 @@ func (cm *CheckpointManager) initializeBucket() error {
 	}
 
 	if err != nil {
-		go cm.agent.Close()
+		errClosing := cm.agent.Close()
+		err = fmt.Errorf("Closing CheckpointManager.agent because of err=%v, error while closing=%v", err, errClosing)
+		return
 	}
 
 	if useTLS && !cm.agent.IsSecure() {
-		return fmt.Errorf("%v requested secure but agent says not secure", cm.clusterName)
+		err = fmt.Errorf("%v requested secure but agent says not secure", cm.clusterName)
+		return
 	}
 
-	return nil
+	return
 }
 
 type Snapshot struct {

@@ -25,7 +25,7 @@ function printHelp() {
 	findExec
 
 	cat <<EOF
-Usage: $0 -u <username> -p <password> -h <hostname:port> -s <sourceBucket> -t <targetBucket> -r <remoteClusterName> [-v <targetUrl>] [-n <remoteClusterUsername> -q <remoteClusterPassword>] [-c clean] [-b ] [-m meta | body | both ] [-e <mutationRetries>]
+Usage: $0 -u <username> -p <password> -h <hostname:port> -s <sourceBucket> -t <targetBucket> -r <remoteClusterName> [-v <targetUrl>] [-n <remoteClusterUsername> -q <remoteClusterPassword>] [-c clean] [-b ] [-m meta | body | both ] [-e <mutationRetries>] [-w <setupTimeoutInSeconds>] [-d]
 
 This script will set up the necessary environment variable to allow the XDCR diff tool to connect to the metakv service in the
 specified source cluster (NOTE: over http://) and retrieve the specified replication spec and run the difftool on it.
@@ -37,6 +37,7 @@ use "-m" to specify what to compare during mutationDiff.
  meta (default) will get metadata for comparison. This is faster and includes tombstones.
  body will get document body and only compare the document body. This is slower and does not include tombstones
  both will get document body and compare both document body and metadata. This is slower and does not include tombstones
+use "-d" to enable SDK (gocb) verbose logging along with the xdcrDiffer DEBUG logging. Should be only used for debugging purposes (can be quite spammy)
 EOF
 }
 
@@ -58,7 +59,7 @@ function killBgTail {
 	fi
 }
 
-while getopts ":h:p:u:r:s:t:n:q:v:cbm:e:" opt; do
+while getopts ":h:p:u:r:s:t:n:q:v:cbm:ew:d" opt; do
 	case ${opt} in
 	u)
 		username=$OPTARG
@@ -98,6 +99,12 @@ while getopts ":h:p:u:r:s:t:n:q:v:cbm:e:" opt; do
 		;;
 	e)
 		mutationRetries=$OPTARG
+		;;
+	d)
+		debugMode=1
+		;;
+	w)
+		setupTimeout=$OPTARG
 		;;
 	\?)
 		echo "Invalid option: $OPTARG" 1>&2
@@ -177,10 +184,10 @@ if [[ ! -z "$remoteClusterUsername" ]] && [[ ! -z "$remoteClusterPassword" ]]; t
 	execString="${execString} -targetPassword"
 	execString="${execString} $remoteClusterPassword"
 fi
-if [[ ! -z "$remoteClusterName" ]];then
+if [[ ! -z "$remoteClusterName" ]]; then
 	execString="${execString} -remoteClusterName"
 	execString="${execString} $remoteClusterName"
-elif [[ ! -z "$targetUrl" ]];then
+elif [[ ! -z "$targetUrl" ]]; then
 	execString="${execString} -targetUrl"
 	execString="${execString} $targetUrl"
 fi
@@ -192,15 +199,18 @@ if [[ ! -z "$compareType" ]]; then
 	execString="${execString} -compareType"
 	execString="${execString} $compareType"
 fi
-if [[ ! -z "$mutationRetries" ]];then
+if [[ ! -z "$mutationRetries" ]]; then
 	execString="${execString} -mutationRetries"
 	execString="${execString} $mutationRetries"
 fi
-
-# ---
-# Uncomment below line for debug log level
-#execString="${execString} -debugLogLevel true"
-# ---
+if [[ ! -z "$setupTimeout" ]]; then
+	execString="${execString} -setupTimeout"
+	execString="${execString} $setupTimeout"
+fi
+if [[ ! -z "$debugMode" ]]; then
+	execString="${execString} -debugMode"
+	execString="${execString} $debugMode"
+fi
 
 # Execute the differ in background and watch the pid to be finished
 $execString >$differLogFileName 2>&1 &
