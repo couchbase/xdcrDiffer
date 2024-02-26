@@ -29,7 +29,7 @@ import (
 	"xdcrDiffer/filterPool"
 	"xdcrDiffer/utils"
 
-	"github.com/couchbase/gocb"
+	"github.com/couchbase/gocb/v2"
 	xdcrBase "github.com/couchbase/goxdcr/base"
 	xdcrParts "github.com/couchbase/goxdcr/base/filter"
 	xdcrLog "github.com/couchbase/goxdcr/log"
