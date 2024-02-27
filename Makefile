@@ -28,7 +28,6 @@ clean:
 deps:
 	$(GOMOD) init xdcrDiffer
 	$(GOGET) github.com/couchbase/gocbcore/v10
-	$(GOGET) github.com/couchbase/gocb
 	$(GOGET) github.com/couchbase/gocb/v2
 	$(GOGET) github.com/couchbaselabs/gojsonsm@v1.0.0
 	$(GOGET) github.com/couchbase/goxdcr@v7.6.0-1916
