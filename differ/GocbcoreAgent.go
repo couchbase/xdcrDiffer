@@ -8,6 +8,7 @@ import (
 	"xdcrDiffer/base"
 
 	"github.com/couchbase/gocbcore/v10"
+	"github.com/couchbase/gocbcore/v10/memd"
 	xdcrBase "github.com/couchbase/goxdcr/base"
 	"github.com/couchbase/goxdcr/metadata"
 )
@@ -129,6 +130,31 @@ func (a *GocbcoreAgent) GetMeta(key string, callbackFunc func(result *gocbcore.G
 		CollectionID:  colId,
 	}
 	_, err := a.agent.GetMeta(opts, callbackFunc)
+	return err
+}
+
+func (a *GocbcoreAgent) GetHlv(key string, callbackFunc func(result *gocbcore.LookupInResult, err error), colId uint32) error {
+	opts := gocbcore.LookupInOptions{
+		Key:   []byte(key),
+		Flags: memd.SubdocDocFlagAccessDeleted,
+		Ops: []gocbcore.SubDocOp{
+			gocbcore.SubDocOp{
+				Op:    memd.SubDocOpType(memd.CmdSubDocGet),
+				Flags: memd.SubdocFlag(0x04),
+				Path:  "_vv",
+				Value: nil,
+			},
+			gocbcore.SubDocOp{
+				Op:    memd.SubDocOpType(memd.CmdSubDocGet),
+				Flags: memd.SubdocFlag(0x04),
+				Path:  "_importCAS",
+				Value: nil,
+			},
+		},
+		RetryStrategy: nil,
+		CollectionID:  colId,
+	}
+	_, err := a.agent.LookupIn(opts, callbackFunc)
 	return err
 }
 
