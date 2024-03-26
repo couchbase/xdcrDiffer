@@ -15,7 +15,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/couchbase/gomemcached"
 	"io"
 	"os"
 	"sort"
@@ -23,7 +22,14 @@ import (
 	"sync"
 	fdp "xdcrDiffer/fileDescriptorPool"
 	"xdcrDiffer/utils"
+
+	"github.com/couchbase/gomemcached"
+	xdcrBase "github.com/couchbase/goxdcr/base"
+	crMeta "github.com/couchbase/goxdcr/crMeta"
+	hlv "github.com/couchbase/goxdcr/hlv"
 )
+
+const BodyNilError string = "body cannot be nil"
 
 // Given two DCP Dump files, perform necessary diffing task
 type FilesDiffer struct {
@@ -89,6 +95,7 @@ func (d DuplicatedHintMap) ToIntMap() map[string][]int {
 
 type FileAttributes struct {
 	name          string
+	bucketUUID    string
 	entries       map[uint32]map[string]*oneEntry
 	sortedEntries map[uint32][]*oneEntry
 	readOp        fdp.FileOp
@@ -106,13 +113,18 @@ func NewFileAttribute(fileName string) *FileAttributes {
 
 type oneEntry struct {
 	Key               string
+	bucketUUID        hlv.DocumentSourceId
 	Seqno             uint64
 	RevId             uint64
 	Cas               uint64
+	ImportCas         uint64
 	Flags             uint32
 	Expiry            uint32
 	OpCode            gomemcached.CommandCode
 	Datatype          uint8
+	Xattr             []byte
+	XattrSize         uint32
+	Hlv               *hlv.HLV
 	BodyHash          [sha512.Size]byte
 	ColId             uint32
 	ColMigrFilterLen  uint8
@@ -155,9 +167,11 @@ func (entry oneEntry) Diff(other oneEntry) (int, bool) {
 	} else if entry.OpCode != other.OpCode {
 		return 0, false
 	} else if entry.OpCode == gomemcached.UPR_MUTATION {
-		if entry.RevId != other.RevId {
+		entryRevId := entry.GetRevId()
+		otherRevId := other.GetRevId()
+		if entryRevId != otherRevId && entryRevId != 0 && otherRevId != 0 { //Darshan : RevId comparison should be revisited
 			return 0, false
-		} else if entry.Cas != other.Cas {
+		} else if entry.GetVersion() != other.GetVersion() {
 			return 0, false
 		} else if entry.Flags != other.Flags {
 			return 0, false
@@ -165,9 +179,108 @@ func (entry oneEntry) Diff(other oneEntry) (int, bool) {
 			return 0, false
 		} else if entry.Datatype != other.Datatype {
 			return 0, false
+		} else if !compareHlv(entry.Hlv, other.Hlv, entry.Cas, other.Cas, entry.ImportCas, other.ImportCas, entry.bucketUUID, other.bucketUUID) {
+			return 0, false
 		}
 	}
 	return 0, true
+}
+
+func compareHlv(hlv1, hlv2 *hlv.HLV, cas1, cas2, importCas1, importCas2 uint64, bucketUUID1, bucketUUID2 hlv.DocumentSourceId) bool {
+	//if both(source and target) have no HLV we return true
+	if hlv1 == nil && hlv2 == nil {
+		return true
+	} else if hlv1 != nil && hlv2 == nil { //this is the case where the document is replicated from target to source
+		if hlv1.GetCvSrc() != bucketUUID2 || hlv1.GetCvVer() != cas2 {
+			return false
+		} else {
+			hlv2, _ = hlv.NewHLV(bucketUUID2, cas2, 0, "", 0, nil, nil)
+		}
+	} else if hlv1 == nil && hlv2 != nil { //this is the case where the document is replicated from source to target
+		if hlv2.GetCvSrc() != bucketUUID1 || hlv2.GetCvVer() != cas1 {
+			return false
+		} else {
+			hlv1, _ = hlv.NewHLV(bucketUUID1, cas1, 0, "", 0, nil, nil)
+		}
+	}
+	return actualCompare(hlv1, hlv2, cas1, cas2)
+}
+
+func actualCompare(item1 *hlv.HLV, item2 *hlv.HLV, item1Cas uint64, item2Cas uint64) bool {
+	// the HLVs that this function recieves is up to date
+	if item1.GetCvCas() != item2.GetCvCas() {
+		return false
+	} else if item1.GetCvSrc() != item2.GetCvSrc() || item1.GetCvVer() != item2.GetCvVer() {
+		return false
+	} else if !comparePv(item1.GetPV(), item2.GetPV(), item1Cas, item2Cas) {
+		return false
+	}
+	return true
+}
+
+func comparePv(Pv1 hlv.VersionsMap, Pv2 hlv.VersionsMap, cas1 uint64, cas2 uint64) bool {
+	if len(Pv1) == len(Pv2) {
+		for key, value1 := range Pv1 {
+			value2, ok := Pv2[key]
+			if !ok {
+				return false
+			} else {
+				if value1 != value2 {
+					return false
+				}
+			}
+		}
+	} else { // Unequal length implies that the PVs are pruned
+		pruningWindow := sourcePruningWindow.get()
+		iteratePv := Pv1
+		otherPv := Pv2
+		cas := cas1
+		if len(Pv2) > len(Pv1) {
+			iteratePv = Pv2
+			otherPv = Pv1
+			cas = cas2
+		}
+		for key, value1 := range iteratePv {
+			value2, ok := otherPv[key]
+			if !ok {
+				if xdcrBase.CasDuration(value1, cas) >= pruningWindow {
+					continue
+				} else {
+					return false
+				}
+			} else {
+				if value1 != value2 {
+					return false
+				}
+			}
+
+		}
+	}
+	return true
+}
+
+func (entry oneEntry) GetRevId() uint64 {
+	if entry.ImportCas == entry.Cas {
+		return 0
+	} else {
+		return entry.RevId
+	}
+}
+
+func (entry oneEntry) GetVersion() uint64 {
+	if entry.ImportCas == 0 {
+		return entry.Cas
+	} else {
+		if entry.Cas == entry.ImportCas {
+			return entry.Hlv.GetCvCas()
+		} else if entry.Cas < entry.ImportCas {
+			// can never happen : for now we panic
+			//TODO Darshan : see if you can handle the error properly instead of creating a panic
+			panic("Import Cas never be greater than the doc cas")
+		} else {
+			return entry.Cas
+		}
+	}
 }
 
 func (entry *oneEntry) IsMutation() bool {
@@ -230,6 +343,62 @@ func NewFilesDifferWithFDPool(file1, file2 string, fdPool *fdp.FdPool, collectio
 		}
 	}
 	return differ, nil
+}
+
+func constructHlv(docCas uint64, importCAS uint64, bucketUUID string, hlvbytes []byte) (*hlv.HLV, error) {
+	cvCas, cvSrc, cvVer, pvMap, mvMap, err := crMeta.ParseHlvFields(docCas, hlvbytes)
+	if err != nil {
+		return nil, err
+	}
+	//need to convert the uuid(hex) to base64 i.e. hlv required format
+	bucketId, err1 := hlv.UUIDtoDocumentSource(bucketUUID)
+	if err1 != nil {
+		return nil, err1
+	}
+	var Hlv *hlv.HLV
+	var err2 error
+	if docCas == importCAS {
+		Hlv, err2 = hlv.NewHLV(bucketId, cvCas, cvCas, cvSrc, cvVer, pvMap, mvMap)
+	} else {
+		Hlv, err2 = hlv.NewHLV(bucketId, docCas, cvCas, cvSrc, cvVer, pvMap, mvMap)
+	}
+	if err2 != nil {
+		return nil, err2
+	}
+	return Hlv, nil
+}
+
+func extractHlvAndImportCas(XattrIterator *xdcrBase.XattrIterator, bucketUUID string, docCas uint64) (hlv *hlv.HLV, importCas uint64, err error) {
+	var key, value []byte
+	var xattrHlv, xattrImportCas []byte
+	for XattrIterator.HasNext() {
+		key, value, err = XattrIterator.Next()
+		if err != nil {
+			return
+		}
+		if xdcrBase.Equals(key, xdcrBase.XATTR_HLV) {
+			xattrHlv = value
+		}
+		if xdcrBase.Equals(key, xdcrBase.XATTR_IMPORTCAS) {
+			xattrImportCas = value
+		}
+	}
+	// any errors in parsing importCas we dont parse/construct the hlv beacuse it is not possible to determine if the hlv is outdated/updated
+	if xattrImportCas != nil {
+		// Remove the start/end quotes before converting it to uint64
+		xattrLen := len(xattrImportCas)
+		importCas, err = xdcrBase.HexLittleEndianToUint64(xattrImportCas[1 : xattrLen-1])
+		if err != nil {
+			return
+		}
+	}
+	if xattrHlv == nil {
+		return
+	} else {
+		hlv, err = constructHlv(docCas, importCas, bucketUUID, xattrHlv)
+		return
+	}
+
 }
 
 func getOneEntry(readOp fdp.FileOp) (*oneEntry, error) {
@@ -298,6 +467,21 @@ func getOneEntry(readOp fdp.FileOp) (*oneEntry, error) {
 	}
 	entry.Datatype = uint8(binary.BigEndian.Uint16(dataTypeBytes))
 
+	xattrSizebytes := make([]byte, 4)
+	bytesRead, err = readOp(xattrSizebytes)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to read XattrSizeBytes, bytes read: %v, err: %v", bytesRead, err)
+	}
+	xattrSize := uint32(binary.BigEndian.Uint32(xattrSizebytes))
+	entry.XattrSize = xattrSize
+
+	xattrBytes := make([]byte, xattrSize)
+	bytesRead, err = readOp(xattrBytes)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to read xattrs, bytes read: %v, err: %v", bytesRead, err)
+	}
+	entry.Xattr = xattrBytes
+
 	hashBytes := make([]byte, sha512.Size)
 	bytesRead, err = readOp(hashBytes)
 	if err != nil {
@@ -339,18 +523,32 @@ func (a ByKeyName) Less(i, j int) bool { return a[i].Key < a[j].Key }
 func (attr *FileAttributes) fillAndDedupEntries() error {
 	var err error
 	var entry *oneEntry
-
+	var XattrIterator *xdcrBase.XattrIterator = &xdcrBase.XattrIterator{}
 	for {
 		entry, err = getOneEntry(attr.readOp)
 		if err != nil {
 			break
 		}
-
+		entry.bucketUUID, err = hlv.UUIDtoDocumentSource(attr.bucketUUID)
+		if err != nil {
+			break
+		}
+		err := XattrIterator.ResetXattrIterator(entry.Xattr, entry.XattrSize)
+		if err != nil {
+			if !strings.Contains(err.Error(), BodyNilError) {
+				break
+			}
+		} else {
+			entry.Hlv, entry.ImportCas, err = extractHlvAndImportCas(XattrIterator, attr.bucketUUID, entry.Cas)
+			if err != nil {
+				fmt.Printf("An error occurred while constructing Hlv or ImportCas for document with key %v when read from file %v , err: %v", entry.Key, attr.name, err)
+				break
+			}
+		}
 		_, exists := attr.entries[entry.ColId]
 		if !exists {
 			attr.entries[entry.ColId] = make(map[string]*oneEntry)
 		}
-
 		if curEntry, ok := attr.entries[entry.ColId][entry.Key]; !ok {
 			attr.entries[entry.ColId][entry.Key] = entry
 		} else {

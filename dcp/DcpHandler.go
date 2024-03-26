@@ -525,9 +525,24 @@ func (m *Mutation) ToUprEvent() *xdcrBase.WrappedUprEvent {
 //	colFiltersLen - 2 byte (number of collection migration filters)
 //	(per col filter) - 2 byte
 func (mut *Mutation) Serialize() []byte {
+	var bodyHash [64]byte
+	var xattrSize uint32
+	var xattr []byte
+
+	if mut.Datatype&xdcrBase.XattrDataType > 0 {
+		bodyWithoutXattr, err := xdcrBase.StripXattrAndGetBody(mut.Value)
+		if err != nil {
+			fmt.Println("Error encountered while stripping Xattrs from the body, err: ", err)
+		}
+		bodyHash = sha512.Sum512(bodyWithoutXattr)
+		xattrSize, _ = xdcrBase.GetXattrSize(mut.Value)
+		xattr = mut.Value[4 : xattrSize+4]
+	} else {
+		bodyHash = sha512.Sum512(mut.Value)
+	}
+
 	keyLen := len(mut.Key)
-	ret := make([]byte, base.GetFixedSizeMutationLen(keyLen, mut.ColFiltersMatched))
-	bodyHash := sha512.Sum512(mut.Value)
+	ret := make([]byte, base.GetFixedSizeMutationLen(keyLen, xattrSize, mut.ColFiltersMatched))
 
 	pos := 0
 	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(keyLen))
@@ -548,6 +563,10 @@ func (mut *Mutation) Serialize() []byte {
 	pos += 2
 	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(mut.Datatype))
 	pos += 2
+	binary.BigEndian.PutUint32(ret[pos:pos+4], xattrSize)
+	pos += 4
+	copy(ret[pos:pos+int(xattrSize)], xattr)
+	pos += int(xattrSize)
 	copy(ret[pos:], bodyHash[:])
 	pos += 64
 	binary.BigEndian.PutUint32(ret[pos:pos+4], mut.ColId)

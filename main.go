@@ -276,6 +276,7 @@ type xdcrDiffTool struct {
 	remoteClusterSvc        service_def.RemoteClusterSvc
 	replicationSpecSvc      service_def.ReplicationSpecSvc
 	collectionsManifestsSvc service_def.CollectionsManifestSvc
+	bucketTopologySvc       service_def.BucketTopologySvc
 	logger                  *xdcrLog.CommonLogger
 
 	xdcrTopologySvc service_def.XDCRCompTopologySvc
@@ -390,13 +391,15 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 			return nil, err
 		}
 
-		bucketTopologySvc, err := service_impl.NewBucketTopologyService(xdcrTopologyMock, difftool.remoteClusterSvc,
+		difftool.bucketTopologySvc, err = service_impl.NewBucketTopologyService(xdcrTopologyMock, difftool.remoteClusterSvc,
 			difftool.utils, xdcrBase.TopologyChangeCheckInterval, difftool.logger.LoggerContext(),
 			difftool.replicationSpecSvc, xdcrBase.HealthCheckInterval, securitySvc, streamApiWatcher.GetStreamApiWatcher)
-
+		if err != nil {
+			return nil, err
+		}
 		difftool.collectionsManifestsSvc, err = metadata_svc.NewCollectionsManifestService(difftool.remoteClusterSvc,
 			difftool.replicationSpecSvc, uiLogSvcMock, difftool.logger.LoggerContext(), difftool.utils, checkpointSvcMock,
-			xdcrTopologyMock, bucketTopologySvc, manifestsSvcMock)
+			xdcrTopologyMock, difftool.bucketTopologySvc, manifestsSvcMock)
 		if err != nil {
 			return nil, err
 		}
@@ -616,7 +619,6 @@ func main() {
 			os.Exit(1)
 		}
 	}
-
 	if options.runDataGeneration {
 		err := difftool.generateDataFiles()
 		if err != nil {
@@ -763,8 +765,8 @@ func (difftool *xdcrDiffTool) diffDataFiles() error {
 		return fmt.Errorf("Error mkdir fileDifferDir: %v\n", err)
 	}
 
-	difftoolDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.fileDifferDir,
-		base.DiffKeysFileName, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBins),
+	difftoolDriver := differ.NewDifferDriver(difftool.bucketTopologySvc, difftool.specifiedSpec, options.sourceFileDir, options.targetFileDir, options.fileDifferDir,
+		base.DiffKeysFileName, difftool.specifiedSpec.SourceBucketUUID, difftool.specifiedSpec.TargetBucketUUID, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBins),
 		int(options.numberOfFileDesc), difftool.srcToTgtColIdsMap, difftool.colFilterOrderedKeys, difftool.colFilterOrderedTargetColId)
 	err = difftoolDriver.Run()
 	if err != nil {
@@ -809,8 +811,8 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 		return
 	}
 
-	mutationDiffer := differ.NewMutationDiffer(difftool.specifiedSpec.SourceBucketName,
-		difftool.selfRef, difftool.specifiedSpec.TargetBucketName, difftool.specifiedRef,
+	mutationDiffer := differ.NewMutationDiffer(difftool.specifiedSpec.SourceBucketName, difftool.specifiedSpec.SourceBucketUUID,
+		difftool.selfRef, difftool.specifiedSpec.TargetBucketName, difftool.specifiedSpec.TargetBucketUUID, difftool.specifiedRef,
 		options.fileDifferDir, options.mutationDifferDir, int(options.numberOfWorkersForMutationDiffer),
 		int(options.mutationDifferBatchSize), int(options.mutationDifferTimeout), int(options.maxNumOfSendBatchRetry),
 		time.Duration(options.sendBatchRetryInterval)*time.Millisecond,

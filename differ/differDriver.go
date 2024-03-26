@@ -21,11 +21,43 @@ import (
 	"xdcrDiffer/base"
 	fdp "xdcrDiffer/fileDescriptorPool"
 	"xdcrDiffer/utils"
+
+	"github.com/couchbase/goxdcr/metadata"
+	"github.com/couchbase/goxdcr/service_def"
 )
 
 // For each ColID, the keys that have diffs
 type DiffKeysMap map[uint32][]string
 type MigrationHintMap map[string][]uint32
+
+type pruningWindow struct {
+	duration time.Duration
+	lock     sync.RWMutex
+}
+
+var sourcePruningWindow *pruningWindow = &pruningWindow{}
+
+func (p *pruningWindow) set(svc service_def.BucketTopologySvc, spec *metadata.ReplicationSpecification) error {
+	notificationCh, err := svc.SubscribeToLocalBucketFeed(spec, "")
+	if err != nil {
+		fmt.Printf("Failed to fetch LocalBucketFeed. err=%v\n", err)
+		return err
+	}
+	defer svc.UnSubscribeLocalBucketFeed(spec, "")
+	latestNotification := <-notificationCh
+	defer latestNotification.Recycle()
+	pruningWindow := latestNotification.GetVersionPruningWindowHrs()
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	p.duration = time.Duration(uint32(pruningWindow)*60*60) * time.Second
+	return nil
+}
+
+func (p *pruningWindow) get() time.Duration {
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+	return p.duration
+}
 
 func (d *DiffKeysMap) GetTotalCount() int {
 	if d == nil {
@@ -162,8 +194,12 @@ func (m MutationDiffFetchListIdx) AddEntry(entry *MutationDifferFetchEntry) {
 }
 
 type DifferDriver struct {
+	bucketTopologySvc service_def.BucketTopologySvc
+	specifiedSpec     *metadata.ReplicationSpecification
 	sourceFileDir     string
 	targetFileDir     string
+	sourceBucketUUID  string
+	targetBucketUUID  string
 	diffFileDir       string
 	diffKeysFileName  string
 	numberOfWorkers   int
@@ -188,17 +224,21 @@ type DifferDriver struct {
 	DuplicatedHint    DuplicatedHintMap
 }
 
-func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32) *DifferDriver {
+func NewDifferDriver(bucketTopologySvc service_def.BucketTopologySvc, specifiedSpec *metadata.ReplicationSpecification, sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName, sourceBucketUUID, targetBucketUUID string, numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32) *DifferDriver {
 	var fdPool *fdp.FdPool
 	if numberOfFds > 0 {
 		fdPool = fdp.NewFileDescriptorPool(numberOfFds)
 	}
 
 	return &DifferDriver{
+		bucketTopologySvc: bucketTopologySvc,
+		specifiedSpec:     specifiedSpec,
 		sourceFileDir:     sourceFileDir,
 		targetFileDir:     targetFileDir,
 		diffFileDir:       diffFileDir,
 		diffKeysFileName:  diffKeysFileName,
+		sourceBucketUUID:  sourceBucketUUID,
+		targetBucketUUID:  targetBucketUUID,
 		numberOfWorkers:   numberOfWorkers,
 		numberOfBins:      numberOfBins,
 		waitGroup:         &sync.WaitGroup{},
@@ -220,7 +260,10 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName
 
 func (dr *DifferDriver) Run() error {
 	loadDistribution := utils.BalanceLoad(dr.numberOfWorkers, base.NumberOfVbuckets)
-
+	err := sourcePruningWindow.set(dr.bucketTopologySvc, dr.specifiedSpec)
+	if err != nil {
+		return err
+	}
 	go dr.reportStatus()
 
 	var differHandlers []*DifferHandler
@@ -407,7 +450,6 @@ func (dh *DifferHandler) run() error {
 		fmt.Printf("%v srcDiff handler failed to initialize. err=%v\n", dh.index, err)
 		return err
 	}
-
 	var vbno uint16
 	for _, vbno = range dh.vbList {
 		srcVbItemCnt := 0
@@ -417,6 +459,8 @@ func (dh *DifferHandler) run() error {
 			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex)
 
 			filesDiffer, err := NewFilesDifferWithFDPool(sourceFileName, targetFileName, dh.fileDescPool, dh.collectionMapping, dh.colFilterStrings, dh.colFilterTgtIds)
+			filesDiffer.file1.bucketUUID = dh.driver.sourceBucketUUID
+			filesDiffer.file2.bucketUUID = dh.driver.targetBucketUUID
 			if err != nil {
 				// Most likely FD overrun, program should exit. Print a msg just in case
 				fmt.Printf("Creating file differ for files %v and %v resulted in error: %v\n",
