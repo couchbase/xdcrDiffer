@@ -802,11 +802,11 @@ func (dw *DifferWorker) diff() {
 				if areHlvsTheSame != nil {
 					srcResult := sourceResult.GoCbResult().(*gocbcore.GetMetaResult)
 					tgtResult := targetResult.GoCbResult().(*gocbcore.GetMetaResult)
-					res, err := areHlvsTheSame(uint64(srcResult.Cas), uint64(tgtResult.Cas), dw.differ.sourceBucketUUID, dw.differ.targetBucketUUID, sourceHlv.GoCbResult(), targetHlv.GoCbResult(), isDeleted(srcResult), isDeleted(tgtResult))
+					same, err := areHlvsTheSame(uint64(srcResult.Cas), uint64(tgtResult.Cas), dw.differ.sourceBucketUUID, dw.differ.targetBucketUUID, sourceHlv.GoCbResult(), targetHlv.GoCbResult(), isDeleted(srcResult), isDeleted(tgtResult))
 					if err != nil {
-						fmt.Printf("Hlv comparison for doc bearing the key : %s failed, err: %v", key, err)
+						dw.differ.logger.Errorf("Hlv comparison for doc bearing the key : %s failed, err: %v", key, err)
 					} else {
-						if !res {
+						if !same {
 							if _, exists := srcDiff[srcColId]; !exists {
 								srcDiff[srcColId] = make(map[string][]*GocbResult)
 							}
@@ -817,7 +817,6 @@ func (dw *DifferWorker) diff() {
 							tgtDiff[tgtColId][key] = append(tgtDiff[tgtColId][key], []*GocbResult{gocbHlvResultConstructor(targetHlv.GoCbResult()), gocbHlvResultConstructor(sourceHlv.GoCbResult())}...)
 						}
 					}
-
 				}
 			}
 		}
@@ -855,16 +854,17 @@ func (dw *DifferWorker) diff() {
 }
 
 type batch struct {
-	dw                *DifferWorker
-	fetchList         MutationDiffFetchList
-	waitGroup         sync.WaitGroup
-	sourceResultCount uint32
-	targetResultCount uint32
-	sourceResults     map[uint32]map[string]Result
-	targetResults     map[uint32]map[string]Result
-	sourceHlvs        map[uint32]map[string]Result
-	targetHlvs        map[uint32]map[string]Result
-	resultsLock       sync.RWMutex
+	dw                   *DifferWorker
+	fetchList            MutationDiffFetchList
+	waitGroupBodyCompare sync.WaitGroup
+	waitGroupMetaCompare sync.WaitGroup
+	sourceResultCount    uint32
+	targetResultCount    uint32
+	sourceResults        map[uint32]map[string]Result
+	targetResults        map[uint32]map[string]Result
+	sourceHlvs           map[uint32]map[string]Result
+	targetHlvs           map[uint32]map[string]Result
+	resultsLock          sync.RWMutex
 }
 
 func NewBatch(dw *DifferWorker, startIndex, endIndex int) *batch {
@@ -930,10 +930,17 @@ func (b *batch) send() error {
 	for _, fetchItem := range b.fetchList {
 		b.fetchItemAndStoreResult(fetchItem)
 	}
-
+	getBody := false
+	if b.dw.differ.compareType == base.MutationCompareTypeBodyOnly ||
+		b.dw.differ.compareType == base.MutationCompareTypeBodyAndMeta {
+		getBody = true
+	}
 	doneChan := make(chan bool, 1)
-	go utils.WaitForWaitGroup(&b.waitGroup, doneChan)
-
+	if getBody {
+		go utils.WaitForWaitGroup(&b.waitGroupBodyCompare, doneChan)
+	} else {
+		go utils.WaitForWaitGroup(&b.waitGroupMetaCompare, doneChan)
+	}
 	timer := time.NewTimer(time.Duration(b.dw.differ.timeout) * time.Second)
 	defer timer.Stop()
 	for {
@@ -968,7 +975,7 @@ func (b *batch) get(key string, isSource bool, getBody bool, colId uint32) {
 		}
 		resultInMap := resultsMap[key]
 		resultInMap.Set(key, result, err)
-		b.waitGroup.Done()
+		b.waitGroupBodyCompare.Done()
 	}
 
 	getMetaCallbackFunc := func(result *gocbcore.GetMetaResult, err error) {
@@ -980,7 +987,7 @@ func (b *batch) get(key string, isSource bool, getBody bool, colId uint32) {
 		}
 		resultInMap := resultsMap[key]
 		resultInMap.Set(key, result, err)
-		b.waitGroup.Done()
+		b.waitGroupMetaCompare.Done()
 	}
 
 	getHlvCallbackFunc := func(result *gocbcore.LookupInResult, err error) {
@@ -992,18 +999,18 @@ func (b *batch) get(key string, isSource bool, getBody bool, colId uint32) {
 		}
 		resultInMap := resultsMap[key]
 		resultInMap.Set(key, result, err)
-		b.waitGroup.Done()
+		b.waitGroupMetaCompare.Done()
 	}
 
-	b.waitGroup.Add(1)
 	var err error
 	var err1 error
 	if isSource {
 		if getBody {
+			b.waitGroupBodyCompare.Add(1)
 			err = b.dw.sourceBucket.Get(key, getCallbackFunc, colId)
 		} else {
+			b.waitGroupMetaCompare.Add(2)
 			err = b.dw.sourceBucket.GetMeta(key, getMetaCallbackFunc, colId)
-			b.waitGroup.Add(1)
 			err1 = b.dw.sourceBucket.GetHlv(key, getHlvCallbackFunc, colId)
 		}
 		if err != nil {
@@ -1014,10 +1021,11 @@ func (b *batch) get(key string, isSource bool, getBody bool, colId uint32) {
 		}
 	} else {
 		if getBody {
+			b.waitGroupBodyCompare.Add(1)
 			err = b.dw.targetBucket.Get(key, getCallbackFunc, colId)
 		} else {
+			b.waitGroupMetaCompare.Add(2)
 			err = b.dw.targetBucket.GetMeta(key, getMetaCallbackFunc, colId)
-			b.waitGroup.Add(1)
 			err1 = b.dw.targetBucket.GetHlv(key, getHlvCallbackFunc, colId)
 		}
 		if err != nil {
@@ -1086,7 +1094,7 @@ func areGetMetaResultsTheSame(result1Raw, result2Raw interface{}) bool {
 	} else {
 		// Only compare json part of datatype
 		return result1.Cas == result2.Cas && result1.SeqNo == result2.SeqNo && result1.Flags == result2.Flags &&
-			result1.Expiry == result2.Expiry && result1.Deleted == result2.Deleted && (result1.Datatype&base.JSONDataType == result2.Datatype&base.JSONDataType)
+			result1.Expiry == result2.Expiry && result1.Deleted == result2.Deleted && (result1.Datatype == result2.Datatype)
 	}
 }
 func areGetHlvsTheSame(docCas1, docCas2 uint64, sourceBucketUUID, targetBucketUUID string, result1Raw, result2Raw interface{}, isSourceDeleted, isTargetDeleted bool) (bool, error) {
@@ -1148,7 +1156,12 @@ func getHlvImportCas(docCas uint64, bucketUUID string, result *gocbcore.LookupIn
 	if hlvBytes == nil || (hlvBytes != nil && len(hlvBytes) == 0) {
 		return
 	} else {
-		Hlv, err = constructHlv(docCas, importCas, bucketUUID, hlvBytes)
+		var bucketId hlv.DocumentSourceId
+		bucketId, err = hlv.UUIDtoDocumentSource(bucketUUID)
+		if err != nil {
+			return
+		}
+		Hlv, err = constructHlv(docCas, importCas, bucketId, hlvBytes)
 		return
 	}
 }
@@ -1176,10 +1189,14 @@ type GetResult struct {
 }
 
 func (r *GetResult) Key() string {
+	r.Lock.RLock()
+	defer r.Lock.RUnlock()
 	return r.key
 }
 
 func (r *GetResult) Error() error {
+	r.Lock.RLock()
+	defer r.Lock.RUnlock()
 	return r.err
 }
 
@@ -1196,6 +1213,8 @@ func (r *GetResult) Clone() Result {
 }
 
 func (r *GetResult) GoCbResult() interface{} {
+	r.Lock.RLock()
+	defer r.Lock.RUnlock()
 	return r.result
 }
 
@@ -1215,10 +1234,14 @@ type GetMetaResult struct {
 }
 
 func (r *GetMetaResult) Key() string {
+	r.Lock.RLock()
+	defer r.Lock.RUnlock()
 	return r.key
 }
 
 func (r *GetMetaResult) Error() error {
+	r.Lock.RLock()
+	defer r.Lock.RUnlock()
 	return r.err
 }
 
@@ -1233,6 +1256,8 @@ func (r *GetMetaResult) Clone() Result {
 }
 
 func (r *GetMetaResult) GoCbResult() interface{} {
+	r.Lock.RLock()
+	defer r.Lock.RUnlock()
 	return r.result
 }
 
@@ -1252,10 +1277,14 @@ type GetHlvResult struct {
 }
 
 func (r *GetHlvResult) Key() string {
+	r.Lock.RLock()
+	defer r.Lock.RUnlock()
 	return r.key
 }
 
 func (r *GetHlvResult) Error() error {
+	r.Lock.RLock()
+	defer r.Lock.RUnlock()
 	return r.err
 }
 
@@ -1270,6 +1299,8 @@ func (r *GetHlvResult) Clone() Result {
 }
 
 func (r *GetHlvResult) GoCbResult() interface{} {
+	r.Lock.RLock()
+	defer r.Lock.RUnlock()
 	return r.result
 }
 
