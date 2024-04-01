@@ -27,6 +27,7 @@ import (
 	xdcrBase "github.com/couchbase/goxdcr/base"
 	crMeta "github.com/couchbase/goxdcr/crMeta"
 	hlv "github.com/couchbase/goxdcr/hlv"
+	xdcrLog "github.com/couchbase/goxdcr/log"
 )
 
 const BodyNilError string = "body cannot be nil"
@@ -203,10 +204,10 @@ func compareHlv(hlv1, hlv2 *hlv.HLV, cas1, cas2, importCas1, importCas2 uint64, 
 			hlv1, _ = hlv.NewHLV(bucketUUID1, cas1, 0, "", 0, nil, nil)
 		}
 	}
-	return actualCompare(hlv1, hlv2, cas1, cas2)
+	return compareHlvItems(hlv1, hlv2, cas1, cas2)
 }
 
-func actualCompare(item1 *hlv.HLV, item2 *hlv.HLV, item1Cas uint64, item2Cas uint64) bool {
+func compareHlvItems(item1 *hlv.HLV, item2 *hlv.HLV, item1Cas uint64, item2Cas uint64) bool {
 	// the HLVs that this function recieves is up to date
 	if item1.GetCvCas() != item2.GetCvCas() {
 		return false
@@ -253,7 +254,6 @@ func comparePv(Pv1 hlv.VersionsMap, Pv2 hlv.VersionsMap, cas1 uint64, cas2 uint6
 					return false
 				}
 			}
-
 		}
 	}
 	return true
@@ -345,22 +345,17 @@ func NewFilesDifferWithFDPool(file1, file2 string, fdPool *fdp.FdPool, collectio
 	return differ, nil
 }
 
-func constructHlv(docCas uint64, importCAS uint64, bucketUUID string, hlvbytes []byte) (*hlv.HLV, error) {
+func constructHlv(docCas uint64, importCAS uint64, bucketUUID hlv.DocumentSourceId, hlvbytes []byte) (*hlv.HLV, error) {
 	cvCas, cvSrc, cvVer, pvMap, mvMap, err := crMeta.ParseHlvFields(docCas, hlvbytes)
 	if err != nil {
 		return nil, err
 	}
-	//need to convert the uuid(hex) to base64 i.e. hlv required format
-	bucketId, err1 := hlv.UUIDtoDocumentSource(bucketUUID)
-	if err1 != nil {
-		return nil, err1
-	}
 	var Hlv *hlv.HLV
 	var err2 error
 	if docCas == importCAS {
-		Hlv, err2 = hlv.NewHLV(bucketId, cvCas, cvCas, cvSrc, cvVer, pvMap, mvMap)
+		Hlv, err2 = hlv.NewHLV(bucketUUID, cvCas, cvCas, cvSrc, cvVer, pvMap, mvMap)
 	} else {
-		Hlv, err2 = hlv.NewHLV(bucketId, docCas, cvCas, cvSrc, cvVer, pvMap, mvMap)
+		Hlv, err2 = hlv.NewHLV(bucketUUID, docCas, cvCas, cvSrc, cvVer, pvMap, mvMap)
 	}
 	if err2 != nil {
 		return nil, err2
@@ -368,42 +363,9 @@ func constructHlv(docCas uint64, importCAS uint64, bucketUUID string, hlvbytes [
 	return Hlv, nil
 }
 
-func extractHlvAndImportCas(XattrIterator *xdcrBase.XattrIterator, bucketUUID string, docCas uint64) (hlv *hlv.HLV, importCas uint64, err error) {
-	var key, value []byte
-	var xattrHlv, xattrImportCas []byte
-	for XattrIterator.HasNext() {
-		key, value, err = XattrIterator.Next()
-		if err != nil {
-			return
-		}
-		if xdcrBase.Equals(key, xdcrBase.XATTR_HLV) {
-			xattrHlv = value
-		}
-		if xdcrBase.Equals(key, xdcrBase.XATTR_IMPORTCAS) {
-			xattrImportCas = value
-		}
-	}
-	// any errors in parsing importCas we dont parse/construct the hlv beacuse it is not possible to determine if the hlv is outdated/updated
-	if xattrImportCas != nil {
-		// Remove the start/end quotes before converting it to uint64
-		xattrLen := len(xattrImportCas)
-		importCas, err = xdcrBase.HexLittleEndianToUint64(xattrImportCas[1 : xattrLen-1])
-		if err != nil {
-			return
-		}
-	}
-	if xattrHlv == nil {
-		return
-	} else {
-		hlv, err = constructHlv(docCas, importCas, bucketUUID, xattrHlv)
-		return
-	}
-
-}
-
-func getOneEntry(readOp fdp.FileOp) (*oneEntry, error) {
+func getOneEntry(readOp fdp.FileOp, bucketUUID hlv.DocumentSourceId) (*oneEntry, error) {
 	entry := &oneEntry{}
-
+	entry.bucketUUID = bucketUUID
 	keyLenBytes := make([]byte, 2)
 	bytesRead, err := readOp(keyLenBytes)
 	if err != nil {
@@ -467,21 +429,44 @@ func getOneEntry(readOp fdp.FileOp) (*oneEntry, error) {
 	}
 	entry.Datatype = uint8(binary.BigEndian.Uint16(dataTypeBytes))
 
-	xattrSizebytes := make([]byte, 4)
-	bytesRead, err = readOp(xattrSizebytes)
+	hlvSizebytes := make([]byte, 4)
+	bytesRead, err = readOp(hlvSizebytes)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to read XattrSizeBytes, bytes read: %v, err: %v", bytesRead, err)
+		return nil, fmt.Errorf("Unable to read HlvSizeBytes, bytes read: %v, err: %v", bytesRead, err)
 	}
-	xattrSize := uint32(binary.BigEndian.Uint32(xattrSizebytes))
-	entry.XattrSize = xattrSize
-
-	xattrBytes := make([]byte, xattrSize)
-	bytesRead, err = readOp(xattrBytes)
+	hlvSize := uint32(binary.BigEndian.Uint32(hlvSizebytes))
+	HlvBytes := make([]byte, hlvSize)
+	bytesRead, err = readOp(HlvBytes)
 	if err != nil {
-		return nil, fmt.Errorf("Unable to read xattrs, bytes read: %v, err: %v", bytesRead, err)
+		return nil, fmt.Errorf("Unable to read hlv, bytes read: %v, err: %v", bytesRead, err)
 	}
-	entry.Xattr = xattrBytes
 
+	importSizebytes := make([]byte, 4)
+	bytesRead, err = readOp(importSizebytes)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to read ImportSizeBytes, bytes read: %v, err: %v", bytesRead, err)
+	}
+	importSize := uint32(binary.BigEndian.Uint32(importSizebytes))
+	importBytes := make([]byte, importSize)
+	bytesRead, err = readOp(importBytes)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to read importCas, bytes read: %v, err: %v", bytesRead, err)
+	}
+	if len(importBytes) != 0 {
+		entry.ImportCas, err = xdcrBase.HexLittleEndianToUint64(importBytes)
+		if err != nil {
+			return nil, fmt.Errorf("Unable to convert ImportCas from hexadecimal bytes to uint64, err: %v", err)
+		}
+	}
+	if len(HlvBytes) != 0 {
+
+		entry.Hlv, err = constructHlv(entry.Cas, entry.ImportCas, entry.bucketUUID, HlvBytes)
+		if err != nil {
+			return nil, fmt.Errorf("Error in constructing HLV, err: %v", err)
+		}
+	} else {
+		entry.Hlv = nil
+	}
 	hashBytes := make([]byte, sha512.Size)
 	bytesRead, err = readOp(hashBytes)
 	if err != nil {
@@ -523,27 +508,14 @@ func (a ByKeyName) Less(i, j int) bool { return a[i].Key < a[j].Key }
 func (attr *FileAttributes) fillAndDedupEntries() error {
 	var err error
 	var entry *oneEntry
-	var XattrIterator *xdcrBase.XattrIterator = &xdcrBase.XattrIterator{}
+	bucketUUID, er := hlv.UUIDtoDocumentSource(attr.bucketUUID)
+	if er != nil {
+		return er
+	}
 	for {
-		entry, err = getOneEntry(attr.readOp)
+		entry, err = getOneEntry(attr.readOp, bucketUUID)
 		if err != nil {
 			break
-		}
-		entry.bucketUUID, err = hlv.UUIDtoDocumentSource(attr.bucketUUID)
-		if err != nil {
-			break
-		}
-		err := XattrIterator.ResetXattrIterator(entry.Xattr, entry.XattrSize)
-		if err != nil {
-			if !strings.Contains(err.Error(), BodyNilError) {
-				break
-			}
-		} else {
-			entry.Hlv, entry.ImportCas, err = extractHlvAndImportCas(XattrIterator, attr.bucketUUID, entry.Cas)
-			if err != nil {
-				fmt.Printf("An error occurred while constructing Hlv or ImportCas for document with key %v when read from file %v , err: %v", entry.Key, attr.name, err)
-				break
-			}
 		}
 		_, exists := attr.entries[entry.ColId]
 		if !exists {
@@ -719,7 +691,7 @@ func addToSrcDiffMapIfNotAdded(srcDedupMap map[string]bool, key string, srcDiffM
 //     Under collections migration mode, this map will allow a quick index of which source document
 //     should belong in which target collection ID. This is needed because fileDiffer ingested this
 //     information from actual DCP binary dump and needs to pass this to mutationDiffer for display
-func (differ *FilesDiffer) Diff() (srcDiffMap, tgtDiffMap map[uint32][]string, migrationHintMap map[string][]uint32, diffBytes []byte, err error) {
+func (differ *FilesDiffer) Diff(logger *xdcrLog.CommonLogger) (srcDiffMap, tgtDiffMap map[uint32][]string, migrationHintMap map[string][]uint32, diffBytes []byte, err error) {
 	differ.dataLoadWg.Add(1)
 	go differ.asyncLoad(&differ.file1, &differ.err1)
 	differ.dataLoadWg.Add(1)
@@ -727,10 +699,10 @@ func (differ *FilesDiffer) Diff() (srcDiffMap, tgtDiffMap map[uint32][]string, m
 	differ.dataLoadWg.Wait()
 
 	if differ.err1 != nil {
-		fmt.Printf("Error when loading file1 contents: %v\n", differ.err1)
+		logger.Errorf("Error when loading file %v contents: %v\n", differ.file1.name, differ.err1)
 	}
 	if differ.err2 != nil {
-		fmt.Printf("Error when loading file2 contents: %v\n", differ.err2)
+		logger.Errorf("Error when loading file %v contents: %v\n", differ.file2.name, differ.err2)
 	}
 
 	srcDiffMap, tgtDiffMap, migrationHintMap = differ.diffSorted()

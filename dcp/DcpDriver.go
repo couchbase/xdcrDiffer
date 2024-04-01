@@ -68,6 +68,7 @@ type DcpDriver struct {
 	// various counters
 	totalNumReceivedFromDCP                uint64
 	totalSysOrUnsubbedEventReceivedFromDCP uint64
+	xattrKeysForNoCompare                  map[string]bool
 }
 
 type VBStateWithLock struct {
@@ -91,37 +92,38 @@ const (
 	DriverStateStopped DriverState = iota
 )
 
-func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration, checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIds []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping, mobileCompat int, expDelMode xdcrBase.FilterExpDelType) *DcpDriver {
+func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration, checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIds []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping, mobileCompat int, expDelMode xdcrBase.FilterExpDelType, xattrKeysForNoCompare map[string]bool) *DcpDriver {
 	dcpDriver := &DcpDriver{
-		Name:                name,
-		url:                 url,
-		bucketName:          bucketName,
-		ref:                 ref,
-		fileDir:             fileDir,
-		numberOfClients:     numberOfClients,
-		numberOfWorkers:     numberOfWorkers,
-		numberOfBins:        numberOfBins,
-		dcpHandlerChanSize:  dcpHandlerChanSize,
-		completeBySeqno:     completeBySeqno,
-		errChan:             errChan,
-		waitGroup:           waitGroup,
-		clients:             make([]*DcpClient, numberOfClients),
-		childWaitGroup:      &sync.WaitGroup{},
-		vbStateMap:          make(map[uint16]*VBStateWithLock),
-		fdPool:              fdPool,
-		state:               DriverStateNew,
-		finChan:             make(chan bool),
-		startVbtsDoneChan:   make(chan bool),
-		logger:              logger,
-		filter:              filter,
-		capabilities:        capabilities,
-		collectionIDs:       collectionIds,
-		colMigrationFilters: colMigrationFilters,
-		utils:               utils,
-		bufferCapacity:      bufferCap,
-		migrationMapping:    migrationMapping,
-		mobileCompatible:    mobileCompat,
-		expDelMode:          expDelMode,
+		Name:                  name,
+		url:                   url,
+		bucketName:            bucketName,
+		ref:                   ref,
+		fileDir:               fileDir,
+		numberOfClients:       numberOfClients,
+		numberOfWorkers:       numberOfWorkers,
+		numberOfBins:          numberOfBins,
+		dcpHandlerChanSize:    dcpHandlerChanSize,
+		completeBySeqno:       completeBySeqno,
+		errChan:               errChan,
+		waitGroup:             waitGroup,
+		clients:               make([]*DcpClient, numberOfClients),
+		childWaitGroup:        &sync.WaitGroup{},
+		vbStateMap:            make(map[uint16]*VBStateWithLock),
+		fdPool:                fdPool,
+		state:                 DriverStateNew,
+		finChan:               make(chan bool),
+		startVbtsDoneChan:     make(chan bool),
+		logger:                logger,
+		filter:                filter,
+		capabilities:          capabilities,
+		collectionIDs:         collectionIds,
+		colMigrationFilters:   colMigrationFilters,
+		utils:                 utils,
+		bufferCapacity:        bufferCap,
+		migrationMapping:      migrationMapping,
+		mobileCompatible:      mobileCompat,
+		expDelMode:            expDelMode,
+		xattrKeysForNoCompare: xattrKeysForNoCompare,
 	}
 
 	var vbno uint16

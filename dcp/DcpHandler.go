@@ -14,9 +14,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
-
 	"xdcrDiffer/base"
 	fdp "xdcrDiffer/fileDescriptorPool"
 	"xdcrDiffer/utils"
@@ -56,9 +56,10 @@ type DcpHandler struct {
 	migrationMapping              metadata.CollectionNamespaceMapping
 	mobileCompatible              int
 	expDelMode                    xdcrBase.FilterExpDelType
+	xattraIterator                *xdcrBase.XattrIterator
 }
 
-func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface, incReceivedCounter, incSysOrUnsubbedEvtReceived func(), colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping) (*DcpHandler, error) {
+func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface, incReceivedCounter, incSysOrUnsubbedEvtReceived func(), colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping, xattrIterator *xdcrBase.XattrIterator) (*DcpHandler, error) {
 	if len(vbList) == 0 {
 		return nil, fmt.Errorf("vbList is empty for handler %v", index)
 	}
@@ -84,6 +85,7 @@ func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uin
 		migrationMapping:              migrationMapping,
 		mobileCompatible:              dcpClient.dcpDriver.mobileCompatible,
 		expDelMode:                    dcpClient.dcpDriver.expDelMode,
+		xattraIterator:                xattrIterator,
 	}, nil
 }
 
@@ -221,7 +223,12 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 	if dh.colMigrationFiltersOn && len(filterIdsMatched) > 0 {
 		mut.ColFiltersMatched = filterIdsMatched
 	}
-	bucket.write(mut.Serialize())
+	ret, err := mut.Serialize(dh.xattraIterator, dh.dcpClient.dcpDriver.xattrKeysForNoCompare)
+	if err != nil {
+		dh.logger.Errorf("Error in Serializing the mutation pertaining to the document with the key:%v ,err:%v\n", mut.Key, err)
+	} else {
+		bucket.write(ret)
+	}
 }
 
 func (dh *DcpHandler) replicationFilter(mut *Mutation, matched bool, filterResult base.FilterResultType) base.FilterResultType {
@@ -524,25 +531,32 @@ func (m *Mutation) ToUprEvent() *xdcrBase.WrappedUprEvent {
 //	collectionId - 4 bytes
 //	colFiltersLen - 2 byte (number of collection migration filters)
 //	(per col filter) - 2 byte
-func (mut *Mutation) Serialize() []byte {
+func (mut *Mutation) Serialize(xattraIterator *xdcrBase.XattrIterator, XattrsToExclude map[string]bool) ([]byte, error) {
 	var bodyHash [64]byte
 	var xattrSize uint32
 	var xattr []byte
-
+	var bodyWithoutXattr, trimmedXattrPlusBody, hlv, importCas []byte
+	var err error
 	if mut.Datatype&xdcrBase.XattrDataType > 0 {
-		bodyWithoutXattr, err := xdcrBase.StripXattrAndGetBody(mut.Value)
+		bodyWithoutXattr, err = xdcrBase.StripXattrAndGetBody(mut.Value)
 		if err != nil {
-			fmt.Println("Error encountered while stripping Xattrs from the body, err: ", err)
+			return nil, err
 		}
-		bodyHash = sha512.Sum512(bodyWithoutXattr)
 		xattrSize, _ = xdcrBase.GetXattrSize(mut.Value)
 		xattr = mut.Value[4 : xattrSize+4]
+		trimmedXattrPlusBody, hlv, importCas, err = stripHlvAndImportFromXattr(xattr, len(mut.Value), xattrSize, xattraIterator, XattrsToExclude, bodyWithoutXattr)
+		if err != nil {
+			return nil, err
+		}
+		bodyHash = sha512.Sum512(trimmedXattrPlusBody)
 	} else {
 		bodyHash = sha512.Sum512(mut.Value)
 	}
-
+	hlvLen := uint32(len(hlv))
+	importCasLen := uint32(len(importCas))
+	hlvPlusImportSize := hlvLen + importCasLen
 	keyLen := len(mut.Key)
-	ret := make([]byte, base.GetFixedSizeMutationLen(keyLen, xattrSize, mut.ColFiltersMatched))
+	ret := make([]byte, base.GetFixedSizeMutationLen(keyLen, hlvPlusImportSize, mut.ColFiltersMatched))
 
 	pos := 0
 	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(keyLen))
@@ -563,10 +577,14 @@ func (mut *Mutation) Serialize() []byte {
 	pos += 2
 	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(mut.Datatype))
 	pos += 2
-	binary.BigEndian.PutUint32(ret[pos:pos+4], xattrSize)
+	binary.BigEndian.PutUint32(ret[pos:pos+4], hlvLen)
 	pos += 4
-	copy(ret[pos:pos+int(xattrSize)], xattr)
-	pos += int(xattrSize)
+	copy(ret[pos:pos+int(hlvLen)], hlv)
+	pos += int(hlvLen)
+	binary.BigEndian.PutUint32(ret[pos:pos+4], importCasLen)
+	pos += 4
+	copy(ret[pos:pos+int(importCasLen)], importCas)
+	pos += int(importCasLen)
 	copy(ret[pos:], bodyHash[:])
 	pos += 64
 	binary.BigEndian.PutUint32(ret[pos:pos+4], mut.ColId)
@@ -577,5 +595,46 @@ func (mut *Mutation) Serialize() []byte {
 		binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(colFilterId))
 		pos += 2
 	}
-	return ret
+	return ret, nil
+}
+
+func stripHlvAndImportFromXattr(xattr []byte, size int, xattrSize uint32, xattrIterator *xdcrBase.XattrIterator, keysToExclude map[string]bool, bodyWithoutXattr []byte) ([]byte, []byte, []byte, error) {
+	var err error
+	var trimmedXattrPlusBody []byte = make([]byte, size)
+	var xattrHlv, xattrImportCas []byte
+	err = xattrIterator.ResetXattrIterator(xattr, xattrSize)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	var key, value []byte
+	var kvmap map[string][]byte = make(map[string][]byte)
+	var kvmapKeys []string
+	for xattrIterator.HasNext() {
+		key, value, err = xattrIterator.Next()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		keyStr := string(key)
+		_, exists := keysToExclude[keyStr]
+		if xdcrBase.Equals(key, xdcrBase.XATTR_HLV) {
+			xattrHlv = value
+		} else if xdcrBase.Equals(key, xdcrBase.XATTR_IMPORTCAS) {
+			xattrImportCas = value
+		} else if !exists {
+			kvmap[keyStr] = value
+		}
+	}
+	for key, _ := range kvmap {
+		kvmapKeys = append(kvmapKeys, key)
+	}
+	sort.Strings(kvmapKeys)
+	xattrComposer := xdcrBase.NewXattrComposer(trimmedXattrPlusBody)
+	for _, key := range kvmapKeys {
+		err = xattrComposer.WriteKV([]byte(key), kvmap[key])
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	trimmedXattrPlusBody, _ = xattrComposer.FinishAndAppendDocValue(bodyWithoutXattr)
+	return trimmedXattrPlusBody, xattrHlv, xattrImportCas, nil
 }

@@ -59,7 +59,7 @@ function killBgTail {
 	fi
 }
 
-while getopts ":h:p:u:r:s:t:n:q:v:cbm:ew:d" opt; do
+while getopts ":h:p:u:r:s:t:n:q:v:cbm:ew:d:x:" opt; do
 	case ${opt} in
 	u)
 		username=$OPTARG
@@ -105,6 +105,9 @@ while getopts ":h:p:u:r:s:t:n:q:v:cbm:ew:d" opt; do
 		;;
 	w)
 		setupTimeout=$OPTARG
+		;;
+	x)
+		xattrsNoCompare=$OPTARG
 		;;
 	\?)
 		echo "Invalid option: $OPTARG" 1>&2
@@ -210,6 +213,10 @@ fi
 if [[ ! -z "$debugMode" ]]; then
 	execString="${execString} -debugMode"
 	execString="${execString} $debugMode"
+fi
+if [[ ! -z "$xattrsNoCompare" ]]; then
+	execString="${execString} -xattrsNoCompare"
+	execString="${execString} $xattrsNoCompare"
 fi
 
 # Execute the differ in background and watch the pid to be finished

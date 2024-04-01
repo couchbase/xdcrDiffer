@@ -22,6 +22,7 @@ import (
 	fdp "xdcrDiffer/fileDescriptorPool"
 	"xdcrDiffer/utils"
 
+	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/couchbase/goxdcr/metadata"
 	"github.com/couchbase/goxdcr/service_def"
 )
@@ -33,23 +34,42 @@ type MigrationHintMap map[string][]uint32
 type pruningWindow struct {
 	duration time.Duration
 	lock     sync.RWMutex
+	isSource bool
 }
 
-var sourcePruningWindow *pruningWindow = &pruningWindow{}
+var sourcePruningWindow *pruningWindow = &pruningWindow{isSource: true}
+
+// var targetPruningWindow *pruningWindow = &pruningWindow{}
 
 func (p *pruningWindow) set(svc service_def.BucketTopologySvc, spec *metadata.ReplicationSpecification) error {
-	notificationCh, err := svc.SubscribeToLocalBucketFeed(spec, "")
-	if err != nil {
-		fmt.Printf("Failed to fetch LocalBucketFeed. err=%v\n", err)
-		return err
+	subscriberId := "DiffTool"
+	var pruningWindow int
+	if p.isSource {
+		notificationCh, err := svc.SubscribeToLocalBucketFeed(spec, subscriberId)
+		if err != nil {
+			fmt.Printf("Failed to fetch LocalBucketFeed. err=%v\n", err)
+			return err
+		}
+		defer svc.UnSubscribeLocalBucketFeed(spec, subscriberId)
+		latestNotification := <-notificationCh
+		defer latestNotification.Recycle()
+		pruningWindow = latestNotification.GetVersionPruningWindowHrs()
 	}
-	defer svc.UnSubscribeLocalBucketFeed(spec, "")
-	latestNotification := <-notificationCh
-	defer latestNotification.Recycle()
-	pruningWindow := latestNotification.GetVersionPruningWindowHrs()
+	// } else { 				//to be uncommented once the support to fetch Pruning window from target is added
+	// notificationCh, err := svc.SubscribeToRemoteBucketFeed(spec, subscriberId)
+	// if err != nil {
+	// 	fmt.Printf("Failed to fetch RemoteBucketFeed. err=%v\n", err)
+	// 	return err
+	// }
+	// defer svc.UnSubscribeRemoteBucketFeed(spec, subscriberId)
+	// latestNotification := <-notificationCh
+	// defer latestNotification.Recycle()
+	// pruningWindow = latestNotification.GetVersionPruningWindowHrs()
+	// }
+
 	p.lock.Lock()
 	defer p.lock.Unlock()
-	p.duration = time.Duration(uint32(pruningWindow)*60*60) * time.Second
+	p.duration = time.Duration(uint32(pruningWindow)) * time.Hour
 	return nil
 }
 
@@ -194,8 +214,6 @@ func (m MutationDiffFetchListIdx) AddEntry(entry *MutationDifferFetchEntry) {
 }
 
 type DifferDriver struct {
-	bucketTopologySvc service_def.BucketTopologySvc
-	specifiedSpec     *metadata.ReplicationSpecification
 	sourceFileDir     string
 	targetFileDir     string
 	sourceBucketUUID  string
@@ -222,17 +240,18 @@ type DifferDriver struct {
 	MapLock           *sync.RWMutex
 	srcMigrationHint  MigrationHintMap
 	DuplicatedHint    DuplicatedHintMap
+	bucketTopologySvc service_def.BucketTopologySvc
+	specifiedSpec     *metadata.ReplicationSpecification
+	logger            *xdcrLog.CommonLogger
 }
 
-func NewDifferDriver(bucketTopologySvc service_def.BucketTopologySvc, specifiedSpec *metadata.ReplicationSpecification, sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName, sourceBucketUUID, targetBucketUUID string, numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32) *DifferDriver {
+func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName, sourceBucketUUID, targetBucketUUID string, numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32, bucketTopologySvc service_def.BucketTopologySvc, specifiedSpec *metadata.ReplicationSpecification, logger *xdcrLog.CommonLogger) *DifferDriver {
 	var fdPool *fdp.FdPool
 	if numberOfFds > 0 {
 		fdPool = fdp.NewFileDescriptorPool(numberOfFds)
 	}
 
 	return &DifferDriver{
-		bucketTopologySvc: bucketTopologySvc,
-		specifiedSpec:     specifiedSpec,
 		sourceFileDir:     sourceFileDir,
 		targetFileDir:     targetFileDir,
 		diffFileDir:       diffFileDir,
@@ -255,6 +274,9 @@ func NewDifferDriver(bucketTopologySvc service_def.BucketTopologySvc, specifiedS
 		TgtVbItemCntMap:   make(map[uint16]int),
 		MapLock:           &sync.RWMutex{},
 		DuplicatedHint:    DuplicatedHintMap{},
+		bucketTopologySvc: bucketTopologySvc,
+		specifiedSpec:     specifiedSpec,
+		logger:            logger,
 	}
 }
 
@@ -264,6 +286,10 @@ func (dr *DifferDriver) Run() error {
 	if err != nil {
 		return err
 	}
+	// err1 := targetPruningWindow.set(dr.bucketTopologySvc, dr.specifiedSpec)
+	// if err1 != nil {
+	// 	return err1
+	// }
 	go dr.reportStatus()
 
 	var differHandlers []*DifferHandler
@@ -463,12 +489,11 @@ func (dh *DifferHandler) run() error {
 			filesDiffer.file2.bucketUUID = dh.driver.targetBucketUUID
 			if err != nil {
 				// Most likely FD overrun, program should exit. Print a msg just in case
-				fmt.Printf("Creating file differ for files %v and %v resulted in error: %v\n",
+				dh.driver.logger.Errorf("Creating file differ for files %v and %v resulted in error: %v\n",
 					sourceFileName, targetFileName, err)
 				return err
 			}
-
-			srcDiffMap, tgtDiffMap, migrationHints, diffBytes, err := filesDiffer.Diff()
+			srcDiffMap, tgtDiffMap, migrationHints, diffBytes, err := filesDiffer.Diff(dh.driver.logger)
 			if err != nil {
 				fmt.Printf("error getting srcDiff from file differ. err=%v\n", err)
 				continue

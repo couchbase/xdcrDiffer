@@ -77,8 +77,8 @@ const KeyLenVariable = 2
 const MigrationFilterLen = 2
 const xattrSizeLen = 4
 
-func GetFixedSizeMutationLen(keyLen int, xattrSize uint32, colMigrationFilterMatched []uint8) int {
-	return KeyLenVariable + keyLen + xattrSizeLen + int(xattrSize) + BodyLength + MigrationFilterLen + len(colMigrationFilterMatched)*2
+func GetFixedSizeMutationLen(keyLen int, size uint32, colMigrationFilterMatched []uint8) int {
+	return KeyLenVariable + keyLen + (2 * xattrSizeLen) + int(size) + BodyLength + MigrationFilterLen + len(colMigrationFilterMatched)*2
 }
 
 var VersionForRBACSupport = []int{5, 0}
