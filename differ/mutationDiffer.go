@@ -48,8 +48,8 @@ type MutationDiffer struct {
 	conflictRetries       int
 	retriesWaitSec        int
 
-	sourceBucket *GocbcoreAgent
-	targetBucket *GocbcoreAgent
+	sourceBucketAgent *GocbcoreAgent
+	targetBucketAgent *GocbcoreAgent
 
 	missingFromSource map[uint32]map[string]*GocbResult
 	missingFromTarget map[uint32]map[string]*GocbResult
@@ -90,20 +90,39 @@ type MutationDiffer struct {
 	utils           xdcrUtils.UtilsIface
 }
 
+type JsonBody struct {
+	Value    []byte
+	Cas      uint64
+	Datatype uint8
+}
+
+type JsonMeta struct {
+	Value    []byte
+	Cas      uint64
+	Seqno    uint64
+	Flags    uint32
+	Expiry   uint32
+	Deleted  uint32
+	Datatype uint8
+	Cvcas    uint64
+	CvSrc    hlv.DocumentSourceId
+	CvVer    uint64
+	Pv       hlv.VersionsMap
+	Mv       hlv.VersionsMap
+	Updated  bool
+}
+
 // GocbResult is a wrapper struct that is composed with properties for both get and getMeta results from gocb
 type GocbResult struct {
-	*gocbcore.GetResult
-	*gocbcore.GetMetaResult
-	*gocbcore.LookupInResult
+	*JsonBody
+	*JsonMeta
 }
 
 func (r *GocbResult) MarshalJSON() ([]byte, error) {
-	if r.GetResult != nil {
-		return json.Marshal(r.GetResult)
-	} else if r.GetMetaResult != nil {
-		return json.Marshal(r.GetMetaResult)
-	} else if r.LookupInResult != nil {
-		return json.Marshal(r.LookupInResult)
+	if r.JsonBody != nil {
+		return json.Marshal(r.JsonBody)
+	} else if r.JsonMeta != nil {
+		return json.Marshal(r.JsonMeta)
 	}
 	return nil, nil
 }
@@ -209,7 +228,7 @@ func (d *MutationDiffer) fetchAndDiff(combinedFetchList MutationDiffFetchList) {
 			// skip workers with 0 load
 			continue
 		}
-		diffWorker := NewDifferWorker(d, d.sourceDcpAgent, d.targetDcpAgent, d.sourceBucket, d.targetBucket,
+		diffWorker := NewDifferWorker(d, d.sourceDcpAgent, d.targetDcpAgent, d.sourceBucketAgent, d.targetBucketAgent,
 			combinedFetchList[lowIndex:highIndex], waitGroup, d.colIdsMap, d.reverseTgtColIdsMap, d.migrationHintMap,
 			d.compareType, d.conflictRetries)
 		waitGroup.Add(1)
@@ -412,7 +431,7 @@ func (d *MutationDiffer) getDiffBytes() ([]byte, error) {
 		"MissingFromSource": d.missingFromSource,
 		"MissingFromTarget": d.missingFromTarget,
 	}
-	if d.compareType == base.MutationCompareTypeMetadata {
+	if d.compareType == base.MutationCompareTypeMetadata || d.compareType == base.MutationCompareTypeBodyAndMeta {
 		outputMap["DeletedFromSource"] = d.deletedFromSource
 		outputMap["DeletedFromTarget"] = d.deletedFromTarget
 	}
@@ -543,47 +562,43 @@ func (d *MutationDiffer) addKeysWithError(keysWithError MutationDiffFetchList) {
 }
 
 type DifferWorker struct {
-	differ           *MutationDiffer
-	fetchList        MutationDiffFetchList
-	sourceBucket     *GocbcoreAgent
-	targetBucket     *GocbcoreAgent
-	sourceDcpAgent   *gocbcore.DCPAgent
-	targetDcpAgent   *gocbcore.DCPAgent
-	waitGroup        *sync.WaitGroup
-	sourceResults    map[uint32]map[string]Result
-	targetResults    map[uint32]map[string]Result
-	sourceHlvs       map[uint32]map[string]Result
-	targetHlvs       map[uint32]map[string]Result
-	resultsLock      sync.RWMutex
-	logger           *xdcrLog.CommonLogger
-	colIds           map[uint32][]uint32
-	reverseColIds    map[uint32][]uint32
-	migrationHintMap MigrationHintMap
-	compareType      string
-	retries          int
+	differ            *MutationDiffer
+	fetchList         MutationDiffFetchList
+	sourceBucketAgent *GocbcoreAgent
+	targetBucketAgent *GocbcoreAgent
+	sourceDcpAgent    *gocbcore.DCPAgent
+	targetDcpAgent    *gocbcore.DCPAgent
+	waitGroup         *sync.WaitGroup
+	sourceResults     map[uint32]map[string]*GetResult
+	targetResults     map[uint32]map[string]*GetResult
+	resultsLock       sync.RWMutex
+	logger            *xdcrLog.CommonLogger
+	colIds            map[uint32][]uint32
+	reverseColIds     map[uint32][]uint32
+	migrationHintMap  MigrationHintMap
+	compareType       string
+	retries           int
 }
 
-func NewDifferWorker(differ *MutationDiffer, sourceDCPAgent, targetDCPAgent *gocbcore.DCPAgent, sourceBucket,
-	targetBucket *GocbcoreAgent, fetchList MutationDiffFetchList, waitGroup *sync.WaitGroup, colIds,
+func NewDifferWorker(differ *MutationDiffer, sourceDCPAgent, targetDCPAgent *gocbcore.DCPAgent, sourceBucketAgent,
+	targetBucketAgent *GocbcoreAgent, fetchList MutationDiffFetchList, waitGroup *sync.WaitGroup, colIds,
 	reverseColIds map[uint32][]uint32, migrationHintMap MigrationHintMap, compareType string, retries int) *DifferWorker {
 	return &DifferWorker{
-		differ:           differ,
-		sourceBucket:     sourceBucket,
-		targetBucket:     targetBucket,
-		fetchList:        fetchList,
-		waitGroup:        waitGroup,
-		sourceResults:    make(map[uint32]map[string]Result),
-		targetResults:    make(map[uint32]map[string]Result),
-		sourceHlvs:       make(map[uint32]map[string]Result),
-		targetHlvs:       make(map[uint32]map[string]Result),
-		logger:           differ.logger,
-		sourceDcpAgent:   sourceDCPAgent,
-		targetDcpAgent:   targetDCPAgent,
-		colIds:           colIds,
-		reverseColIds:    reverseColIds,
-		migrationHintMap: migrationHintMap,
-		compareType:      compareType,
-		retries:          retries,
+		differ:            differ,
+		sourceBucketAgent: sourceBucketAgent,
+		targetBucketAgent: targetBucketAgent,
+		fetchList:         fetchList,
+		waitGroup:         waitGroup,
+		sourceResults:     make(map[uint32]map[string]*GetResult),
+		targetResults:     make(map[uint32]map[string]*GetResult),
+		logger:            differ.logger,
+		sourceDcpAgent:    sourceDCPAgent,
+		targetDcpAgent:    targetDCPAgent,
+		colIds:            colIds,
+		reverseColIds:     reverseColIds,
+		migrationHintMap:  migrationHintMap,
+		compareType:       compareType,
+		retries:           retries,
 	}
 }
 
@@ -660,36 +675,22 @@ func (dw *DifferWorker) sendBatchWithRetry(startIndex, endIndex int) {
 // no need to lock results in dw since it is never accessed concurrently
 // need to lock results in batch since it could still be updated when mergeResults is called
 func (dw *DifferWorker) mergeResults(b *batch) {
+	b.Lock.RLock()
+	defer b.Lock.RUnlock()
 	for colId, results := range b.sourceResults {
 		if _, exists := dw.sourceResults[colId]; !exists {
-			dw.sourceResults[colId] = make(map[string]Result)
+			dw.sourceResults[colId] = make(map[string]*GetResult)
 		}
 		for key, result := range results {
-			dw.sourceResults[colId][key] = result.Clone()
+			dw.sourceResults[colId][key] = result
 		}
 	}
 	for colId, results := range b.targetResults {
 		if _, exists := dw.targetResults[colId]; !exists {
-			dw.targetResults[colId] = make(map[string]Result)
+			dw.targetResults[colId] = make(map[string]*GetResult)
 		}
 		for key, result := range results {
-			dw.targetResults[colId][key] = result.Clone()
-		}
-	}
-	for colId, results := range b.sourceHlvs {
-		if _, exists := dw.sourceHlvs[colId]; !exists {
-			dw.sourceHlvs[colId] = make(map[string]Result)
-		}
-		for key, result := range results {
-			dw.sourceHlvs[colId][key] = result.Clone()
-		}
-	}
-	for colId, results := range b.targetHlvs {
-		if _, exists := dw.targetHlvs[colId]; !exists {
-			dw.targetHlvs[colId] = make(map[string]Result)
-		}
-		for key, result := range results {
-			dw.targetHlvs[colId][key] = result.Clone()
+			dw.targetResults[colId][key] = result
 		}
 	}
 }
@@ -704,50 +705,57 @@ func (dw *DifferWorker) diff() {
 
 	migrationMode := len(dw.migrationHintMap) > 0
 
-	var gocbResultConstructor func(input interface{}) *GocbResult
-	var gocbHlvResultConstructor func(input interface{}) *GocbResult
-	var areResultsTheSame func(a, b interface{}) bool
-	var isDeletedPerMetadata func(a interface{}) bool
-	var areHlvsTheSame func(docCas1, docCas2 uint64, sourceBucketUUID, targetBucketUUID string, result1Raw, result2Raw interface{}, isSourceDeleted, isTargetDeleted bool) (bool, error)
+	var gocbResultConstructor func(input *GetResult) *GocbResult
+	var includeBody bool
+	var bodyOnly bool
 	switch dw.compareType {
 	case base.MutationCompareTypeBodyOnly:
-		gocbResultConstructor = func(input interface{}) *GocbResult {
+		gocbResultConstructor = func(input *GetResult) *GocbResult {
+			input.Lock.RLock()
+			defer input.Lock.RUnlock()
 			return &GocbResult{
-				GetResult: input.(*gocbcore.GetResult),
+				JsonBody: &JsonBody{Value: input.Value, Cas: uint64(input.Cas), Datatype: input.Datatype},
 			}
 		}
-		areResultsTheSame = areGetResultsBodyTheSame
+		bodyOnly = true
 	case base.MutationCompareTypeBodyAndMeta:
-		gocbResultConstructor = func(input interface{}) *GocbResult {
-			return &GocbResult{
-				GetResult: input.(*gocbcore.GetResult),
+		gocbResultConstructor = func(input *GetResult) *GocbResult {
+			if input.HLV != nil {
+				return &GocbResult{
+					JsonMeta: &JsonMeta{Value: input.Value, Cas: uint64(input.Cas), Flags: input.Flags, Datatype: input.Datatype,
+						Seqno: uint64(input.SeqNo), Expiry: input.Expiry, Deleted: input.Deleted, Cvcas: input.GetCvCas(),
+						CvSrc: input.GetCvSrc(), CvVer: input.GetCvVer(), Pv: input.GetPV(), Mv: input.GetMV(), Updated: input.Updated},
+				}
+			} else {
+				return &GocbResult{
+					JsonMeta: &JsonMeta{Value: input.Value, Cas: uint64(input.Cas), Flags: input.Flags, Datatype: input.Datatype,
+						Seqno: uint64(input.SeqNo), Expiry: input.Expiry, Deleted: input.Deleted},
+				}
 			}
 		}
-		areResultsTheSame = areGetResultsTheSame
+		includeBody = true
 	case base.MutationCompareTypeMetadata:
-		gocbResultConstructor = func(input interface{}) *GocbResult {
-			return &GocbResult{
-				GetMetaResult: input.(*gocbcore.GetMetaResult),
+		gocbResultConstructor = func(input *GetResult) *GocbResult {
+			if input.HLV != nil {
+				return &GocbResult{
+					JsonMeta: &JsonMeta{Cas: uint64(input.Cas), Flags: input.Flags, Datatype: input.Datatype,
+						Seqno: uint64(input.SeqNo), Expiry: input.Expiry, Deleted: input.Deleted, Cvcas: input.GetCvCas(),
+						CvSrc: input.GetCvSrc(), CvVer: input.GetCvVer(), Pv: input.GetPV(), Mv: input.GetMV(), Updated: input.Updated},
+				}
+			} else {
+				return &GocbResult{
+					JsonMeta: &JsonMeta{Cas: uint64(input.Cas), Flags: input.Flags, Datatype: input.Datatype,
+						Seqno: uint64(input.SeqNo), Expiry: input.Expiry, Deleted: input.Deleted},
+				}
 			}
-		}
-		gocbHlvResultConstructor = func(input interface{}) *GocbResult {
-			return &GocbResult{
-				LookupInResult: input.(*gocbcore.LookupInResult),
-			}
-		}
-		areResultsTheSame = areGetMetaResultsTheSame
-		areHlvsTheSame = areGetHlvsTheSame
-		isDeletedPerMetadata = func(input interface{}) bool {
-			return isDeleted(input.(*gocbcore.GetMetaResult))
 		}
 	}
 
 	for srcColId, sourceResultMap := range dw.sourceResults {
 		for key, sourceResult := range sourceResultMap {
-			if sourceResult.Key() == "" {
+			if sourceResult.key == "" {
 				continue
 			}
-			sourceHlv := dw.sourceHlvs[srcColId][key]
 			var tgtColIds []uint32
 			if migrationMode {
 				tgtColIds = dw.migrationHintMap[key]
@@ -756,79 +764,89 @@ func (dw *DifferWorker) diff() {
 			}
 
 			for _, tgtColId := range tgtColIds {
+				var srcerr error
+				var tgterr error
 				targetResult := dw.targetResults[tgtColId][key]
-				targetHlv := dw.targetHlvs[tgtColId][key]
-				if targetResult.Key() == "" {
+				if targetResult.key == "" {
 					continue
 				}
-				if isKeyNotFoundError(sourceResult.Error()) && !isKeyNotFoundError(targetResult.Error()) {
+				if bodyOnly {
+					srcerr = sourceResult.bodyErr
+					tgterr = targetResult.bodyErr
+				} else {
+					srcerr = sourceResult.metaErr
+					tgterr = targetResult.metaErr
+				}
+				if isKeyNotFoundError(srcerr) && !isKeyNotFoundError(tgterr) {
 					if _, exists := missingFromSource[srcColId]; !exists {
 						missingFromSource[srcColId] = make(map[string]*GocbResult)
 					}
-					missingFromSource[srcColId][key] = gocbResultConstructor(targetResult.GoCbResult())
+					missingFromSource[srcColId][key] = gocbResultConstructor(targetResult)
 					continue
 				}
-				if !isKeyNotFoundError(sourceResult.Error()) && isKeyNotFoundError(targetResult.Error()) {
+				if !isKeyNotFoundError(srcerr) && isKeyNotFoundError(tgterr) {
 					if _, exists := missingFromTarget[tgtColId]; !exists {
 						missingFromTarget[tgtColId] = make(map[string]*GocbResult)
 					}
-					missingFromTarget[tgtColId][key] = gocbResultConstructor(sourceResult.GoCbResult())
+					missingFromTarget[tgtColId][key] = gocbResultConstructor(sourceResult)
 					continue
 				}
-				if !areResultsTheSame(sourceResult.GoCbResult(), targetResult.GoCbResult()) {
-					if isDeletedPerMetadata != nil && isDeletedPerMetadata(sourceResult.GoCbResult()) {
-						if _, exists := deletedFromSource[srcColId]; !exists {
-							deletedFromSource[srcColId] = make(map[string][]*GocbResult)
+				if bodyOnly {
+					if !areGetResultsBodyTheSame(sourceResult, targetResult) {
+						if _, exists := srcDiff[srcColId]; !exists {
+							srcDiff[srcColId] = make(map[string][]*GocbResult)
 						}
-						deletedFromSource[srcColId][key] = append(deletedFromSource[srcColId][key], []*GocbResult{gocbResultConstructor(sourceResult.GoCbResult()), gocbResultConstructor(targetResult.GoCbResult())}...)
-						continue
-					}
-					if isDeletedPerMetadata != nil && isDeletedPerMetadata(targetResult.GoCbResult()) {
-						if _, exists := deletedFromTarget[tgtColId]; !exists {
-							deletedFromTarget[tgtColId] = make(map[string][]*GocbResult)
+						srcDiff[srcColId][key] = append(srcDiff[srcColId][key], []*GocbResult{gocbResultConstructor(sourceResult), gocbResultConstructor(targetResult)}...)
+						if _, exists := tgtDiff[tgtColId]; !exists {
+							tgtDiff[tgtColId] = make(map[string][]*GocbResult)
 						}
-						deletedFromTarget[tgtColId][key] = append(deletedFromTarget[tgtColId][key], []*GocbResult{gocbResultConstructor(sourceResult.GoCbResult()), gocbResultConstructor(targetResult.GoCbResult())}...)
-						continue
+						tgtDiff[tgtColId][key] = append(tgtDiff[tgtColId][key], []*GocbResult{gocbResultConstructor(targetResult), gocbResultConstructor(sourceResult)}...)
 					}
-					if _, exists := srcDiff[srcColId]; !exists {
-						srcDiff[srcColId] = make(map[string][]*GocbResult)
-					}
-					srcDiff[srcColId][key] = append(srcDiff[srcColId][key], []*GocbResult{gocbResultConstructor(sourceResult.GoCbResult()), gocbResultConstructor(targetResult.GoCbResult())}...)
-					if _, exists := tgtDiff[tgtColId]; !exists {
-						tgtDiff[tgtColId] = make(map[string][]*GocbResult)
-					}
-					tgtDiff[tgtColId][key] = append(tgtDiff[tgtColId][key], []*GocbResult{gocbResultConstructor(targetResult.GoCbResult()), gocbResultConstructor(sourceResult.GoCbResult())}...)
-				}
-				if areHlvsTheSame != nil {
-					srcResult := sourceResult.GoCbResult().(*gocbcore.GetMetaResult)
-					tgtResult := targetResult.GoCbResult().(*gocbcore.GetMetaResult)
-					same, err := areHlvsTheSame(uint64(srcResult.Cas), uint64(tgtResult.Cas), dw.differ.sourceBucketUUID, dw.differ.targetBucketUUID, sourceHlv.GoCbResult(), targetHlv.GoCbResult(), isDeleted(srcResult), isDeleted(tgtResult))
+				} else {
+					srcUUID, err := hlv.UUIDtoDocumentSource(dw.differ.sourceBucketUUID)
 					if err != nil {
-						dw.differ.logger.Errorf("Hlv comparison for doc bearing the key : %s failed, err: %v", key, err)
-					} else {
-						if !same {
-							if _, exists := srcDiff[srcColId]; !exists {
-								srcDiff[srcColId] = make(map[string][]*GocbResult)
+						dw.logger.Errorf("Error in converting the bucket UUID to required HLV format. err: %v", err)
+						panic("bucketUUID convertion error")
+					}
+					tgtUUID, err1 := hlv.UUIDtoDocumentSource(dw.differ.targetBucketUUID)
+					if err1 != nil {
+						dw.logger.Errorf("Error in converting the bucket UUID to required HLV format. err: %v", err1)
+						panic("bucketUUID convertion error")
+					}
+					if !areGetMetaResultsTheSame(sourceResult, targetResult, srcUUID, tgtUUID, includeBody) {
+						if isDeleted(sourceResult.GetMetaResult) {
+							if _, exists := deletedFromSource[srcColId]; !exists {
+								deletedFromSource[srcColId] = make(map[string][]*GocbResult)
 							}
-							srcDiff[srcColId][key] = append(srcDiff[srcColId][key], []*GocbResult{gocbHlvResultConstructor(sourceHlv.GoCbResult()), gocbHlvResultConstructor(targetHlv.GoCbResult())}...)
-							if _, exists := tgtDiff[tgtColId]; !exists {
-								tgtDiff[tgtColId] = make(map[string][]*GocbResult)
-							}
-							tgtDiff[tgtColId][key] = append(tgtDiff[tgtColId][key], []*GocbResult{gocbHlvResultConstructor(targetHlv.GoCbResult()), gocbHlvResultConstructor(sourceHlv.GoCbResult())}...)
+							deletedFromSource[srcColId][key] = append(deletedFromSource[srcColId][key], []*GocbResult{gocbResultConstructor(sourceResult), gocbResultConstructor(targetResult)}...)
+							continue
 						}
+						if isDeleted(targetResult.GetMetaResult) {
+							if _, exists := deletedFromTarget[srcColId]; !exists {
+								deletedFromTarget[srcColId] = make(map[string][]*GocbResult)
+							}
+							deletedFromTarget[srcColId][key] = append(deletedFromSource[srcColId][key], []*GocbResult{gocbResultConstructor(sourceResult), gocbResultConstructor(targetResult)}...)
+							continue
+						}
+						if _, exists := srcDiff[srcColId]; !exists {
+							srcDiff[srcColId] = make(map[string][]*GocbResult)
+						}
+						srcDiff[srcColId][key] = append(srcDiff[srcColId][key], []*GocbResult{gocbResultConstructor(sourceResult), gocbResultConstructor(targetResult)}...)
+						if _, exists := tgtDiff[tgtColId]; !exists {
+							tgtDiff[tgtColId] = make(map[string][]*GocbResult)
+						}
+						tgtDiff[tgtColId][key] = append(tgtDiff[tgtColId][key], []*GocbResult{gocbResultConstructor(targetResult), gocbResultConstructor(sourceResult)}...)
 					}
 				}
 			}
 		}
 	}
-
 	// Need to do a double-take from target's point of view - check to see if certain things are missing from source
 	for tgtColId, targetResultMap := range dw.targetResults {
 		for key, targetResult := range targetResultMap {
-			if targetResult.Key() == "" {
+			if targetResult.key == "" {
 				continue
 			}
-
 			srcColIds := dw.reverseColIds[tgtColId]
 			var foundSourceColId bool
 			var keyExists bool
@@ -845,81 +863,47 @@ func (dw *DifferWorker) diff() {
 				if _, exists := missingFromTarget[tgtColId]; !exists {
 					missingFromTarget[tgtColId] = make(map[string]*GocbResult)
 				}
-				missingFromTarget[tgtColId][key] = gocbResultConstructor(targetResult.GoCbResult())
+				missingFromTarget[tgtColId][key] = gocbResultConstructor(targetResult)
 			}
 		}
 	}
-
 	dw.differ.addDocDiff(missingFromSource, missingFromTarget, srcDiff, tgtDiff, deletedFromSource, deletedFromTarget)
 }
 
 type batch struct {
-	dw                   *DifferWorker
-	fetchList            MutationDiffFetchList
-	waitGroupBodyCompare sync.WaitGroup
-	waitGroupMetaCompare sync.WaitGroup
-	sourceResultCount    uint32
-	targetResultCount    uint32
-	sourceResults        map[uint32]map[string]Result
-	targetResults        map[uint32]map[string]Result
-	sourceHlvs           map[uint32]map[string]Result
-	targetHlvs           map[uint32]map[string]Result
-	resultsLock          sync.RWMutex
+	dw                *DifferWorker
+	fetchList         MutationDiffFetchList
+	waitGroup         sync.WaitGroup
+	sourceResultCount uint32
+	targetResultCount uint32
+	sourceResults     map[uint32]map[string]*GetResult
+	targetResults     map[uint32]map[string]*GetResult
+	Lock              sync.RWMutex
 }
 
 func NewBatch(dw *DifferWorker, startIndex, endIndex int) *batch {
 	b := &batch{
 		dw:            dw,
 		fetchList:     dw.fetchList[startIndex:endIndex],
-		sourceResults: make(map[uint32]map[string]Result),
-		targetResults: make(map[uint32]map[string]Result),
-		sourceHlvs:    make(map[uint32]map[string]Result),
-		targetHlvs:    make(map[uint32]map[string]Result),
+		sourceResults: make(map[uint32]map[string]*GetResult),
+		targetResults: make(map[uint32]map[string]*GetResult),
 	}
-
 	// initialize all entries in results map
 	// update to *GetResult in map will not be treated as concurrent update to map itself
+	b.Lock.Lock()
+	defer b.Lock.Unlock()
 	for _, fetchItem := range b.fetchList {
 		if _, exists := b.sourceResults[fetchItem.SrcColId]; !exists {
-			b.sourceResults[fetchItem.SrcColId] = make(map[string]Result)
+			b.sourceResults[fetchItem.SrcColId] = make(map[string]*GetResult)
 		}
-		switch dw.differ.compareType {
-		case base.MutationCompareTypeBodyOnly:
-			fallthrough
-		case base.MutationCompareTypeBodyAndMeta:
-			b.sourceResults[fetchItem.SrcColId][fetchItem.Key] = &GetResult{}
-		case base.MutationCompareTypeMetadata:
-			b.sourceResults[fetchItem.SrcColId][fetchItem.Key] = &GetMetaResult{}
-		default:
-			b.sourceResults[fetchItem.SrcColId][fetchItem.Key] = &GetMetaResult{}
-		}
-		if _, exists := b.sourceHlvs[fetchItem.SrcColId]; !exists {
-			b.sourceHlvs[fetchItem.SrcColId] = make(map[string]Result)
-		}
-		b.sourceHlvs[fetchItem.SrcColId][fetchItem.Key] = &GetHlvResult{}
-
+		b.sourceResults[fetchItem.SrcColId][fetchItem.Key] = &GetResult{key: fetchItem.Key}
 		for _, tgtColId := range fetchItem.TgtColIds {
 			if _, exists := b.targetResults[tgtColId]; !exists {
-				b.targetResults[tgtColId] = make(map[string]Result)
+				b.targetResults[tgtColId] = make(map[string]*GetResult)
 			}
-			switch dw.differ.compareType {
-			case base.MutationCompareTypeBodyOnly:
-				fallthrough
-			case base.MutationCompareTypeBodyAndMeta:
-				b.targetResults[tgtColId][fetchItem.Key] = &GetResult{}
-			case base.MutationCompareTypeMetadata:
-				b.targetResults[tgtColId][fetchItem.Key] = &GetMetaResult{}
-			default:
-				// This will never happen since the input check is done in the beginning in main()
-				panic(fmt.Sprintf("Invalid comparetype %v", dw.differ.compareType))
-			}
-			if _, exists := b.targetHlvs[tgtColId]; !exists {
-				b.targetHlvs[tgtColId] = make(map[string]Result)
-			}
-			b.targetHlvs[tgtColId][fetchItem.Key] = &GetHlvResult{}
+			b.targetResults[fetchItem.SrcColId][fetchItem.Key] = &GetResult{key: fetchItem.Key}
 		}
 	}
-
 	return b
 }
 
@@ -928,19 +912,15 @@ func NewBatch(dw *DifferWorker, startIndex, endIndex int) *batch {
 // this is not a diff
 func (b *batch) send() error {
 	for _, fetchItem := range b.fetchList {
-		b.fetchItemAndStoreResult(fetchItem)
+		b.get(fetchItem.Key, true, b.dw.differ.compareType, fetchItem.SrcColId)
+		for _, tgtId := range fetchItem.TgtColIds {
+			b.get(fetchItem.Key, false, b.dw.differ.compareType, tgtId)
+		}
 	}
-	getBody := false
-	if b.dw.differ.compareType == base.MutationCompareTypeBodyOnly ||
-		b.dw.differ.compareType == base.MutationCompareTypeBodyAndMeta {
-		getBody = true
-	}
+
 	doneChan := make(chan bool, 1)
-	if getBody {
-		go utils.WaitForWaitGroup(&b.waitGroupBodyCompare, doneChan)
-	} else {
-		go utils.WaitForWaitGroup(&b.waitGroupMetaCompare, doneChan)
-	}
+	go utils.WaitForWaitGroup(&b.waitGroup, doneChan)
+
 	timer := time.NewTimer(time.Duration(b.dw.differ.timeout) * time.Second)
 	defer timer.Stop()
 	for {
@@ -953,88 +933,114 @@ func (b *batch) send() error {
 	}
 }
 
-func (b *batch) fetchItemAndStoreResult(fetchItem *MutationDifferFetchEntry) {
-	getBody := false
-	if b.dw.differ.compareType == base.MutationCompareTypeBodyOnly ||
-		b.dw.differ.compareType == base.MutationCompareTypeBodyAndMeta {
-		getBody = true
-	}
-	b.get(fetchItem.Key, true, getBody, fetchItem.SrcColId)
-	for _, tgtId := range fetchItem.TgtColIds {
-		b.get(fetchItem.Key, false, getBody, tgtId)
-	}
-}
-
-func (b *batch) get(key string, isSource bool, getBody bool, colId uint32) {
+func (b *batch) get(key string, isSource bool, compareType string, colId uint32) {
 	getCallbackFunc := func(result *gocbcore.GetResult, err error) {
-		var resultsMap map[string]Result
+		b.Lock.RLock()
+		var resultsMap map[string]*GetResult
 		if isSource {
 			resultsMap = b.sourceResults[colId]
 		} else {
 			resultsMap = b.targetResults[colId]
 		}
-		resultInMap := resultsMap[key]
-		resultInMap.Set(key, result, err)
-		b.waitGroupBodyCompare.Done()
+		getResult := resultsMap[key]
+		b.Lock.RUnlock()
+
+		getResult.Lock.Lock()
+		defer getResult.Lock.Unlock()
+		if err != nil {
+			getResult.bodyErr = err
+		} else {
+			getResult.Value = result.Value
+		}
+		// resultInMap := resultsMap[key]
+		// resultInMap.Set(key, result, err)
+		b.waitGroup.Done()
 	}
 
 	getMetaCallbackFunc := func(result *gocbcore.GetMetaResult, err error) {
-		var resultsMap map[string]Result
+		b.Lock.RLock()
+		var resultsMap map[string]*GetResult
 		if isSource {
 			resultsMap = b.sourceResults[colId]
 		} else {
 			resultsMap = b.targetResults[colId]
 		}
-		resultInMap := resultsMap[key]
-		resultInMap.Set(key, result, err)
-		b.waitGroupMetaCompare.Done()
+		getResult := resultsMap[key]
+		b.Lock.RUnlock()
+
+		getResult.Lock.Lock()
+		defer getResult.Lock.Unlock()
+
+		getResult.GetMetaResult = result
+		getResult.metaErr = err
+		// resultInMap.Set(key, result, err)
+		b.waitGroup.Done()
 	}
 
 	getHlvCallbackFunc := func(result *gocbcore.LookupInResult, err error) {
-		var resultsMap map[string]Result
+		b.Lock.RLock()
+		var resultsMap map[string]*GetResult
+		var bucketUUID string
 		if isSource {
-			resultsMap = b.sourceHlvs[colId]
+			resultsMap = b.sourceResults[colId]
+			bucketUUID = b.dw.differ.sourceBucketUUID
 		} else {
-			resultsMap = b.targetHlvs[colId]
+			resultsMap = b.targetResults[colId]
+			bucketUUID = b.dw.differ.targetBucketUUID
 		}
-		resultInMap := resultsMap[key]
-		resultInMap.Set(key, result, err)
-		b.waitGroupMetaCompare.Done()
+		getResult := resultsMap[key]
+		b.Lock.RUnlock()
+
+		if err != nil {
+			b.dw.logger.Errorf("Subdoc-get error occured for doc %v. err:%v\n", key, err)
+		} else {
+			getResult.Lock.Lock()
+			defer getResult.Lock.Unlock()
+			getResult.HLV, getResult.importCas, getResult.parsingErr = getHlvImportCas(bucketUUID, result)
+		}
+		// resultInMap.Set(key, result, err)
+		b.waitGroup.Done()
 	}
 
 	var err error
 	var err1 error
+	var err2 error
+	var gocbAgent *GocbcoreAgent
 	if isSource {
-		if getBody {
-			b.waitGroupBodyCompare.Add(1)
-			err = b.dw.sourceBucket.Get(key, getCallbackFunc, colId)
-		} else {
-			b.waitGroupMetaCompare.Add(2)
-			err = b.dw.sourceBucket.GetMeta(key, getMetaCallbackFunc, colId)
-			err1 = b.dw.sourceBucket.GetHlv(key, getHlvCallbackFunc, colId)
-		}
-		if err != nil {
-			b.dw.logger.Errorf("sourceBucketGetErr %v\n", err)
-		}
-		if err1 != nil {
-			b.dw.logger.Errorf("sourceBucketGetHlvErr %v\n", err1)
-		}
+		gocbAgent = b.dw.sourceBucketAgent
 	} else {
-		if getBody {
-			b.waitGroupBodyCompare.Add(1)
-			err = b.dw.targetBucket.Get(key, getCallbackFunc, colId)
-		} else {
-			b.waitGroupMetaCompare.Add(2)
-			err = b.dw.targetBucket.GetMeta(key, getMetaCallbackFunc, colId)
-			err1 = b.dw.targetBucket.GetHlv(key, getHlvCallbackFunc, colId)
-		}
+		gocbAgent = b.dw.targetBucketAgent
+	}
+	if compareType == base.MutationCompareTypeBodyOnly {
+		b.waitGroup.Add(1)
+		err = gocbAgent.Get(key, getCallbackFunc, colId)
 		if err != nil {
-			b.dw.logger.Errorf("targetBucketGetErr %v\n", err)
+			b.dw.logger.Errorf("GetError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err)
 		}
+	} else if compareType == base.MutationCompareTypeMetadata {
+		b.waitGroup.Add(2)
+		err = gocbAgent.GetMeta(key, getMetaCallbackFunc, colId)
+		if err != nil {
+			b.dw.logger.Errorf("GetMetaError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err)
+		}
+		err1 = gocbAgent.GetHlv(key, getHlvCallbackFunc, colId)
 		if err1 != nil {
-			b.dw.logger.Errorf("targetBucketGetHlvErr %v\n", err)
+			b.dw.logger.Errorf("GetHlvError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err)
 		}
-
+	} else if compareType == base.MutationCompareTypeBodyAndMeta {
+		b.waitGroup.Add(3)
+		err = gocbAgent.Get(key, getCallbackFunc, colId)
+		if err != nil {
+			b.dw.logger.Errorf("GetError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err)
+		}
+		err1 = gocbAgent.GetMeta(key, getMetaCallbackFunc, colId)
+		if err1 != nil {
+			b.dw.logger.Errorf("GetMetaError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err)
+		}
+		err2 = gocbAgent.GetHlv(key, getHlvCallbackFunc, colId)
+		if err2 != nil {
+			b.dw.logger.Errorf("GetHlvError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err)
+		}
 	}
 }
 
@@ -1042,101 +1048,68 @@ func isKeyNotFoundError(err error) bool {
 	return err != nil && strings.Contains(err.Error(), gocbcore.ErrDocumentNotFound.Error())
 }
 
-func areGetResultsTheSame(result1Raw, result2Raw interface{}) bool {
-	result1 := result1Raw.(*gocbcore.GetResult)
-	result2 := result2Raw.(*gocbcore.GetResult)
-	if !areGetResultsBodyTheSame(result1, result2) {
-		return false
-	}
+// func areGetResultsTheSame(result1Raw, result2Raw *GetResult) bool {
 
-	if result1 == nil && result2 != nil || result1 != nil && result2 == nil {
-		return false
-	} else if result1 == nil && result2 == nil {
-		return true
-	} else {
-		return result1.Cas == result2.Cas && result1.Flags == result2.Flags && result1.Datatype == result2.Datatype
-	}
-}
+// 	if !areGetResultsBodyTheSame(result1, result2) {
+// 		return false
+// 	}
 
-func areGetResultsBodyTheSame(result1Raw, result2Raw interface{}) bool {
-	result1 := result1Raw.(*gocbcore.GetResult)
-	result2 := result2Raw.(*gocbcore.GetResult)
+// 	if result1 == nil && result2 != nil || result1 != nil && result2 == nil {
+// 		return false
+// 	} else if result1 == nil && result2 == nil {
+// 		return true
+// 	} else {
+// 		return result1.Cas == result2.Cas && result1.Flags == result2.Flags && result1.Datatype == result2.Datatype
+// 	}
+// }
 
-	if result1 == nil {
-		return result2 == nil
+func areGetResultsBodyTheSame(result1, result2 *GetResult) bool {
+
+	if result1.Value == nil {
+		return result2.Value == nil
 	}
-	if result2 == nil {
+	if result2.Value == nil {
 		return false
 	}
 
 	return reflect.DeepEqual(result1.Value, result2.Value)
 }
 
-func areGetMetaResultsTheSame(result1Raw, result2Raw interface{}) bool {
-	result1 := result1Raw.(*gocbcore.GetMetaResult)
-	result2 := result2Raw.(*gocbcore.GetMetaResult)
-	if result1 == nil && result2 == nil {
+func areGetMetaResultsTheSame(result1, result2 *GetResult, sourceUUID, targetUUID hlv.DocumentSourceId, includeBody bool) bool {
+	if result1.GetMetaResult == nil && result2.GetMetaResult == nil {
 		return true
-	} else if result1 == nil {
-		if isDeleted(result2) {
+	} else if result1.GetMetaResult == nil {
+		if isDeleted(result2.GetMetaResult) {
 			return true
 		} else {
 			return false
 		}
-	} else if result2 == nil {
-		if isDeleted(result1) {
+	} else if result2.GetMetaResult == nil {
+		if isDeleted(result1.GetMetaResult) {
 			return true
 		} else {
 			return false
 		}
-	} else if isDeleted(result1) && isDeleted(result2) {
+	} else if isDeleted(result1.GetMetaResult) && isDeleted(result2.GetMetaResult) {
 		return true
 	} else {
-		// Only compare json part of datatype
-		return result1.Cas == result2.Cas && result1.SeqNo == result2.SeqNo && result1.Flags == result2.Flags &&
-			result1.Expiry == result2.Expiry && result1.Deleted == result2.Deleted && (result1.Datatype == result2.Datatype)
-	}
-}
-func areGetHlvsTheSame(docCas1, docCas2 uint64, sourceBucketUUID, targetBucketUUID string, result1Raw, result2Raw interface{}, isSourceDeleted, isTargetDeleted bool) (bool, error) {
-	result1 := result1Raw.(*gocbcore.LookupInResult)
-	result2 := result2Raw.(*gocbcore.LookupInResult)
-	if result1 == nil && result2 == nil {
-		return true, nil
-	} else if result1 == nil {
-		if isTargetDeleted {
-			return true, nil
-		} else {
-			return false, nil
+		// Only compare json and Xattr bits of the datatype
+		metaSame := result1.Cas == result2.Cas && result1.SeqNo == result2.SeqNo && result1.Flags == result2.Flags &&
+			result1.Expiry == result2.Expiry && result1.Deleted == result2.Deleted && (result1.Datatype&base.JSONDataType == result2.Datatype&base.JSONDataType) &&
+			(result1.Datatype&xdcrBase.XattrDataType == result2.Datatype&xdcrBase.XattrDataType) && compareHlv(result1.HLV, result2.HLV, uint64(result1.Cas), uint64(result2.Cas), result1.importCas, result2.importCas, sourceUUID, targetUUID)
+
+		if includeBody {
+			bodySame := areGetResultsBodyTheSame(result1, result2)
+			return metaSame && bodySame
 		}
-	} else if result2 == nil {
-		if isSourceDeleted {
-			return true, nil
-		} else {
-			return false, nil
-		}
-	} else {
-		sourceHlv, sourceImportCas, err := getHlvImportCas(docCas1, sourceBucketUUID, result1)
-		if err != nil {
-			return false, err
-		}
-		targetHlv, targetImportCas, err := getHlvImportCas(docCas2, targetBucketUUID, result2)
-		if err != nil {
-			return false, err
-		}
-		srcUUID, err := hlv.UUIDtoDocumentSource(sourceBucketUUID)
-		if err != nil {
-			return false, err
-		}
-		tgtUUID, err := hlv.UUIDtoDocumentSource(targetBucketUUID)
-		if err != nil {
-			return false, err
-		}
-		res := compareHlv(sourceHlv, targetHlv, docCas1, docCas2, sourceImportCas, targetImportCas, srcUUID, tgtUUID)
-		return res, nil
+		return metaSame
 	}
 }
 
-func getHlvImportCas(docCas uint64, bucketUUID string, result *gocbcore.LookupInResult) (Hlv *hlv.HLV, importCas uint64, err error) {
+func getHlvImportCas(bucketUUID string, result *gocbcore.LookupInResult) (Hlv *hlv.HLV, importCas uint64, err error) {
+	if result == nil {
+		return
+	}
 	var importCasBytes []byte
 	var hlvBytes []byte
 	if result.Ops[1].Err == nil {
@@ -1161,7 +1134,7 @@ func getHlvImportCas(docCas uint64, bucketUUID string, result *gocbcore.LookupIn
 		if err != nil {
 			return
 		}
-		Hlv, err = constructHlv(docCas, importCas, bucketId, hlvBytes)
+		Hlv, err = constructHlv(uint64(result.Cas), importCas, bucketId, hlvBytes)
 		return
 	}
 }
@@ -1173,143 +1146,16 @@ func isDeleted(result *gocbcore.GetMetaResult) bool {
 	return false
 }
 
-type Result interface {
-	Key() string
-	Error() error
-	Clone() Result
-	GoCbResult() interface{}
-	Set(key string, result interface{}, err error)
-}
-
 type GetResult struct {
-	key    string
-	result *gocbcore.GetResult
-	err    error
-	Lock   sync.RWMutex
-}
-
-func (r *GetResult) Key() string {
-	r.Lock.RLock()
-	defer r.Lock.RUnlock()
-	return r.key
-}
-
-func (r *GetResult) Error() error {
-	r.Lock.RLock()
-	defer r.Lock.RUnlock()
-	return r.err
-}
-
-func (r *GetResult) Clone() Result {
-	r.Lock.RLock()
-	defer r.Lock.RUnlock()
-
-	// shallow copy is good enough to prevent race
-	return &GetResult{
-		key:    r.key,
-		result: r.result,
-		err:    r.err,
-	}
-}
-
-func (r *GetResult) GoCbResult() interface{} {
-	r.Lock.RLock()
-	defer r.Lock.RUnlock()
-	return r.result
-}
-
-func (r *GetResult) Set(key string, result interface{}, err error) {
-	r.Lock.Lock()
-	defer r.Lock.Unlock()
-	r.key = key
-	r.result = result.(*gocbcore.GetResult)
-	r.err = err
-}
-
-type GetMetaResult struct {
-	key    string
-	result *gocbcore.GetMetaResult
-	err    error
-	Lock   sync.RWMutex
-}
-
-func (r *GetMetaResult) Key() string {
-	r.Lock.RLock()
-	defer r.Lock.RUnlock()
-	return r.key
-}
-
-func (r *GetMetaResult) Error() error {
-	r.Lock.RLock()
-	defer r.Lock.RUnlock()
-	return r.err
-}
-
-func (r *GetMetaResult) Clone() Result {
-	r.Lock.RLock()
-	defer r.Lock.RUnlock()
-	return &GetMetaResult{
-		key:    r.key,
-		result: r.result,
-		err:    r.err,
-	}
-}
-
-func (r *GetMetaResult) GoCbResult() interface{} {
-	r.Lock.RLock()
-	defer r.Lock.RUnlock()
-	return r.result
-}
-
-func (r *GetMetaResult) Set(key string, result interface{}, err error) {
-	r.Lock.Lock()
-	defer r.Lock.Unlock()
-	r.key = key
-	r.result = result.(*gocbcore.GetMetaResult)
-	r.err = err
-}
-
-type GetHlvResult struct {
-	key    string
-	result *gocbcore.LookupInResult
-	err    error
-	Lock   sync.RWMutex
-}
-
-func (r *GetHlvResult) Key() string {
-	r.Lock.RLock()
-	defer r.Lock.RUnlock()
-	return r.key
-}
-
-func (r *GetHlvResult) Error() error {
-	r.Lock.RLock()
-	defer r.Lock.RUnlock()
-	return r.err
-}
-
-func (r *GetHlvResult) Clone() Result {
-	r.Lock.RLock()
-	defer r.Lock.RUnlock()
-	return &GetHlvResult{
-		key:    r.key,
-		result: r.result,
-		err:    r.err,
-	}
-}
-
-func (r *GetHlvResult) GoCbResult() interface{} {
-	r.Lock.RLock()
-	defer r.Lock.RUnlock()
-	return r.result
-}
-
-func (r *GetHlvResult) Set(key string, result interface{}, err error) {
-	r.Lock.Lock()
-	defer r.Lock.Unlock()
-	r.key = key
-	r.result = result.(*gocbcore.LookupInResult)
-	r.err = err
+	key        string
+	Value      []byte
+	importCas  uint64
+	bodyErr    error
+	metaErr    error
+	parsingErr error
+	*gocbcore.GetMetaResult
+	*hlv.HLV
+	Lock sync.RWMutex
 }
 
 func (d *MutationDiffer) initialize() error {
@@ -1393,9 +1239,9 @@ func (d *MutationDiffer) openBucket(bucketName string, reference *metadata.Remot
 	agent, err := NewGocbcoreAgent(name, []string{connStr}, bucketName, auth, d.batchSize, capability)
 
 	if source {
-		d.sourceBucket = agent
+		d.sourceBucketAgent = agent
 	} else {
-		d.targetBucket = agent
+		d.targetBucketAgent = agent
 	}
 	return err
 }
