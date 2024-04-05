@@ -25,18 +25,17 @@ function printHelp() {
 	findExec
 
 	cat <<EOF
-Usage: $0 -u <username> -p <password> -h <hostname:port> -s <sourceBucket> -t <targetBucket> -r <remoteClusterName> [-v <targetUrl>] [-n <remoteClusterUsername> -q <remoteClusterPassword>] [-c clean] [-b ] [-m meta | body | both ] [-e <mutationRetries>] [-w <setupTimeoutInSeconds>] [-d]
+Usage: $0 -u <username> -p <password> -h <hostname:port> -s <sourceBucket> -t <targetBucket> -r <remoteClusterName> [-v <targetUrl>] [-n <remoteClusterUsername> -q <remoteClusterPassword>] [-c clean] [-m meta | body | both ] [-e <mutationRetries>] [-w <setupTimeoutInSeconds>] [-d] [-x <FileContaingXattrKeysToExclude>]
 
 This script will set up the necessary environment variable to allow the XDCR diff tool to connect to the metakv service in the
 specified source cluster (NOTE: over http://) and retrieve the specified replication spec and run the difftool on it.
 The difftool currently only supports connecting to remote targets with username and password. Thus, if the specified remote cluster
 reference only contains certificate, then specify the remoteClusterUsername and remoteClusterPassword accordingly.
 
-use "-b" to get document body for comparison. This is equivalent to "-m both". This option will be deprecated in future release.
 use "-m" to specify what to compare during mutationDiff.
  meta (default) will get metadata for comparison. This is faster and includes tombstones.
  body will get document body and only compare the document body. This is slower and does not include tombstones
- both will get document body and compare both document body and metadata. This is slower and does not include tombstones
+ both will get document body and compare both document body and metadata. This is slower and includes tombstones
 use "-d" to enable SDK (gocb) verbose logging along with the xdcrDiffer DEBUG logging. Should be only used for debugging purposes (can be quite spammy)
 EOF
 }
@@ -59,7 +58,7 @@ function killBgTail {
 	fi
 }
 
-while getopts ":h:p:u:r:s:t:n:q:v:cbm:ew:d:x:" opt; do
+while getopts ":h:p:u:r:s:t:n:q:v:cm:ew:d:x:" opt; do
 	case ${opt} in
 	u)
 		username=$OPTARG
@@ -88,9 +87,6 @@ while getopts ":h:p:u:r:s:t:n:q:v:cbm:ew:d:x:" opt; do
 	c)
 		cleanBeforeRun=1
 		;;
-	b)
-		compareType="both"
-		;;
 	m)
 		compareType=$OPTARG
 		;;
@@ -107,7 +103,7 @@ while getopts ":h:p:u:r:s:t:n:q:v:cbm:ew:d:x:" opt; do
 		setupTimeout=$OPTARG
 		;;
 	x)
-		xattrsNoCompare=$OPTARG
+		fileContaingXattrKeysForNoComapre=$OPTARG
 		;;
 	\?)
 		echo "Invalid option: $OPTARG" 1>&2
@@ -214,9 +210,9 @@ if [[ ! -z "$debugMode" ]]; then
 	execString="${execString} -debugMode"
 	execString="${execString} $debugMode"
 fi
-if [[ ! -z "$xattrsNoCompare" ]]; then
-	execString="${execString} -xattrsNoCompare"
-	execString="${execString} $xattrsNoCompare"
+if [[ ! -z "$fileContaingXattrKeysForNoComapre" ]]; then
+	execString="${execString} -fileContaingXattrKeysForNoComapre"
+	execString="${execString} $fileContaingXattrKeysForNoComapre"
 fi
 
 # Execute the differ in background and watch the pid to be finished
