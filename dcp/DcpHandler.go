@@ -59,7 +59,7 @@ type DcpHandler struct {
 	xattraIterator                *xdcrBase.XattrIterator
 }
 
-func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface, incReceivedCounter, incSysOrUnsubbedEvtReceived func(), colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping, xattrIterator *xdcrBase.XattrIterator) (*DcpHandler, error) {
+func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface, incReceivedCounter, incSysOrUnsubbedEvtReceived func(), colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping) (*DcpHandler, error) {
 	if len(vbList) == 0 {
 		return nil, fmt.Errorf("vbList is empty for handler %v", index)
 	}
@@ -85,7 +85,7 @@ func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uin
 		migrationMapping:              migrationMapping,
 		mobileCompatible:              dcpClient.dcpDriver.mobileCompatible,
 		expDelMode:                    dcpClient.dcpDriver.expDelMode,
-		xattraIterator:                xattrIterator,
+		xattraIterator:                &xdcrBase.XattrIterator{},
 	}, nil
 }
 
@@ -223,7 +223,7 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 	if dh.colMigrationFiltersOn && len(filterIdsMatched) > 0 {
 		mut.ColFiltersMatched = filterIdsMatched
 	}
-	ret, err := mut.Serialize(dh.xattraIterator, dh.dcpClient.dcpDriver.xattrKeysForNoCompare)
+	ret, err := mut.Serialize()
 	if err != nil {
 		dh.logger.Errorf("Error in Serializing the mutation pertaining to the document with the key:%v ,err:%v\n", mut.Key, err)
 	} else {
@@ -260,15 +260,15 @@ func (dh *DcpHandler) SnapshotMarker(snapshot gocbcore.DcpSnapshotMarker) {
 }
 
 func (dh *DcpHandler) Mutation(mutation gocbcore.DcpMutation) {
-	dh.writeToDataChan(CreateMutation(mutation.VbID, mutation.Key, mutation.SeqNo, mutation.RevNo, mutation.Cas, mutation.Flags, mutation.Expiry, gomemcached.UPR_MUTATION, mutation.Value, mutation.Datatype, mutation.CollectionID))
+	dh.writeToDataChan(CreateMutation(mutation.VbID, mutation.Key, mutation.SeqNo, mutation.RevNo, mutation.Cas, mutation.Flags, mutation.Expiry, gomemcached.UPR_MUTATION, mutation.Value, mutation.Datatype, mutation.CollectionID, dh.xattraIterator, dh.dcpClient.dcpDriver.xattrKeysForNoCompare))
 }
 
 func (dh *DcpHandler) Deletion(deletion gocbcore.DcpDeletion) {
-	dh.writeToDataChan(CreateMutation(deletion.VbID, deletion.Key, deletion.SeqNo, deletion.RevNo, deletion.Cas, 0, 0, gomemcached.UPR_DELETION, deletion.Value, deletion.Datatype, deletion.CollectionID))
+	dh.writeToDataChan(CreateMutation(deletion.VbID, deletion.Key, deletion.SeqNo, deletion.RevNo, deletion.Cas, 0, 0, gomemcached.UPR_DELETION, deletion.Value, deletion.Datatype, deletion.CollectionID, dh.xattraIterator, dh.dcpClient.dcpDriver.xattrKeysForNoCompare))
 }
 
 func (dh *DcpHandler) Expiration(expiration gocbcore.DcpExpiration) {
-	dh.writeToDataChan(CreateMutation(expiration.VbID, expiration.Key, expiration.SeqNo, expiration.RevNo, expiration.Cas, 0, 0, gomemcached.UPR_EXPIRATION, nil, 0, expiration.CollectionID))
+	dh.writeToDataChan(CreateMutation(expiration.VbID, expiration.Key, expiration.SeqNo, expiration.RevNo, expiration.Cas, 0, 0, gomemcached.UPR_EXPIRATION, nil, 0, expiration.CollectionID, dh.xattraIterator, dh.dcpClient.dcpDriver.xattrKeysForNoCompare))
 }
 
 func (dh *DcpHandler) End(streamEnd gocbcore.DcpStreamEnd, err error) {
@@ -277,11 +277,11 @@ func (dh *DcpHandler) End(streamEnd gocbcore.DcpStreamEnd, err error) {
 
 // want CreateCollection("github.com/couchbase/gocbcore/v10".DcpCollectionCreation)
 func (dh *DcpHandler) CreateCollection(creation gocbcore.DcpCollectionCreation) {
-	dh.writeToDataChan(CreateMutation(creation.VbID, creation.Key, creation.SeqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, creation.CollectionID))
+	dh.writeToDataChan(CreateMutation(creation.VbID, creation.Key, creation.SeqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, creation.CollectionID, nil, nil))
 }
 
 func (dh *DcpHandler) DeleteCollection(deletion gocbcore.DcpCollectionDeletion) {
-	dh.writeToDataChan(CreateMutation(deletion.VbID, nil, deletion.SeqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, deletion.CollectionID))
+	dh.writeToDataChan(CreateMutation(deletion.VbID, nil, deletion.SeqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, deletion.CollectionID, nil, nil))
 }
 
 func (dh *DcpHandler) FlushCollection(flush gocbcore.DcpCollectionFlush) {
@@ -290,17 +290,17 @@ func (dh *DcpHandler) FlushCollection(flush gocbcore.DcpCollectionFlush) {
 
 func (dh *DcpHandler) CreateScope(creation gocbcore.DcpScopeCreation) {
 	// Overloading collectionID field for scopeID because differ doesn't care
-	dh.writeToDataChan(CreateMutation(creation.VbID, nil, creation.SeqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, creation.ScopeID))
+	dh.writeToDataChan(CreateMutation(creation.VbID, nil, creation.SeqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, creation.ScopeID, nil, nil))
 }
 
 func (dh *DcpHandler) DeleteScope(deletion gocbcore.DcpScopeDeletion) {
 	// Overloading collectionID field for scopeID because differ doesn't care
-	dh.writeToDataChan(CreateMutation(deletion.VbID, nil, deletion.SeqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, deletion.ScopeID))
+	dh.writeToDataChan(CreateMutation(deletion.VbID, nil, deletion.SeqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, deletion.ScopeID, nil, nil))
 }
 
 func (dh *DcpHandler) ModifyCollection(modify gocbcore.DcpCollectionModification) {
 	// Overloading collectionID field for scopeID because differ doesn't care
-	dh.writeToDataChan(CreateMutation(modify.VbID, nil, modify.SeqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, modify.CollectionID))
+	dh.writeToDataChan(CreateMutation(modify.VbID, nil, modify.SeqNo, 0, 0, 0, 0, gomemcached.DCP_SYSTEM_EVENT, nil, 0, modify.CollectionID, nil, nil))
 }
 
 func (dh *DcpHandler) OSOSnapshot(oso gocbcore.DcpOSOSnapshot) {
@@ -312,7 +312,7 @@ func (dh *DcpHandler) SeqNoAdvanced(seqnoAdv gocbcore.DcpSeqNoAdvanced) {
 	// Eventhough such mutations/events are not streamed by the producer
 	// bySeqno stores the value of the current high seqno of the vbucket
 	// collectionId parameter of CreateMutation() is insignificant
-	dh.writeToDataChan(CreateMutation(seqnoAdv.VbID, nil, seqnoAdv.SeqNo, 0, 0, 0, 0, gomemcached.DCP_SEQNO_ADV, nil, 0, base.Uint32MaxVal))
+	dh.writeToDataChan(CreateMutation(seqnoAdv.VbID, nil, seqnoAdv.SeqNo, 0, 0, 0, 0, gomemcached.DCP_SEQNO_ADV, nil, 0, base.Uint32MaxVal, nil, nil))
 }
 
 func (dh *DcpHandler) checkColMigrationFilters(mut *Mutation) []uint8 {
@@ -445,33 +445,37 @@ func (b *Bucket) close() {
 }
 
 type Mutation struct {
-	Vbno              uint16
-	Key               []byte
-	Seqno             uint64
-	RevId             uint64
-	Cas               uint64
-	Flags             uint32
-	Expiry            uint32
-	OpCode            gomemcached.CommandCode
-	Value             []byte
-	Datatype          uint8
-	ColId             uint32
-	ColFiltersMatched []uint8 // Given a ordered list of filters, this list contains indexes of the ordered list of filter that matched
+	Vbno                  uint16
+	Key                   []byte
+	Seqno                 uint64
+	RevId                 uint64
+	Cas                   uint64
+	Flags                 uint32
+	Expiry                uint32
+	OpCode                gomemcached.CommandCode
+	Value                 []byte
+	Datatype              uint8
+	ColId                 uint32
+	ColFiltersMatched     []uint8 // Given a ordered list of filters, this list contains indexes of the ordered list of filter that matched
+	XattrIterator         *xdcrBase.XattrIterator
+	xattrKeysForNoCompare map[string]bool
 }
 
-func CreateMutation(vbno uint16, key []byte, seqno, revId, cas uint64, flags, expiry uint32, opCode gomemcached.CommandCode, value []byte, datatype uint8, collectionId uint32) *Mutation {
+func CreateMutation(vbno uint16, key []byte, seqno, revId, cas uint64, flags, expiry uint32, opCode gomemcached.CommandCode, value []byte, datatype uint8, collectionId uint32, xattrIterator *xdcrBase.XattrIterator, xattrKeysForNoCompare map[string]bool) *Mutation {
 	return &Mutation{
-		Vbno:     vbno,
-		Key:      key,
-		Seqno:    seqno,
-		RevId:    revId,
-		Cas:      cas,
-		Flags:    flags,
-		Expiry:   expiry,
-		OpCode:   opCode,
-		Value:    value,
-		Datatype: datatype,
-		ColId:    collectionId,
+		Vbno:                  vbno,
+		Key:                   key,
+		Seqno:                 seqno,
+		RevId:                 revId,
+		Cas:                   cas,
+		Flags:                 flags,
+		Expiry:                expiry,
+		OpCode:                opCode,
+		Value:                 value,
+		Datatype:              datatype,
+		ColId:                 collectionId,
+		XattrIterator:         xattrIterator,
+		xattrKeysForNoCompare: xattrKeysForNoCompare,
 	}
 }
 
@@ -531,20 +535,23 @@ func (m *Mutation) ToUprEvent() *xdcrBase.WrappedUprEvent {
 //	collectionId - 4 bytes
 //	colFiltersLen - 2 byte (number of collection migration filters)
 //	(per col filter) - 2 byte
-func (mut *Mutation) Serialize(xattraIterator *xdcrBase.XattrIterator, XattrsToExclude map[string]bool) ([]byte, error) {
+func (mut *Mutation) Serialize() ([]byte, error) {
 	var bodyHash [64]byte
 	var xattrSize uint32
 	var xattr []byte
 	var bodyWithoutXattr, trimmedXattrPlusBody, hlv, importCas []byte
 	var err error
 	if mut.Datatype&xdcrBase.XattrDataType > 0 {
+		var KVsToBeExcluded map[string][]byte
 		bodyWithoutXattr, err = xdcrBase.StripXattrAndGetBody(mut.Value)
 		if err != nil {
 			return nil, err
 		}
 		xattrSize, _ = xdcrBase.GetXattrSize(mut.Value)
 		xattr = mut.Value[4 : xattrSize+4]
-		trimmedXattrPlusBody, hlv, importCas, err = stripHlvAndImportFromXattr(xattr, len(mut.Value), xattrSize, xattraIterator, XattrsToExclude, bodyWithoutXattr)
+		trimmedXattrPlusBody, KVsToBeExcluded, err = removeKVSubsetFromXattr(xattr, len(mut.Value), xattrSize, mut.XattrIterator, mut.xattrKeysForNoCompare, bodyWithoutXattr)
+		hlv = KVsToBeExcluded[xdcrBase.XATTR_HLV]
+		importCas = KVsToBeExcluded[xdcrBase.XATTR_IMPORTCAS]
 		if err != nil {
 			return nil, err
 		}
@@ -552,6 +559,7 @@ func (mut *Mutation) Serialize(xattraIterator *xdcrBase.XattrIterator, XattrsToE
 	} else {
 		bodyHash = sha512.Sum512(mut.Value)
 	}
+
 	hlvLen := uint32(len(hlv))
 	importCasLen := uint32(len(importCas))
 	hlvPlusImportSize := hlvLen + importCasLen
@@ -598,43 +606,49 @@ func (mut *Mutation) Serialize(xattraIterator *xdcrBase.XattrIterator, XattrsToE
 	return ret, nil
 }
 
-func stripHlvAndImportFromXattr(xattr []byte, size int, xattrSize uint32, xattrIterator *xdcrBase.XattrIterator, keysToExclude map[string]bool, bodyWithoutXattr []byte) ([]byte, []byte, []byte, error) {
+// This is function is used to remove specified KVs from the xattr and create a new one excluding them
+// @param xattr - denotes the original xattr
+// @param size - denotes the max size of the new xattr+doc_body
+// @param xattrSize - represents the xatttr Size to initialize an iterator over the original one
+// @param xattrIterator - is a pointer to the xattrIterator object
+// @param keysToExclude - is map containing the keys to excluded from the xattr
+// @param bodyWithoutXatt - denotes the document body alone
+// Returns - trimmedXattr, KV pairs of the excluded Xattrs, error
+func removeKVSubsetFromXattr(xattr []byte, size int, xattrSize uint32, xattrIterator *xdcrBase.XattrIterator, keysToExclude map[string]bool, bodyWithoutXattr []byte) ([]byte, map[string][]byte, error) {
 	var err error
 	var trimmedXattrPlusBody []byte = make([]byte, size)
-	var xattrHlv, xattrImportCas []byte
 	err = xattrIterator.ResetXattrIterator(xattr, xattrSize)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	var key, value []byte
-	var kvmap map[string][]byte = make(map[string][]byte)
-	var kvmapKeys []string
+	var KVsToBeIncluded map[string][]byte = make(map[string][]byte)
+	var KVsToBeExcluded map[string][]byte = make(map[string][]byte)
+	var keys []string
 	for xattrIterator.HasNext() {
 		key, value, err = xattrIterator.Next()
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 		keyStr := string(key)
 		_, exists := keysToExclude[keyStr]
-		if xdcrBase.Equals(key, xdcrBase.XATTR_HLV) {
-			xattrHlv = value
-		} else if xdcrBase.Equals(key, xdcrBase.XATTR_IMPORTCAS) {
-			xattrImportCas = value
-		} else if !exists {
-			kvmap[keyStr] = value
+		if exists {
+			KVsToBeExcluded[keyStr] = value
+		} else {
+			KVsToBeIncluded[keyStr] = value
 		}
 	}
-	for key, _ := range kvmap {
-		kvmapKeys = append(kvmapKeys, key)
+	for keyToBeIncluded, _ := range KVsToBeIncluded {
+		keys = append(keys, keyToBeIncluded)
 	}
-	sort.Strings(kvmapKeys)
+	sort.Strings(keys)
 	xattrComposer := xdcrBase.NewXattrComposer(trimmedXattrPlusBody)
-	for _, key := range kvmapKeys {
-		err = xattrComposer.WriteKV([]byte(key), kvmap[key])
+	for _, key := range keys {
+		err = xattrComposer.WriteKV([]byte(key), KVsToBeIncluded[key])
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 	}
 	trimmedXattrPlusBody, _ = xattrComposer.FinishAndAppendDocValue(bodyWithoutXattr)
-	return trimmedXattrPlusBody, xattrHlv, xattrImportCas, nil
+	return trimmedXattrPlusBody, KVsToBeExcluded, nil
 }

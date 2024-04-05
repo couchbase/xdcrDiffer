@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 	fdp "xdcrDiffer/fileDescriptorPool"
 	"xdcrDiffer/utils"
 
@@ -60,6 +61,7 @@ type FilesDiffer struct {
 
 	// For 1->N,  it is possible for doc is mapped to multiple filter IDs
 	duplicatedHintMap DuplicatedHintMap
+	logger            *xdcrLog.CommonLogger
 }
 
 type DuplicatedHintMap map[string][]uint8
@@ -232,14 +234,18 @@ func comparePv(Pv1 hlv.VersionsMap, Pv2 hlv.VersionsMap, cas1 uint64, cas2 uint6
 			}
 		}
 	} else { // Unequal length implies that the PVs are pruned
-		pruningWindow := sourcePruningWindow.get()
+		sourcePruningWindow := sourcePruningWindow.get()
+		targetPruningWindow := targetPruningWindow.get()
+		var pruningWindow time.Duration
 		iteratePv := Pv1
 		otherPv := Pv2
 		cas := cas1
+		pruningWindow = sourcePruningWindow
 		if len(Pv2) > len(Pv1) {
 			iteratePv = Pv2
 			otherPv = Pv1
 			cas = cas2
+			pruningWindow = targetPruningWindow
 		}
 		for key, value1 := range iteratePv {
 			value2, ok := otherPv[key]
@@ -305,7 +311,7 @@ func (srcEntry *oneEntry) MapsToTargetCol(tgtColId uint32, colFilterTgtIds []uin
 	return false
 }
 
-func NewFilesDiffer(file1, file2 string, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32) *FilesDiffer {
+func NewFilesDiffer(file1, file2 string, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32, logger *xdcrLog.CommonLogger) *FilesDiffer {
 	differ := &FilesDiffer{
 		file1:               *NewFileAttribute(file1),
 		file2:               *NewFileAttribute(file2),
@@ -313,6 +319,7 @@ func NewFilesDiffer(file1, file2 string, collectionMapping map[uint32][]uint32, 
 		colFilterStrings:    colFilterStrings,
 		colFilterTgtIds:     colFilterTgtIds,
 		duplicatedHintMap:   map[string][]uint8{},
+		logger:              logger,
 	}
 	if len(collectionMapping) == 0 {
 		// This means this is legacy mode - no collection support
@@ -322,9 +329,9 @@ func NewFilesDiffer(file1, file2 string, collectionMapping map[uint32][]uint32, 
 	return differ
 }
 
-func NewFilesDifferWithFDPool(file1, file2 string, fdPool *fdp.FdPool, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32) (*FilesDiffer, error) {
+func NewFilesDifferWithFDPool(file1, file2 string, fdPool *fdp.FdPool, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32, logger *xdcrLog.CommonLogger) (*FilesDiffer, error) {
 	var err error
-	differ := NewFilesDiffer(file1, file2, collectionMapping, colFilterStrings, colFilterTgtIds)
+	differ := NewFilesDiffer(file1, file2, collectionMapping, colFilterStrings, colFilterTgtIds, logger)
 	if fdPool != nil {
 		differ.fdPool = fdPool
 		differ.file1.readOp, err = fdPool.RegisterReadOnlyFileHandle(file1)
@@ -691,7 +698,7 @@ func addToSrcDiffMapIfNotAdded(srcDedupMap map[string]bool, key string, srcDiffM
 //     Under collections migration mode, this map will allow a quick index of which source document
 //     should belong in which target collection ID. This is needed because fileDiffer ingested this
 //     information from actual DCP binary dump and needs to pass this to mutationDiffer for display
-func (differ *FilesDiffer) Diff(logger *xdcrLog.CommonLogger) (srcDiffMap, tgtDiffMap map[uint32][]string, migrationHintMap map[string][]uint32, diffBytes []byte, err error) {
+func (differ *FilesDiffer) Diff() (srcDiffMap, tgtDiffMap map[uint32][]string, migrationHintMap map[string][]uint32, diffBytes []byte, err error) {
 	differ.dataLoadWg.Add(1)
 	go differ.asyncLoad(&differ.file1, &differ.err1)
 	differ.dataLoadWg.Add(1)
@@ -699,10 +706,10 @@ func (differ *FilesDiffer) Diff(logger *xdcrLog.CommonLogger) (srcDiffMap, tgtDi
 	differ.dataLoadWg.Wait()
 
 	if differ.err1 != nil {
-		logger.Errorf("Error when loading file %v contents: %v\n", differ.file1.name, differ.err1)
+		differ.logger.Errorf("Error when loading file %v contents: %v\n", differ.file1.name, differ.err1)
 	}
 	if differ.err2 != nil {
-		logger.Errorf("Error when loading file %v contents: %v\n", differ.file2.name, differ.err2)
+		differ.logger.Errorf("Error when loading file %v contents: %v\n", differ.file2.name, differ.err2)
 	}
 
 	srcDiffMap, tgtDiffMap, migrationHintMap = differ.diffSorted()

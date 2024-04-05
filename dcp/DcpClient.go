@@ -296,7 +296,7 @@ func (c *DcpClient) initializeDcpHandlers() error {
 		dcpHandler, err := NewDcpHandler(c, c.dcpDriver.fileDir, i, vbList, c.dcpDriver.numberOfBins,
 			c.dcpDriver.dcpHandlerChanSize, c.dcpDriver.fdPool, c.dcpDriver.IncrementDocReceived,
 			c.dcpDriver.IncrementSysOrUnsubbedEventReceived, c.colMigrationFilters, c.utils, c.bufferCap,
-			c.migrationMapping, &xdcrBase.XattrIterator{})
+			c.migrationMapping)
 		if err != nil {
 			c.logger.Errorf("Error constructing dcp handler. err=%v\n", err)
 			return err

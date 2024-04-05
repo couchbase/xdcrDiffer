@@ -39,7 +39,7 @@ type pruningWindow struct {
 
 var sourcePruningWindow *pruningWindow = &pruningWindow{isSource: true}
 
-// var targetPruningWindow *pruningWindow = &pruningWindow{}
+var targetPruningWindow *pruningWindow = &pruningWindow{}
 
 func (p *pruningWindow) set(svc service_def.BucketTopologySvc, spec *metadata.ReplicationSpecification) error {
 	subscriberId := "DiffTool"
@@ -54,19 +54,17 @@ func (p *pruningWindow) set(svc service_def.BucketTopologySvc, spec *metadata.Re
 		latestNotification := <-notificationCh
 		defer latestNotification.Recycle()
 		pruningWindow = latestNotification.GetVersionPruningWindowHrs()
+	} else {
+		notificationCh, err := svc.SubscribeToRemoteBucketFeed(spec, subscriberId)
+		if err != nil {
+			fmt.Printf("Failed to fetch RemoteBucketFeed. err=%v\n", err)
+			return err
+		}
+		defer svc.UnSubscribeRemoteBucketFeed(spec, subscriberId)
+		latestNotification := <-notificationCh
+		defer latestNotification.Recycle()
+		pruningWindow = latestNotification.GetVersionPruningWindowHrs()
 	}
-	// } else { 				//to be uncommented once the support to fetch Pruning window from target is added
-	// notificationCh, err := svc.SubscribeToRemoteBucketFeed(spec, subscriberId)
-	// if err != nil {
-	// 	fmt.Printf("Failed to fetch RemoteBucketFeed. err=%v\n", err)
-	// 	return err
-	// }
-	// defer svc.UnSubscribeRemoteBucketFeed(spec, subscriberId)
-	// latestNotification := <-notificationCh
-	// defer latestNotification.Recycle()
-	// pruningWindow = latestNotification.GetVersionPruningWindowHrs()
-	// }
-
 	p.lock.Lock()
 	defer p.lock.Unlock()
 	p.duration = time.Duration(uint32(pruningWindow)) * time.Hour
@@ -286,10 +284,10 @@ func (dr *DifferDriver) Run() error {
 	if err != nil {
 		return err
 	}
-	// err1 := targetPruningWindow.set(dr.bucketTopologySvc, dr.specifiedSpec)
-	// if err1 != nil {
-	// 	return err1
-	// }
+	err1 := targetPruningWindow.set(dr.bucketTopologySvc, dr.specifiedSpec)
+	if err1 != nil {
+		return err1
+	}
 	go dr.reportStatus()
 
 	var differHandlers []*DifferHandler
@@ -484,7 +482,7 @@ func (dh *DifferHandler) run() error {
 			sourceFileName := utils.GetFileName(dh.sourceFileDir, vbno, bucketIndex)
 			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex)
 
-			filesDiffer, err := NewFilesDifferWithFDPool(sourceFileName, targetFileName, dh.fileDescPool, dh.collectionMapping, dh.colFilterStrings, dh.colFilterTgtIds)
+			filesDiffer, err := NewFilesDifferWithFDPool(sourceFileName, targetFileName, dh.fileDescPool, dh.collectionMapping, dh.colFilterStrings, dh.colFilterTgtIds, dh.driver.logger)
 			filesDiffer.file1.bucketUUID = dh.driver.sourceBucketUUID
 			filesDiffer.file2.bucketUUID = dh.driver.targetBucketUUID
 			if err != nil {
@@ -493,7 +491,7 @@ func (dh *DifferHandler) run() error {
 					sourceFileName, targetFileName, err)
 				return err
 			}
-			srcDiffMap, tgtDiffMap, migrationHints, diffBytes, err := filesDiffer.Diff(dh.driver.logger)
+			srcDiffMap, tgtDiffMap, migrationHints, diffBytes, err := filesDiffer.Diff()
 			if err != nil {
 				fmt.Printf("error getting srcDiff from file differ. err=%v\n", err)
 				continue

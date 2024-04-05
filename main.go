@@ -10,6 +10,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -18,7 +19,6 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -135,7 +135,7 @@ var options struct {
 	// a common setup timeout duration - in seconds
 	setupTimeout int
 	//string denoting the xattrs that shouldn't be compared
-	xattrsNoCompare string
+	fileContaingXattrKeysForNoComapre string
 }
 
 func argParse() {
@@ -241,8 +241,8 @@ func argParse() {
 		"The differ to be run with debug log level and the SDK/gocb logging will also be enabled.")
 	flag.IntVar(&options.setupTimeout, "setupTimeout", base.SetupTimeoutSeconds,
 		"Common setup timeout duration in seconds")
-	flag.StringVar(&options.xattrsNoCompare, "xattrsNoCompare", "",
-		"A string denoting the Xattrs that shouldn't be considered for comparison, The induvidual Xattrs are seperated by \":\"")
+	flag.StringVar(&options.fileContaingXattrKeysForNoComapre, "fileContaingXattrKeysForNoComapre", "",
+		"Path to the file containing the Xattr keys for NoCompare ")
 	flag.Parse()
 }
 
@@ -325,6 +325,8 @@ type xdcrDiffTool struct {
 	curState difftoolState
 
 	legacyMode bool
+	//Xattr Keys to be excluded for comparison
+	xattrKeysForNoCompare map[string]bool
 }
 
 func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
@@ -334,8 +336,20 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 		legacyMode:              legacyMode,
 		srcToTgtColIdsMap:       make(map[uint32][]uint32),
 		colFilterToTgtColIdsMap: map[string][]uint32{},
+		xattrKeysForNoCompare:   map[string]bool{},
 	}
-
+	readFile, er := os.Open(options.fileContaingXattrKeysForNoComapre)
+	if er != nil {
+		fmt.Printf("Error in reading the file %v. err=%v\n", options.fileContaingXattrKeysForNoComapre, err)
+		return nil, er
+	}
+	fileScanner := bufio.NewScanner(readFile)
+	fileScanner.Split(bufio.ScanLines)
+	for fileScanner.Scan() {
+		difftool.xattrKeysForNoCompare[fileScanner.Text()] = true
+	}
+	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_HLV] = true
+	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_IMPORTCAS] = true
 	logCtx := xdcrLog.DefaultLoggerContext
 	difftool.logger = xdcrLog.NewLogger("xdcrDiffTool", xdcrLog.DefaultLoggerContext)
 	if options.debugMode {
@@ -624,12 +638,7 @@ func main() {
 		}
 	}
 	if options.runDataGeneration {
-		xattrsNocompare := strings.Split(options.xattrsNoCompare, ":")
-		var xattrKeysForNoCompare map[string]bool = make(map[string]bool)
-		for _, key := range xattrsNocompare {
-			xattrKeysForNoCompare[key] = true
-		}
-		err := difftool.generateDataFiles(xattrKeysForNoCompare)
+		err := difftool.generateDataFiles()
 		if err != nil {
 			fmt.Printf("Error generating data files. err=%v\n", err)
 			os.Exit(1)
@@ -702,7 +711,7 @@ func (difftool *xdcrDiffTool) createFilter() error {
 	return err
 }
 
-func (difftool *xdcrDiffTool) generateDataFiles(xattrKeysForNoCompare map[string]bool) error {
+func (difftool *xdcrDiffTool) generateDataFiles() error {
 	difftool.logger.Infof("GenerateDataFiles routine started\n")
 	defer difftool.logger.Infof("GenerateDataFiles routine completed\n")
 
@@ -731,7 +740,7 @@ func (difftool *xdcrDiffTool) generateDataFiles(xattrKeysForNoCompare map[string
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
 		difftool.srcCapabilities, difftool.srcCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity,
-		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode(), xattrKeysForNoCompare)
+		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode(), difftool.xattrKeysForNoCompare)
 
 	delayDurationBetweenSourceAndTarget := time.Duration(options.delayBetweenSourceAndTarget) * time.Second
 	difftool.logger.Infof("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
@@ -745,7 +754,7 @@ func (difftool *xdcrDiffTool) generateDataFiles(xattrKeysForNoCompare map[string
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval, options.getStatsMaxBackoff,
 		options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
 		difftool.tgtCapabilities, difftool.tgtCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity,
-		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode(), xattrKeysForNoCompare)
+		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode(), difftool.xattrKeysForNoCompare)
 
 	difftool.curState.mtx.Lock()
 	difftool.curState.state = StateDcpStarted
