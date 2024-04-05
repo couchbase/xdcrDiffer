@@ -901,7 +901,7 @@ func NewBatch(dw *DifferWorker, startIndex, endIndex int) *batch {
 			if _, exists := b.targetResults[tgtColId]; !exists {
 				b.targetResults[tgtColId] = make(map[string]*GetResult)
 			}
-			b.targetResults[fetchItem.SrcColId][fetchItem.Key] = &GetResult{key: fetchItem.Key}
+			b.targetResults[tgtColId][fetchItem.Key] = &GetResult{key: fetchItem.Key}
 		}
 	}
 	return b
