@@ -338,15 +338,17 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 		colFilterToTgtColIdsMap: map[string][]uint32{},
 		xattrKeysForNoCompare:   map[string]bool{},
 	}
-	readFile, er := os.Open(options.fileContaingXattrKeysForNoComapre)
-	if er != nil {
-		fmt.Printf("Error in reading the file %v. err=%v\n", options.fileContaingXattrKeysForNoComapre, err)
-		return nil, er
-	}
-	fileScanner := bufio.NewScanner(readFile)
-	fileScanner.Split(bufio.ScanLines)
-	for fileScanner.Scan() {
-		difftool.xattrKeysForNoCompare[fileScanner.Text()] = true
+	if options.fileContaingXattrKeysForNoComapre != "" {
+		readFile, er := os.Open(options.fileContaingXattrKeysForNoComapre)
+		if er != nil {
+			fmt.Printf("Error in reading the file %v. err=%v\n", options.fileContaingXattrKeysForNoComapre, err)
+			return nil, er
+		}
+		fileScanner := bufio.NewScanner(readFile)
+		fileScanner.Split(bufio.ScanLines)
+		for fileScanner.Scan() {
+			difftool.xattrKeysForNoCompare[fileScanner.Text()] = true
+		}
 	}
 	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_HLV] = true
 	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_IMPORTCAS] = true
