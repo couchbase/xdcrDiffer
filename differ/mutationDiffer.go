@@ -93,22 +93,26 @@ type MutationDiffer struct {
 
 func (r *GetResult) MarshalJSON() ([]byte, error) {
 	var dataToBeEncoded map[string]interface{} = make(map[string]interface{})
+
+	// GetMetaResult nil implies that the compareType is "body only"
 	if r.GetMetaResult == nil {
 		dataToBeEncoded[base.JsonBody] = r.Value
-	} else {
-		if r.HLV == nil {
-			dataToBeEncoded[base.JsonBody] = r.Value
-			dataToBeEncoded[base.JsonMetadata] = r.GetMetaResult
-		} else {
-			dataToBeEncoded[base.JsonBody] = r.Value
-			dataToBeEncoded[base.JsonMetadata] = r.GetMetaResult
-			dataToBeEncoded[xdcrCrMeta.XATTR_CVCAS_PATH] = r.GetCvCas()
-			dataToBeEncoded[xdcrCrMeta.XATTR_SRC_PATH] = r.GetCvSrc()
-			dataToBeEncoded[xdcrCrMeta.XATTR_VER_PATH] = r.GetCvVer()
-			dataToBeEncoded[xdcrCrMeta.XATTR_PV_PATH] = r.GetPV()
-			dataToBeEncoded[xdcrCrMeta.XATTR_MV_PATH] = r.GetMV()
-			dataToBeEncoded[base.Updated] = r.Updated
-		}
+		return json.Marshal(dataToBeEncoded)
+	}
+
+	// compareType can either be "meta only" or "both body and meta"
+	if r.Value != nil { // indicates compareType is "both body and meta"
+		dataToBeEncoded[base.JsonBody] = r.Value
+	}
+
+	dataToBeEncoded[base.JsonMetadata] = r.GetMetaResult
+	if r.HLV != nil {
+		dataToBeEncoded[xdcrCrMeta.XATTR_CVCAS_PATH] = r.GetCvCas()
+		dataToBeEncoded[xdcrCrMeta.XATTR_SRC_PATH] = r.GetCvSrc()
+		dataToBeEncoded[xdcrCrMeta.XATTR_VER_PATH] = r.GetCvVer()
+		dataToBeEncoded[xdcrCrMeta.XATTR_PV_PATH] = r.GetPV()
+		dataToBeEncoded[xdcrCrMeta.XATTR_MV_PATH] = r.GetMV()
+		dataToBeEncoded[base.Updated] = r.Updated
 	}
 	return json.Marshal(dataToBeEncoded)
 }
@@ -661,8 +665,6 @@ func (dw *DifferWorker) sendBatchWithRetry(startIndex, endIndex int) {
 // no need to lock results in dw since it is never accessed concurrently
 // need to lock results in batch since it could still be updated when mergeResults is called
 func (dw *DifferWorker) mergeResults(b *batch) {
-	b.Lock.RLock()
-	defer b.Lock.RUnlock()
 	for colId, results := range b.sourceResults {
 		if _, exists := dw.sourceResults[colId]; !exists {
 			dw.sourceResults[colId] = make(map[string]*GetResult)
@@ -699,7 +701,18 @@ func (dw *DifferWorker) diff() {
 	case base.MutationCompareTypeBodyAndMeta:
 		includeBody = true
 	}
-
+	srcUUID, err := hlv.UUIDtoDocumentSource(dw.differ.sourceBucketUUID)
+	if err != nil {
+		// This error is very unusual, therefore panic
+		dw.logger.Errorf("Error in converting the bucket UUID %v to required HLV format. err: %v", dw.differ.sourceBucketUUID, err)
+		panic("bucketUUID convertion error")
+	}
+	tgtUUID, err1 := hlv.UUIDtoDocumentSource(dw.differ.targetBucketUUID)
+	if err1 != nil {
+		// This error is very unusual, therefore panic
+		dw.logger.Errorf("Error in converting the bucket UUID %v to required HLV format. err: %v", dw.differ.targetBucketUUID, err1)
+		panic("bucketUUID convertion error")
+	}
 	for srcColId, sourceResultMap := range dw.sourceResults {
 		for key, sourceResult := range sourceResultMap {
 			if sourceResult.key == "" {
@@ -752,17 +765,13 @@ func (dw *DifferWorker) diff() {
 						tgtDiff[tgtColId][key] = append(tgtDiff[tgtColId][key], []*GetResult{targetResult, sourceResult}...)
 					}
 				} else {
-					srcUUID, err := hlv.UUIDtoDocumentSource(dw.differ.sourceBucketUUID)
+					metaSame, err := areGetResultsTheSame(sourceResult, targetResult, srcUUID, tgtUUID, includeBody)
 					if err != nil {
-						dw.logger.Errorf("Error in converting the bucket UUID to required HLV format. err: %v", err)
-						panic("bucketUUID convertion error")
+						atomic.AddUint32(&dw.differ.numKeysWithErrors, 1)
+						dw.logger.Errorf(err.Error())
+						continue
 					}
-					tgtUUID, err1 := hlv.UUIDtoDocumentSource(dw.differ.targetBucketUUID)
-					if err1 != nil {
-						dw.logger.Errorf("Error in converting the bucket UUID to required HLV format. err: %v", err1)
-						panic("bucketUUID convertion error")
-					}
-					if !areGetResultsTheSame(sourceResult, targetResult, srcUUID, tgtUUID, includeBody) {
+					if !metaSame {
 						if isDeleted(sourceResult.GetMetaResult) {
 							if _, exists := deletedFromSource[srcColId]; !exists {
 								deletedFromSource[srcColId] = make(map[string][]*GetResult)
@@ -894,15 +903,13 @@ func (b *batch) get(key string, isSource bool, compareType string, colId uint32)
 		getResult := resultsMap[key]
 		b.Lock.RUnlock()
 
-		getResult.Lock.Lock()
-		defer getResult.Lock.Unlock()
+		getResult.lock.Lock()
+		defer getResult.lock.Unlock()
 		if err != nil {
 			getResult.bodyErr = err
 		} else {
 			getResult.Value = result.Value
 		}
-		// resultInMap := resultsMap[key]
-		// resultInMap.Set(key, result, err)
 		b.waitGroup.Done()
 	}
 
@@ -917,12 +924,11 @@ func (b *batch) get(key string, isSource bool, compareType string, colId uint32)
 		getResult := resultsMap[key]
 		b.Lock.RUnlock()
 
-		getResult.Lock.Lock()
-		defer getResult.Lock.Unlock()
+		getResult.lock.Lock()
+		defer getResult.lock.Unlock()
 
 		getResult.GetMetaResult = result
 		getResult.metaErr = err
-		// resultInMap.Set(key, result, err)
 		b.waitGroup.Done()
 	}
 
@@ -943,11 +949,10 @@ func (b *batch) get(key string, isSource bool, compareType string, colId uint32)
 		if err != nil {
 			b.dw.logger.Errorf("Subdoc-get error occured for doc %v. err:%v\n", key, err)
 		} else {
-			getResult.Lock.Lock()
-			defer getResult.Lock.Unlock()
+			getResult.lock.Lock()
+			defer getResult.lock.Unlock()
 			getResult.HLV, getResult.importCas, getResult.parsingErr = getHlvImportCas(bucketUUID, result)
 		}
-		// resultInMap.Set(key, result, err)
 		b.waitGroup.Done()
 	}
 
@@ -974,7 +979,7 @@ func (b *batch) get(key string, isSource bool, compareType string, colId uint32)
 		}
 		err1 = gocbAgent.GetHlv(key, getHlvCallbackFunc, colId)
 		if err1 != nil {
-			b.dw.logger.Errorf("GetHlvError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err)
+			b.dw.logger.Errorf("GetHlvError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err1)
 		}
 	} else if compareType == base.MutationCompareTypeBodyAndMeta {
 		b.waitGroup.Add(3)
@@ -984,11 +989,11 @@ func (b *batch) get(key string, isSource bool, compareType string, colId uint32)
 		}
 		err1 = gocbAgent.GetMeta(key, getMetaCallbackFunc, colId)
 		if err1 != nil {
-			b.dw.logger.Errorf("GetMetaError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err)
+			b.dw.logger.Errorf("GetMetaError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err1)
 		}
 		err2 = gocbAgent.GetHlv(key, getHlvCallbackFunc, colId)
 		if err2 != nil {
-			b.dw.logger.Errorf("GetHlvError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err)
+			b.dw.logger.Errorf("GetHlvError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err2)
 		}
 	}
 }
@@ -996,21 +1001,6 @@ func (b *batch) get(key string, isSource bool, compareType string, colId uint32)
 func isKeyNotFoundError(err error) bool {
 	return err != nil && strings.Contains(err.Error(), gocbcore.ErrDocumentNotFound.Error())
 }
-
-// func areGetResultsTheSame(result1Raw, result2Raw *GetResult) bool {
-
-// 	if !areGetResultsBodyTheSame(result1, result2) {
-// 		return false
-// 	}
-
-// 	if result1 == nil && result2 != nil || result1 != nil && result2 == nil {
-// 		return false
-// 	} else if result1 == nil && result2 == nil {
-// 		return true
-// 	} else {
-// 		return result1.Cas == result2.Cas && result1.Flags == result2.Flags && result1.Datatype == result2.Datatype
-// 	}
-// }
 
 func areGetResultsBodyTheSame(result1, result2 *GetResult) bool {
 
@@ -1024,34 +1014,37 @@ func areGetResultsBodyTheSame(result1, result2 *GetResult) bool {
 	return reflect.DeepEqual(result1.Value, result2.Value)
 }
 
-func areGetResultsTheSame(result1, result2 *GetResult, sourceUUID, targetUUID hlv.DocumentSourceId, includeBody bool) bool {
+func areGetResultsTheSame(result1, result2 *GetResult, sourceUUID, targetUUID hlv.DocumentSourceId, includeBody bool) (bool, error) {
 	if result1.GetMetaResult == nil && result2.GetMetaResult == nil {
-		return true
+		return true, nil
 	} else if result1.GetMetaResult == nil {
 		if isDeleted(result2.GetMetaResult) {
-			return true
+			return true, nil
 		} else {
-			return false
+			return false, nil
 		}
 	} else if result2.GetMetaResult == nil {
 		if isDeleted(result1.GetMetaResult) {
-			return true
+			return true, nil
 		} else {
-			return false
+			return false, nil
 		}
 	} else if isDeleted(result1.GetMetaResult) && isDeleted(result2.GetMetaResult) {
-		return true
+		return true, nil
 	} else {
 		// Only compare json and Xattr bits of the datatype
+		if result1.parsingErr != nil || result2.parsingErr != nil {
+			return false, fmt.Errorf("Cannot compare metadata for document with key %v due to HLV parsing error either at the source or at target. SourceErr: %v TargetError: %v", result1.key, result1.parsingErr, result2.parsingErr)
+		}
 		metaSame := result1.Cas == result2.Cas && result1.SeqNo == result2.SeqNo && result1.Flags == result2.Flags &&
 			result1.Expiry == result2.Expiry && result1.Deleted == result2.Deleted && (result1.Datatype&base.JSONDataType == result2.Datatype&base.JSONDataType) &&
-			(result1.Datatype&xdcrBase.XattrDataType == result2.Datatype&xdcrBase.XattrDataType) && compareHlv(result1.HLV, result2.HLV, uint64(result1.Cas), uint64(result2.Cas), result1.importCas, result2.importCas, sourceUUID, targetUUID)
+			(result1.Datatype&xdcrBase.XattrDataType == result2.Datatype&xdcrBase.XattrDataType) && compareHlv(result1.HLV, result2.HLV, uint64(result1.Cas), uint64(result2.Cas), sourceUUID, targetUUID)
 
 		if includeBody {
 			bodySame := areGetResultsBodyTheSame(result1, result2)
-			return metaSame && bodySame
+			return (metaSame && bodySame), nil
 		}
-		return metaSame
+		return metaSame, nil
 	}
 }
 
@@ -1068,6 +1061,7 @@ func getHlvImportCas(bucketUUID string, result *gocbcore.LookupInResult) (Hlv *h
 		hlvBytes = result.Ops[0].Value
 	}
 	importLen := len(importCasBytes)
+	hlvLen := len(hlvBytes)
 	if importCasBytes != nil && importLen != 0 {
 		// Remove the start/end quotes before converting it to uint64
 		importCas, err = xdcrBase.HexLittleEndianToUint64(importCasBytes[1 : importLen-1])
@@ -1075,17 +1069,16 @@ func getHlvImportCas(bucketUUID string, result *gocbcore.LookupInResult) (Hlv *h
 			return
 		}
 	}
-	if hlvBytes == nil || (hlvBytes != nil && len(hlvBytes) == 0) {
-		return
-	} else {
+	if hlvBytes != nil && hlvLen != 0 {
 		var bucketId hlv.DocumentSourceId
 		bucketId, err = hlv.UUIDtoDocumentSource(bucketUUID)
 		if err != nil {
+			err = fmt.Errorf("Error occured while converting the bucket UUID %v to HLV required format. err: %v", bucketUUID, err)
 			return
 		}
 		Hlv, err = constructHlv(uint64(result.Cas), importCas, bucketId, hlvBytes)
-		return
 	}
+	return
 }
 
 func isDeleted(result *gocbcore.GetMetaResult) bool {
@@ -1104,7 +1097,7 @@ type GetResult struct {
 	parsingErr error
 	*gocbcore.GetMetaResult
 	*hlv.HLV
-	Lock sync.RWMutex
+	lock sync.RWMutex
 }
 
 func (d *MutationDiffer) initialize() error {
