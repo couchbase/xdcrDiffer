@@ -350,6 +350,7 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 			difftool.xattrKeysForNoCompare[fileScanner.Text()] = true
 		}
 	}
+	// HLV and ImportCas needs to be stripped from the Xattrs
 	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_HLV] = true
 	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_IMPORTCAS] = true
 	logCtx := xdcrLog.DefaultLoggerContext
@@ -786,8 +787,8 @@ func (difftool *xdcrDiffTool) diffDataFiles() error {
 	}
 
 	difftoolDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.fileDifferDir,
-		base.DiffKeysFileName, difftool.specifiedSpec.SourceBucketUUID, difftool.specifiedSpec.TargetBucketUUID, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBins),
-		int(options.numberOfFileDesc), difftool.srcToTgtColIdsMap, difftool.colFilterOrderedKeys, difftool.colFilterOrderedTargetColId, difftool.bucketTopologySvc, difftool.specifiedSpec, difftool.logger)
+		base.DiffKeysFileName, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBins),
+		int(options.numberOfFileDesc), difftool.srcToTgtColIdsMap, difftool.colFilterOrderedKeys, difftool.colFilterOrderedTargetColId, difftool.specifiedSpec.SourceBucketUUID, difftool.specifiedSpec.TargetBucketUUID, difftool.bucketTopologySvc, difftool.specifiedSpec, difftool.logger)
 	err = difftoolDriver.Run()
 	if err != nil {
 		difftool.logger.Errorf("Error from diffDataFiles = %v\n", err)

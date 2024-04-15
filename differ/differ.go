@@ -31,8 +31,6 @@ import (
 	xdcrLog "github.com/couchbase/goxdcr/log"
 )
 
-const BodyNilError string = "body cannot be nil"
-
 // Given two DCP Dump files, perform necessary diffing task
 type FilesDiffer struct {
 	file1 FileAttributes
@@ -116,7 +114,7 @@ func NewFileAttribute(fileName string) *FileAttributes {
 
 type oneEntry struct {
 	Key               string
-	bucketUUID        hlv.DocumentSourceId
+	BucketUUID        hlv.DocumentSourceId
 	Seqno             uint64
 	RevId             uint64
 	Cas               uint64
@@ -182,14 +180,14 @@ func (entry oneEntry) Diff(other oneEntry) (int, bool) {
 			return 0, false
 		} else if entry.Datatype != other.Datatype {
 			return 0, false
-		} else if !compareHlv(entry.Hlv, other.Hlv, entry.Cas, other.Cas, entry.ImportCas, other.ImportCas, entry.bucketUUID, other.bucketUUID) {
+		} else if !compareHlv(entry.Hlv, other.Hlv, entry.Cas, other.Cas, entry.BucketUUID, other.BucketUUID) {
 			return 0, false
 		}
 	}
 	return 0, true
 }
 
-func compareHlv(hlv1, hlv2 *hlv.HLV, cas1, cas2, importCas1, importCas2 uint64, bucketUUID1, bucketUUID2 hlv.DocumentSourceId) bool {
+func compareHlv(hlv1, hlv2 *hlv.HLV, cas1, cas2 uint64, bucketUUID1, bucketUUID2 hlv.DocumentSourceId) bool {
 	//if both(source and target) have no HLV we return true
 	if hlv1 == nil && hlv2 == nil {
 		return true
@@ -221,6 +219,7 @@ func compareHlvItems(item1 *hlv.HLV, item2 *hlv.HLV, item1Cas uint64, item2Cas u
 	return true
 }
 
+// Darshan:TODO Accomodate the CAS delta computation inorder to reduce the PV size MB-60961
 func comparePv(Pv1 hlv.VersionsMap, Pv2 hlv.VersionsMap, cas1 uint64, cas2 uint64) bool {
 	if len(Pv1) == len(Pv2) {
 		for key, value1 := range Pv1 {
@@ -250,21 +249,21 @@ func comparePv(Pv1 hlv.VersionsMap, Pv2 hlv.VersionsMap, cas1 uint64, cas2 uint6
 		for key, value1 := range iteratePv {
 			value2, ok := otherPv[key]
 			if !ok {
-				if xdcrBase.CasDuration(value1, cas) >= pruningWindow {
-					continue
-				} else {
+				if xdcrBase.CasDuration(value1, cas) < pruningWindow {
 					return false
 				}
-			} else {
-				if value1 != value2 {
-					return false
-				}
+				continue
+			}
+			if value1 != value2 {
+				return false
 			}
 		}
 	}
 	return true
 }
 
+// Darshan:TODO Add compare MV when merge is implemented
+// Darshan:TODO Add the prev Revid support when MB-60385 is checked-in
 func (entry oneEntry) GetRevId() uint64 {
 	if entry.ImportCas == entry.Cas {
 		return 0
@@ -280,8 +279,6 @@ func (entry oneEntry) GetVersion() uint64 {
 		if entry.Cas == entry.ImportCas {
 			return entry.Hlv.GetCvCas()
 		} else if entry.Cas < entry.ImportCas {
-			// can never happen : for now we panic
-			//TODO Darshan : see if you can handle the error properly instead of creating a panic
 			panic("Import Cas never be greater than the doc cas")
 		} else {
 			return entry.Cas
@@ -358,21 +355,21 @@ func constructHlv(docCas uint64, importCAS uint64, bucketUUID hlv.DocumentSource
 		return nil, err
 	}
 	var Hlv *hlv.HLV
-	var err2 error
+	var err1 error
 	if docCas == importCAS {
-		Hlv, err2 = hlv.NewHLV(bucketUUID, cvCas, cvCas, cvSrc, cvVer, pvMap, mvMap)
+		Hlv, err1 = hlv.NewHLV(bucketUUID, cvCas, cvCas, cvSrc, cvVer, pvMap, mvMap)
 	} else {
-		Hlv, err2 = hlv.NewHLV(bucketUUID, docCas, cvCas, cvSrc, cvVer, pvMap, mvMap)
+		Hlv, err1 = hlv.NewHLV(bucketUUID, docCas, cvCas, cvSrc, cvVer, pvMap, mvMap)
 	}
-	if err2 != nil {
-		return nil, err2
+	if err1 != nil {
+		return nil, err1
 	}
 	return Hlv, nil
 }
 
 func getOneEntry(readOp fdp.FileOp, bucketUUID hlv.DocumentSourceId) (*oneEntry, error) {
 	entry := &oneEntry{}
-	entry.bucketUUID = bucketUUID
+	entry.BucketUUID = bucketUUID
 	keyLenBytes := make([]byte, 2)
 	bytesRead, err := readOp(keyLenBytes)
 	if err != nil {
@@ -467,7 +464,7 @@ func getOneEntry(readOp fdp.FileOp, bucketUUID hlv.DocumentSourceId) (*oneEntry,
 	}
 	if len(HlvBytes) != 0 {
 
-		entry.Hlv, err = constructHlv(entry.Cas, entry.ImportCas, entry.bucketUUID, HlvBytes)
+		entry.Hlv, err = constructHlv(entry.Cas, entry.ImportCas, entry.BucketUUID, HlvBytes)
 		if err != nil {
 			return nil, fmt.Errorf("Error in constructing HLV, err: %v", err)
 		}

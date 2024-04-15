@@ -243,7 +243,7 @@ type DifferDriver struct {
 	logger            *xdcrLog.CommonLogger
 }
 
-func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName, sourceBucketUUID, targetBucketUUID string, numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32, bucketTopologySvc service_def.BucketTopologySvc, specifiedSpec *metadata.ReplicationSpecification, logger *xdcrLog.CommonLogger) *DifferDriver {
+func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32, sourceBucketUUID, targetBucketUUID string, bucketTopologySvc service_def.BucketTopologySvc, specifiedSpec *metadata.ReplicationSpecification, logger *xdcrLog.CommonLogger) *DifferDriver {
 	var fdPool *fdp.FdPool
 	if numberOfFds > 0 {
 		fdPool = fdp.NewFileDescriptorPool(numberOfFds)
@@ -254,8 +254,6 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName
 		targetFileDir:     targetFileDir,
 		diffFileDir:       diffFileDir,
 		diffKeysFileName:  diffKeysFileName,
-		sourceBucketUUID:  sourceBucketUUID,
-		targetBucketUUID:  targetBucketUUID,
 		numberOfWorkers:   numberOfWorkers,
 		numberOfBins:      numberOfBins,
 		waitGroup:         &sync.WaitGroup{},
@@ -272,6 +270,8 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName
 		TgtVbItemCntMap:   make(map[uint16]int),
 		MapLock:           &sync.RWMutex{},
 		DuplicatedHint:    DuplicatedHintMap{},
+		sourceBucketUUID:  sourceBucketUUID,
+		targetBucketUUID:  targetBucketUUID,
 		bucketTopologySvc: bucketTopologySvc,
 		specifiedSpec:     specifiedSpec,
 		logger:            logger,

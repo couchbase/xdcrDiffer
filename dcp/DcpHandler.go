@@ -56,7 +56,7 @@ type DcpHandler struct {
 	migrationMapping              metadata.CollectionNamespaceMapping
 	mobileCompatible              int
 	expDelMode                    xdcrBase.FilterExpDelType
-	xattraIterator                *xdcrBase.XattrIterator
+	xattrIterator                 *xdcrBase.XattrIterator
 }
 
 func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface, incReceivedCounter, incSysOrUnsubbedEvtReceived func(), colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping) (*DcpHandler, error) {
@@ -85,7 +85,7 @@ func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uin
 		migrationMapping:              migrationMapping,
 		mobileCompatible:              dcpClient.dcpDriver.mobileCompatible,
 		expDelMode:                    dcpClient.dcpDriver.expDelMode,
-		xattraIterator:                &xdcrBase.XattrIterator{},
+		xattrIterator:                 &xdcrBase.XattrIterator{},
 	}, nil
 }
 
@@ -260,15 +260,15 @@ func (dh *DcpHandler) SnapshotMarker(snapshot gocbcore.DcpSnapshotMarker) {
 }
 
 func (dh *DcpHandler) Mutation(mutation gocbcore.DcpMutation) {
-	dh.writeToDataChan(CreateMutation(mutation.VbID, mutation.Key, mutation.SeqNo, mutation.RevNo, mutation.Cas, mutation.Flags, mutation.Expiry, gomemcached.UPR_MUTATION, mutation.Value, mutation.Datatype, mutation.CollectionID, dh.xattraIterator, dh.dcpClient.dcpDriver.xattrKeysForNoCompare))
+	dh.writeToDataChan(CreateMutation(mutation.VbID, mutation.Key, mutation.SeqNo, mutation.RevNo, mutation.Cas, mutation.Flags, mutation.Expiry, gomemcached.UPR_MUTATION, mutation.Value, mutation.Datatype, mutation.CollectionID, dh.xattrIterator, dh.dcpClient.dcpDriver.xattrKeysForNoCompare))
 }
 
 func (dh *DcpHandler) Deletion(deletion gocbcore.DcpDeletion) {
-	dh.writeToDataChan(CreateMutation(deletion.VbID, deletion.Key, deletion.SeqNo, deletion.RevNo, deletion.Cas, 0, 0, gomemcached.UPR_DELETION, deletion.Value, deletion.Datatype, deletion.CollectionID, dh.xattraIterator, dh.dcpClient.dcpDriver.xattrKeysForNoCompare))
+	dh.writeToDataChan(CreateMutation(deletion.VbID, deletion.Key, deletion.SeqNo, deletion.RevNo, deletion.Cas, 0, 0, gomemcached.UPR_DELETION, deletion.Value, deletion.Datatype, deletion.CollectionID, dh.xattrIterator, dh.dcpClient.dcpDriver.xattrKeysForNoCompare))
 }
 
 func (dh *DcpHandler) Expiration(expiration gocbcore.DcpExpiration) {
-	dh.writeToDataChan(CreateMutation(expiration.VbID, expiration.Key, expiration.SeqNo, expiration.RevNo, expiration.Cas, 0, 0, gomemcached.UPR_EXPIRATION, nil, 0, expiration.CollectionID, dh.xattraIterator, dh.dcpClient.dcpDriver.xattrKeysForNoCompare))
+	dh.writeToDataChan(CreateMutation(expiration.VbID, expiration.Key, expiration.SeqNo, expiration.RevNo, expiration.Cas, 0, 0, gomemcached.UPR_EXPIRATION, nil, 0, expiration.CollectionID, dh.xattrIterator, dh.dcpClient.dcpDriver.xattrKeysForNoCompare))
 }
 
 func (dh *DcpHandler) End(streamEnd gocbcore.DcpStreamEnd, err error) {
@@ -458,7 +458,7 @@ type Mutation struct {
 	ColId                 uint32
 	ColFiltersMatched     []uint8 // Given a ordered list of filters, this list contains indexes of the ordered list of filter that matched
 	XattrIterator         *xdcrBase.XattrIterator
-	xattrKeysForNoCompare map[string]bool
+	XattrKeysForNoCompare map[string]bool
 }
 
 func CreateMutation(vbno uint16, key []byte, seqno, revId, cas uint64, flags, expiry uint32, opCode gomemcached.CommandCode, value []byte, datatype uint8, collectionId uint32, xattrIterator *xdcrBase.XattrIterator, xattrKeysForNoCompare map[string]bool) *Mutation {
@@ -475,7 +475,7 @@ func CreateMutation(vbno uint16, key []byte, seqno, revId, cas uint64, flags, ex
 		Datatype:              datatype,
 		ColId:                 collectionId,
 		XattrIterator:         xattrIterator,
-		xattrKeysForNoCompare: xattrKeysForNoCompare,
+		XattrKeysForNoCompare: xattrKeysForNoCompare,
 	}
 }
 
@@ -535,6 +535,8 @@ func (m *Mutation) ToUprEvent() *xdcrBase.WrappedUprEvent {
 //	collectionId - 4 bytes
 //	colFiltersLen - 2 byte (number of collection migration filters)
 //	(per col filter) - 2 byte
+
+// Darshan:TODO accomodate SGW xattr change from "import" to "_mou" when MB-60897 is checked-in
 func (mut *Mutation) Serialize() ([]byte, error) {
 	var bodyHash [64]byte
 	var xattrSize uint32
@@ -549,12 +551,12 @@ func (mut *Mutation) Serialize() ([]byte, error) {
 		}
 		xattrSize, _ = xdcrBase.GetXattrSize(mut.Value)
 		xattr = mut.Value[4 : xattrSize+4]
-		trimmedXattrPlusBody, KVsToBeExcluded, err = removeKVSubsetFromXattr(xattr, len(mut.Value), xattrSize, mut.XattrIterator, mut.xattrKeysForNoCompare, bodyWithoutXattr)
-		hlv = KVsToBeExcluded[xdcrBase.XATTR_HLV]
-		importCas = KVsToBeExcluded[xdcrBase.XATTR_IMPORTCAS]
+		trimmedXattrPlusBody, KVsToBeExcluded, err = removeKVSubsetFromXattr(xattr, len(mut.Value), xattrSize, mut.XattrIterator, mut.XattrKeysForNoCompare, bodyWithoutXattr)
 		if err != nil {
 			return nil, err
 		}
+		hlv = KVsToBeExcluded[xdcrBase.XATTR_HLV]
+		importCas = KVsToBeExcluded[xdcrBase.XATTR_IMPORTCAS]
 		bodyHash = sha512.Sum512(trimmedXattrPlusBody)
 	} else {
 		bodyHash = sha512.Sum512(mut.Value)
@@ -608,7 +610,7 @@ func (mut *Mutation) Serialize() ([]byte, error) {
 
 // This is function is used to remove specified KVs from the xattr and create a new one excluding them
 // @param xattr - denotes the original xattr
-// @param size - denotes the max size of the new xattr+doc_body
+// @param size - denotes the max size of the new xattr+docBody
 // @param xattrSize - represents the xatttr Size to initialize an iterator over the original one
 // @param xattrIterator - is a pointer to the xattrIterator object
 // @param keysToExclude - is map containing the keys to excluded from the xattr
@@ -638,7 +640,7 @@ func removeKVSubsetFromXattr(xattr []byte, size int, xattrSize uint32, xattrIter
 			KVsToBeIncluded[keyStr] = value
 		}
 	}
-	for keyToBeIncluded, _ := range KVsToBeIncluded {
+	for keyToBeIncluded := range KVsToBeIncluded {
 		keys = append(keys, keyToBeIncluded)
 	}
 	sort.Strings(keys)
