@@ -25,6 +25,7 @@ import (
 
 	"github.com/couchbase/gocbcore/v10"
 	xdcrBase "github.com/couchbase/goxdcr/base"
+	xdcrCrMeta "github.com/couchbase/goxdcr/crMeta"
 	hlv "github.com/couchbase/goxdcr/hlv"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/couchbase/goxdcr/metadata"
@@ -51,12 +52,12 @@ type MutationDiffer struct {
 	sourceBucketAgent *GocbcoreAgent
 	targetBucketAgent *GocbcoreAgent
 
-	missingFromSource map[uint32]map[string]*GocbResult
-	missingFromTarget map[uint32]map[string]*GocbResult
-	srcDiff           map[uint32]map[string][]*GocbResult
-	tgtDiff           map[uint32]map[string][]*GocbResult
-	deletedFromSource map[uint32]map[string][]*GocbResult
-	deletedFromTarget map[uint32]map[string][]*GocbResult
+	missingFromSource map[uint32]map[string]*GetResult
+	missingFromTarget map[uint32]map[string]*GetResult
+	srcDiff           map[uint32]map[string][]*GetResult
+	tgtDiff           map[uint32]map[string][]*GetResult
+	deletedFromSource map[uint32]map[string][]*GetResult
+	deletedFromTarget map[uint32]map[string][]*GetResult
 
 	keysWithError []*MutationDifferFetchEntry
 	stateLock     *sync.RWMutex
@@ -90,41 +91,26 @@ type MutationDiffer struct {
 	utils           xdcrUtils.UtilsIface
 }
 
-type JsonBody struct {
-	Value    []byte
-	Cas      uint64
-	Datatype uint8
-}
-
-type JsonMeta struct {
-	Value    []byte
-	Cas      uint64
-	Seqno    uint64
-	Flags    uint32
-	Expiry   uint32
-	Deleted  uint32
-	Datatype uint8
-	Cvcas    uint64
-	CvSrc    hlv.DocumentSourceId
-	CvVer    uint64
-	Pv       hlv.VersionsMap
-	Mv       hlv.VersionsMap
-	Updated  bool
-}
-
-// GocbResult is a wrapper struct that is composed with properties for both get and getMeta results from gocb
-type GocbResult struct {
-	*JsonBody
-	*JsonMeta
-}
-
-func (r *GocbResult) MarshalJSON() ([]byte, error) {
-	if r.JsonBody != nil {
-		return json.Marshal(r.JsonBody)
-	} else if r.JsonMeta != nil {
-		return json.Marshal(r.JsonMeta)
+func (r *GetResult) MarshalJSON() ([]byte, error) {
+	var dataToBeEncoded map[string]interface{} = make(map[string]interface{})
+	if r.GetMetaResult == nil {
+		dataToBeEncoded[base.JsonBody] = r.Value
+	} else {
+		if r.HLV == nil {
+			dataToBeEncoded[base.JsonBody] = r.Value
+			dataToBeEncoded[base.JsonMetadata] = r.GetMetaResult
+		} else {
+			dataToBeEncoded[base.JsonBody] = r.Value
+			dataToBeEncoded[base.JsonMetadata] = r.GetMetaResult
+			dataToBeEncoded[xdcrCrMeta.XATTR_CVCAS_PATH] = r.GetCvCas()
+			dataToBeEncoded[xdcrCrMeta.XATTR_SRC_PATH] = r.GetCvSrc()
+			dataToBeEncoded[xdcrCrMeta.XATTR_VER_PATH] = r.GetCvVer()
+			dataToBeEncoded[xdcrCrMeta.XATTR_PV_PATH] = r.GetPV()
+			dataToBeEncoded[xdcrCrMeta.XATTR_MV_PATH] = r.GetMV()
+			dataToBeEncoded[base.Updated] = r.Updated
+		}
 	}
-	return nil, nil
+	return json.Marshal(dataToBeEncoded)
 }
 
 func NewMutationDiffer(sourceBucketName string, sourceBucketUUID string, sourceRef *metadata.RemoteClusterReference, targetBucketName string, targetBucketUUID string, targetRef *metadata.RemoteClusterReference, fileDifferDir string, mutationDifferFileDir string, numberOfWorkers int, batchSize int, timeout int, maxNumOfSendBatchRetry int, sendBatchRetryInterval time.Duration, sendBatchMaxBackoff time.Duration, compareType string, logger *xdcrLog.CommonLogger, colIdsMap map[uint32][]uint32, srcCapability metadata.Capability, tgtCapability metadata.Capability, xdcrUtils xdcrUtils.UtilsIface, retries int, retriesWaitSecs int, duplMapping DuplicatedHintMap) *MutationDiffer {
@@ -147,12 +133,12 @@ func NewMutationDiffer(sourceBucketName string, sourceBucketUUID string, sourceR
 		numberOfWorkers:        numberOfWorkers,
 		batchSize:              batchSize,
 		timeout:                timeout,
-		missingFromSource:      make(map[uint32]map[string]*GocbResult),
-		missingFromTarget:      make(map[uint32]map[string]*GocbResult),
-		srcDiff:                make(map[uint32]map[string][]*GocbResult),
-		tgtDiff:                make(map[uint32]map[string][]*GocbResult),
-		deletedFromSource:      make(map[uint32]map[string][]*GocbResult),
-		deletedFromTarget:      make(map[uint32]map[string][]*GocbResult),
+		missingFromSource:      make(map[uint32]map[string]*GetResult),
+		missingFromTarget:      make(map[uint32]map[string]*GetResult),
+		srcDiff:                make(map[uint32]map[string][]*GetResult),
+		tgtDiff:                make(map[uint32]map[string][]*GetResult),
+		deletedFromSource:      make(map[uint32]map[string][]*GetResult),
+		deletedFromTarget:      make(map[uint32]map[string][]*GetResult),
 		keysWithError:          MutationDiffFetchList{},
 		stateLock:              &sync.RWMutex{},
 		maxNumOfSendBatchRetry: maxNumOfSendBatchRetry,
@@ -496,13 +482,13 @@ func (d *MutationDiffer) loadDiffKeys() (DiffKeysMap, DiffKeysMap, MigrationHint
 	return srcDiffKeys, tgtDiffKeys, migrationHintMap, nil
 }
 
-func (d *MutationDiffer) addDocDiff(missingFromSource, missingFromTarget map[uint32]map[string]*GocbResult, srcDiff, tgtDiff, deletedFromSource, deletedFromTarget map[uint32]map[string][]*GocbResult) {
+func (d *MutationDiffer) addDocDiff(missingFromSource, missingFromTarget map[uint32]map[string]*GetResult, srcDiff, tgtDiff, deletedFromSource, deletedFromTarget map[uint32]map[string][]*GetResult) {
 	d.stateLock.Lock()
 	defer d.stateLock.Unlock()
 
 	for colId, missingFromSourcePerCol := range missingFromSource {
 		if _, exists := d.missingFromSource[colId]; !exists {
-			d.missingFromSource[colId] = make(map[string]*GocbResult)
+			d.missingFromSource[colId] = make(map[string]*GetResult)
 		}
 		for key, result := range missingFromSourcePerCol {
 			d.missingFromSource[colId][key] = result
@@ -511,7 +497,7 @@ func (d *MutationDiffer) addDocDiff(missingFromSource, missingFromTarget map[uin
 
 	for colId, missingFromTargetPerCol := range missingFromTarget {
 		if _, exists := d.missingFromTarget[colId]; !exists {
-			d.missingFromTarget[colId] = make(map[string]*GocbResult)
+			d.missingFromTarget[colId] = make(map[string]*GetResult)
 		}
 		for key, result := range missingFromTargetPerCol {
 			d.missingFromTarget[colId][key] = result
@@ -520,7 +506,7 @@ func (d *MutationDiffer) addDocDiff(missingFromSource, missingFromTarget map[uin
 
 	for colId, srcDiffPerCol := range srcDiff {
 		if _, exists := d.srcDiff[colId]; !exists {
-			d.srcDiff[colId] = make(map[string][]*GocbResult)
+			d.srcDiff[colId] = make(map[string][]*GetResult)
 		}
 		for key, results := range srcDiffPerCol {
 			d.srcDiff[colId][key] = results
@@ -529,7 +515,7 @@ func (d *MutationDiffer) addDocDiff(missingFromSource, missingFromTarget map[uin
 
 	for colId, tgtDiffPerCol := range tgtDiff {
 		if _, exists := d.tgtDiff[colId]; !exists {
-			d.tgtDiff[colId] = make(map[string][]*GocbResult)
+			d.tgtDiff[colId] = make(map[string][]*GetResult)
 		}
 		for key, results := range tgtDiffPerCol {
 			d.tgtDiff[colId][key] = results
@@ -538,7 +524,7 @@ func (d *MutationDiffer) addDocDiff(missingFromSource, missingFromTarget map[uin
 
 	for colId, deleteFromSourcePerCol := range deletedFromSource {
 		if _, exists := d.deletedFromSource[colId]; !exists {
-			d.deletedFromSource[colId] = make(map[string][]*GocbResult)
+			d.deletedFromSource[colId] = make(map[string][]*GetResult)
 		}
 		for key, results := range deleteFromSourcePerCol {
 			d.deletedFromSource[colId][key] = results
@@ -546,7 +532,7 @@ func (d *MutationDiffer) addDocDiff(missingFromSource, missingFromTarget map[uin
 	}
 	for colId, deleteFromTargetPerCol := range deletedFromTarget {
 		if _, exists := d.deletedFromTarget[colId]; !exists {
-			d.deletedFromTarget[colId] = make(map[string][]*GocbResult)
+			d.deletedFromTarget[colId] = make(map[string][]*GetResult)
 		}
 		for key, results := range deleteFromTargetPerCol {
 			d.deletedFromTarget[colId][key] = results
@@ -696,59 +682,22 @@ func (dw *DifferWorker) mergeResults(b *batch) {
 }
 
 func (dw *DifferWorker) diff() {
-	missingFromSource := make(map[uint32]map[string]*GocbResult)
-	missingFromTarget := make(map[uint32]map[string]*GocbResult)
-	srcDiff := make(map[uint32]map[string][]*GocbResult)
-	tgtDiff := make(map[uint32]map[string][]*GocbResult)
-	deletedFromSource := make(map[uint32]map[string][]*GocbResult)
-	deletedFromTarget := make(map[uint32]map[string][]*GocbResult)
+	missingFromSource := make(map[uint32]map[string]*GetResult)
+	missingFromTarget := make(map[uint32]map[string]*GetResult)
+	srcDiff := make(map[uint32]map[string][]*GetResult)
+	tgtDiff := make(map[uint32]map[string][]*GetResult)
+	deletedFromSource := make(map[uint32]map[string][]*GetResult)
+	deletedFromTarget := make(map[uint32]map[string][]*GetResult)
 
 	migrationMode := len(dw.migrationHintMap) > 0
 
-	var gocbResultConstructor func(input *GetResult) *GocbResult
 	var includeBody bool
 	var bodyOnly bool
 	switch dw.compareType {
 	case base.MutationCompareTypeBodyOnly:
-		gocbResultConstructor = func(input *GetResult) *GocbResult {
-			input.Lock.RLock()
-			defer input.Lock.RUnlock()
-			return &GocbResult{
-				JsonBody: &JsonBody{Value: input.Value, Cas: uint64(input.Cas), Datatype: input.Datatype},
-			}
-		}
 		bodyOnly = true
 	case base.MutationCompareTypeBodyAndMeta:
-		gocbResultConstructor = func(input *GetResult) *GocbResult {
-			if input.HLV != nil {
-				return &GocbResult{
-					JsonMeta: &JsonMeta{Value: input.Value, Cas: uint64(input.Cas), Flags: input.Flags, Datatype: input.Datatype,
-						Seqno: uint64(input.SeqNo), Expiry: input.Expiry, Deleted: input.Deleted, Cvcas: input.GetCvCas(),
-						CvSrc: input.GetCvSrc(), CvVer: input.GetCvVer(), Pv: input.GetPV(), Mv: input.GetMV(), Updated: input.Updated},
-				}
-			} else {
-				return &GocbResult{
-					JsonMeta: &JsonMeta{Value: input.Value, Cas: uint64(input.Cas), Flags: input.Flags, Datatype: input.Datatype,
-						Seqno: uint64(input.SeqNo), Expiry: input.Expiry, Deleted: input.Deleted},
-				}
-			}
-		}
 		includeBody = true
-	case base.MutationCompareTypeMetadata:
-		gocbResultConstructor = func(input *GetResult) *GocbResult {
-			if input.HLV != nil {
-				return &GocbResult{
-					JsonMeta: &JsonMeta{Cas: uint64(input.Cas), Flags: input.Flags, Datatype: input.Datatype,
-						Seqno: uint64(input.SeqNo), Expiry: input.Expiry, Deleted: input.Deleted, Cvcas: input.GetCvCas(),
-						CvSrc: input.GetCvSrc(), CvVer: input.GetCvVer(), Pv: input.GetPV(), Mv: input.GetMV(), Updated: input.Updated},
-				}
-			} else {
-				return &GocbResult{
-					JsonMeta: &JsonMeta{Cas: uint64(input.Cas), Flags: input.Flags, Datatype: input.Datatype,
-						Seqno: uint64(input.SeqNo), Expiry: input.Expiry, Deleted: input.Deleted},
-				}
-			}
-		}
 	}
 
 	for srcColId, sourceResultMap := range dw.sourceResults {
@@ -779,28 +728,28 @@ func (dw *DifferWorker) diff() {
 				}
 				if isKeyNotFoundError(srcerr) && !isKeyNotFoundError(tgterr) {
 					if _, exists := missingFromSource[srcColId]; !exists {
-						missingFromSource[srcColId] = make(map[string]*GocbResult)
+						missingFromSource[srcColId] = make(map[string]*GetResult)
 					}
-					missingFromSource[srcColId][key] = gocbResultConstructor(targetResult)
+					missingFromSource[srcColId][key] = targetResult
 					continue
 				}
 				if !isKeyNotFoundError(srcerr) && isKeyNotFoundError(tgterr) {
 					if _, exists := missingFromTarget[tgtColId]; !exists {
-						missingFromTarget[tgtColId] = make(map[string]*GocbResult)
+						missingFromTarget[tgtColId] = make(map[string]*GetResult)
 					}
-					missingFromTarget[tgtColId][key] = gocbResultConstructor(sourceResult)
+					missingFromTarget[tgtColId][key] = sourceResult
 					continue
 				}
 				if bodyOnly {
 					if !areGetResultsBodyTheSame(sourceResult, targetResult) {
 						if _, exists := srcDiff[srcColId]; !exists {
-							srcDiff[srcColId] = make(map[string][]*GocbResult)
+							srcDiff[srcColId] = make(map[string][]*GetResult)
 						}
-						srcDiff[srcColId][key] = append(srcDiff[srcColId][key], []*GocbResult{gocbResultConstructor(sourceResult), gocbResultConstructor(targetResult)}...)
+						srcDiff[srcColId][key] = append(srcDiff[srcColId][key], []*GetResult{sourceResult, targetResult}...)
 						if _, exists := tgtDiff[tgtColId]; !exists {
-							tgtDiff[tgtColId] = make(map[string][]*GocbResult)
+							tgtDiff[tgtColId] = make(map[string][]*GetResult)
 						}
-						tgtDiff[tgtColId][key] = append(tgtDiff[tgtColId][key], []*GocbResult{gocbResultConstructor(targetResult), gocbResultConstructor(sourceResult)}...)
+						tgtDiff[tgtColId][key] = append(tgtDiff[tgtColId][key], []*GetResult{targetResult, sourceResult}...)
 					}
 				} else {
 					srcUUID, err := hlv.UUIDtoDocumentSource(dw.differ.sourceBucketUUID)
@@ -813,29 +762,29 @@ func (dw *DifferWorker) diff() {
 						dw.logger.Errorf("Error in converting the bucket UUID to required HLV format. err: %v", err1)
 						panic("bucketUUID convertion error")
 					}
-					if !areGetMetaResultsTheSame(sourceResult, targetResult, srcUUID, tgtUUID, includeBody) {
+					if !areGetResultsTheSame(sourceResult, targetResult, srcUUID, tgtUUID, includeBody) {
 						if isDeleted(sourceResult.GetMetaResult) {
 							if _, exists := deletedFromSource[srcColId]; !exists {
-								deletedFromSource[srcColId] = make(map[string][]*GocbResult)
+								deletedFromSource[srcColId] = make(map[string][]*GetResult)
 							}
-							deletedFromSource[srcColId][key] = append(deletedFromSource[srcColId][key], []*GocbResult{gocbResultConstructor(sourceResult), gocbResultConstructor(targetResult)}...)
+							deletedFromSource[srcColId][key] = append(deletedFromSource[srcColId][key], []*GetResult{sourceResult, targetResult}...)
 							continue
 						}
 						if isDeleted(targetResult.GetMetaResult) {
 							if _, exists := deletedFromTarget[srcColId]; !exists {
-								deletedFromTarget[srcColId] = make(map[string][]*GocbResult)
+								deletedFromTarget[srcColId] = make(map[string][]*GetResult)
 							}
-							deletedFromTarget[srcColId][key] = append(deletedFromSource[srcColId][key], []*GocbResult{gocbResultConstructor(sourceResult), gocbResultConstructor(targetResult)}...)
+							deletedFromTarget[srcColId][key] = append(deletedFromSource[srcColId][key], []*GetResult{sourceResult, targetResult}...)
 							continue
 						}
 						if _, exists := srcDiff[srcColId]; !exists {
-							srcDiff[srcColId] = make(map[string][]*GocbResult)
+							srcDiff[srcColId] = make(map[string][]*GetResult)
 						}
-						srcDiff[srcColId][key] = append(srcDiff[srcColId][key], []*GocbResult{gocbResultConstructor(sourceResult), gocbResultConstructor(targetResult)}...)
+						srcDiff[srcColId][key] = append(srcDiff[srcColId][key], []*GetResult{sourceResult, targetResult}...)
 						if _, exists := tgtDiff[tgtColId]; !exists {
-							tgtDiff[tgtColId] = make(map[string][]*GocbResult)
+							tgtDiff[tgtColId] = make(map[string][]*GetResult)
 						}
-						tgtDiff[tgtColId][key] = append(tgtDiff[tgtColId][key], []*GocbResult{gocbResultConstructor(targetResult), gocbResultConstructor(sourceResult)}...)
+						tgtDiff[tgtColId][key] = append(tgtDiff[tgtColId][key], []*GetResult{targetResult, sourceResult}...)
 					}
 				}
 			}
@@ -861,9 +810,9 @@ func (dw *DifferWorker) diff() {
 			if !foundSourceColId || !keyExists {
 				// This means that the source colId doesn't exist for this target entry
 				if _, exists := missingFromTarget[tgtColId]; !exists {
-					missingFromTarget[tgtColId] = make(map[string]*GocbResult)
+					missingFromTarget[tgtColId] = make(map[string]*GetResult)
 				}
-				missingFromTarget[tgtColId][key] = gocbResultConstructor(targetResult)
+				missingFromTarget[tgtColId][key] = targetResult
 			}
 		}
 	}
@@ -1075,7 +1024,7 @@ func areGetResultsBodyTheSame(result1, result2 *GetResult) bool {
 	return reflect.DeepEqual(result1.Value, result2.Value)
 }
 
-func areGetMetaResultsTheSame(result1, result2 *GetResult, sourceUUID, targetUUID hlv.DocumentSourceId, includeBody bool) bool {
+func areGetResultsTheSame(result1, result2 *GetResult, sourceUUID, targetUUID hlv.DocumentSourceId, includeBody bool) bool {
 	if result1.GetMetaResult == nil && result2.GetMetaResult == nil {
 		return true
 	} else if result1.GetMetaResult == nil {
@@ -1301,15 +1250,15 @@ func (d *MutationDiffer) initializeKVVBMap(source bool) error {
 
 func resultMapContainsAtLeastOne(generic interface{}) bool {
 	switch generic.(type) {
-	case map[uint32]map[string]*GocbResult:
-		uintMap := generic.(map[uint32]map[string]*GocbResult)
+	case map[uint32]map[string]*GetResult:
+		uintMap := generic.(map[uint32]map[string]*GetResult)
 		for _, vMap := range uintMap {
 			if len(vMap) > 0 {
 				return true
 			}
 		}
-	case map[uint32]map[string][]*GocbResult:
-		uintMap := generic.(map[uint32]map[string][]*GocbResult)
+	case map[uint32]map[string][]*GetResult:
+		uintMap := generic.(map[uint32]map[string][]*GetResult)
 		for _, vMap := range uintMap {
 			if len(vMap) > 0 {
 				return true
@@ -1334,8 +1283,8 @@ func resultMapToDiffKeysMap(generic interface{}) DiffKeysMap {
 	resultMap := make(DiffKeysMap)
 
 	switch generic.(type) {
-	case map[uint32]map[string]*GocbResult:
-		uintMap := generic.(map[uint32]map[string]*GocbResult)
+	case map[uint32]map[string]*GetResult:
+		uintMap := generic.(map[uint32]map[string]*GetResult)
 		for colId, strMap := range uintMap {
 			if _, exists := resultMap[colId]; !exists {
 				resultMap[colId] = []string{}
@@ -1344,8 +1293,8 @@ func resultMapToDiffKeysMap(generic interface{}) DiffKeysMap {
 				resultMap[colId] = append(resultMap[colId], key)
 			}
 		}
-	case map[uint32]map[string][]*GocbResult:
-		uintMap := generic.(map[uint32]map[string][]*GocbResult)
+	case map[uint32]map[string][]*GetResult:
+		uintMap := generic.(map[uint32]map[string][]*GetResult)
 		for colId, strMap := range uintMap {
 			if _, exists := resultMap[colId]; !exists {
 				resultMap[colId] = []string{}
@@ -1386,12 +1335,12 @@ func (d *MutationDiffer) clearGoCbResults() {
 	d.stateLock.Lock()
 	defer d.stateLock.Unlock()
 
-	d.missingFromSource = make(map[uint32]map[string]*GocbResult)
-	d.missingFromTarget = make(map[uint32]map[string]*GocbResult)
-	d.srcDiff = make(map[uint32]map[string][]*GocbResult)
-	d.tgtDiff = make(map[uint32]map[string][]*GocbResult)
-	d.deletedFromSource = make(map[uint32]map[string][]*GocbResult)
-	d.deletedFromTarget = make(map[uint32]map[string][]*GocbResult)
+	d.missingFromSource = make(map[uint32]map[string]*GetResult)
+	d.missingFromTarget = make(map[uint32]map[string]*GetResult)
+	d.srcDiff = make(map[uint32]map[string][]*GetResult)
+	d.tgtDiff = make(map[uint32]map[string][]*GetResult)
+	d.deletedFromSource = make(map[uint32]map[string][]*GetResult)
+	d.deletedFromTarget = make(map[uint32]map[string][]*GetResult)
 }
 
 func (d *MutationDiffer) writeMigrationDetails() error {
