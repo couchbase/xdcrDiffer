@@ -836,7 +836,7 @@ type batch struct {
 	targetResultCount uint32
 	sourceResults     map[uint32]map[string]*GetResult
 	targetResults     map[uint32]map[string]*GetResult
-	Lock              sync.RWMutex
+	resultsLock       sync.RWMutex
 }
 
 func NewBatch(dw *DifferWorker, startIndex, endIndex int) *batch {
@@ -848,8 +848,8 @@ func NewBatch(dw *DifferWorker, startIndex, endIndex int) *batch {
 	}
 	// initialize all entries in results map
 	// update to *GetResult in map will not be treated as concurrent update to map itself
-	b.Lock.Lock()
-	defer b.Lock.Unlock()
+	b.resultsLock.Lock()
+	defer b.resultsLock.Unlock()
 	for _, fetchItem := range b.fetchList {
 		if _, exists := b.sourceResults[fetchItem.SrcColId]; !exists {
 			b.sourceResults[fetchItem.SrcColId] = make(map[string]*GetResult)
@@ -893,7 +893,7 @@ func (b *batch) send() error {
 
 func (b *batch) get(key string, isSource bool, compareType string, colId uint32) {
 	getCallbackFunc := func(result *gocbcore.GetResult, err error) {
-		b.Lock.RLock()
+		b.resultsLock.RLock()
 		var resultsMap map[string]*GetResult
 		if isSource {
 			resultsMap = b.sourceResults[colId]
@@ -901,7 +901,7 @@ func (b *batch) get(key string, isSource bool, compareType string, colId uint32)
 			resultsMap = b.targetResults[colId]
 		}
 		getResult := resultsMap[key]
-		b.Lock.RUnlock()
+		b.resultsLock.RUnlock()
 
 		getResult.lock.Lock()
 		defer getResult.lock.Unlock()
@@ -914,7 +914,7 @@ func (b *batch) get(key string, isSource bool, compareType string, colId uint32)
 	}
 
 	getMetaCallbackFunc := func(result *gocbcore.GetMetaResult, err error) {
-		b.Lock.RLock()
+		b.resultsLock.RLock()
 		var resultsMap map[string]*GetResult
 		if isSource {
 			resultsMap = b.sourceResults[colId]
@@ -922,7 +922,7 @@ func (b *batch) get(key string, isSource bool, compareType string, colId uint32)
 			resultsMap = b.targetResults[colId]
 		}
 		getResult := resultsMap[key]
-		b.Lock.RUnlock()
+		b.resultsLock.RUnlock()
 
 		getResult.lock.Lock()
 		defer getResult.lock.Unlock()
@@ -933,7 +933,7 @@ func (b *batch) get(key string, isSource bool, compareType string, colId uint32)
 	}
 
 	getHlvCallbackFunc := func(result *gocbcore.LookupInResult, err error) {
-		b.Lock.RLock()
+		b.resultsLock.RLock()
 		var resultsMap map[string]*GetResult
 		var bucketUUID string
 		if isSource {
@@ -944,7 +944,7 @@ func (b *batch) get(key string, isSource bool, compareType string, colId uint32)
 			bucketUUID = b.dw.differ.targetBucketUUID
 		}
 		getResult := resultsMap[key]
-		b.Lock.RUnlock()
+		b.resultsLock.RUnlock()
 
 		if err != nil {
 			b.dw.logger.Errorf("Subdoc-get error occured for doc %v. err:%v\n", key, err)
