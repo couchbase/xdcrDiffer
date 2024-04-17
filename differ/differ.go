@@ -233,18 +233,18 @@ func comparePv(Pv1 hlv.VersionsMap, Pv2 hlv.VersionsMap, cas1 uint64, cas2 uint6
 			}
 		}
 	} else { // Unequal length implies that the PVs are pruned
-		sourcePruningWindow := sourcePruningWindow.get()
-		targetPruningWindow := targetPruningWindow.get()
+		srcPruningWindow := sourcePruningWindow.get()
+		tgtPruningWindow := targetPruningWindow.get()
 		var pruningWindow time.Duration
 		iteratePv := Pv1
 		otherPv := Pv2
 		cas := cas1
-		pruningWindow = sourcePruningWindow
+		pruningWindow = srcPruningWindow
 		if len(Pv2) > len(Pv1) {
 			iteratePv = Pv2
 			otherPv = Pv1
 			cas = cas2
-			pruningWindow = targetPruningWindow
+			pruningWindow = tgtPruningWindow
 		}
 		for key, value1 := range iteratePv {
 			value2, ok := otherPv[key]
@@ -457,7 +457,7 @@ func getOneEntry(readOp fdp.FileOp, bucketUUID hlv.DocumentSourceId) (*oneEntry,
 		return nil, fmt.Errorf("Unable to read importCas, bytes read: %v, err: %v", bytesRead, err)
 	}
 	if len(importBytes) != 0 {
-		entry.ImportCas, err = xdcrBase.HexLittleEndianToUint64(importBytes)
+		entry.ImportCas, err = xdcrBase.HexLittleEndianToUint64(importBytes[1 : importSize-1])
 		if err != nil {
 			return nil, fmt.Errorf("Unable to convert ImportCas from hexadecimal bytes to uint64, err: %v", err)
 		}
