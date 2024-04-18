@@ -705,13 +705,13 @@ func (dw *DifferWorker) diff() {
 	if err != nil {
 		// This error is very unusual, therefore panic
 		dw.logger.Errorf("Error in converting the bucket UUID %v to required HLV format. err: %v", dw.differ.sourceBucketUUID, err)
-		panic("bucketUUID convertion error")
+		panic(fmt.Sprintf("Source bucketUUID conversion error. err:%v", err))
 	}
 	tgtUUID, err1 := hlv.UUIDtoDocumentSource(dw.differ.targetBucketUUID)
 	if err1 != nil {
 		// This error is very unusual, therefore panic
 		dw.logger.Errorf("Error in converting the bucket UUID %v to required HLV format. err: %v", dw.differ.targetBucketUUID, err1)
-		panic("bucketUUID convertion error")
+		panic(fmt.Sprintf("Target bucketUUID conversion error. err:%v", err1))
 	}
 	for srcColId, sourceResultMap := range dw.sourceResults {
 		for key, sourceResult := range sourceResultMap {
