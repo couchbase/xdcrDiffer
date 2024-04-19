@@ -21,11 +21,61 @@ import (
 	"xdcrDiffer/base"
 	fdp "xdcrDiffer/fileDescriptorPool"
 	"xdcrDiffer/utils"
+
+	xdcrLog "github.com/couchbase/goxdcr/log"
+	"github.com/couchbase/goxdcr/metadata"
+	"github.com/couchbase/goxdcr/service_def"
 )
 
 // For each ColID, the keys that have diffs
 type DiffKeysMap map[uint32][]string
 type MigrationHintMap map[string][]uint32
+
+type pruningWindow struct {
+	duration time.Duration
+	lock     sync.RWMutex
+	isSource bool
+}
+
+var sourcePruningWindow *pruningWindow = &pruningWindow{isSource: true}
+
+var targetPruningWindow *pruningWindow = &pruningWindow{}
+
+func (p *pruningWindow) set(svc service_def.BucketTopologySvc, spec *metadata.ReplicationSpecification) error {
+	subscriberId := "DiffTool"
+	var pruningWindow int
+	if p.isSource {
+		notificationCh, err := svc.SubscribeToLocalBucketFeed(spec, subscriberId)
+		if err != nil {
+			fmt.Printf("Failed to fetch LocalBucketFeed. err=%v\n", err)
+			return err
+		}
+		defer svc.UnSubscribeLocalBucketFeed(spec, subscriberId)
+		latestNotification := <-notificationCh
+		defer latestNotification.Recycle()
+		pruningWindow = latestNotification.GetVersionPruningWindowHrs()
+	} else {
+		notificationCh, err := svc.SubscribeToRemoteBucketFeed(spec, subscriberId)
+		if err != nil {
+			fmt.Printf("Failed to fetch RemoteBucketFeed. err=%v\n", err)
+			return err
+		}
+		defer svc.UnSubscribeRemoteBucketFeed(spec, subscriberId)
+		latestNotification := <-notificationCh
+		defer latestNotification.Recycle()
+		pruningWindow = latestNotification.GetVersionPruningWindowHrs()
+	}
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	p.duration = time.Duration(uint32(pruningWindow)) * time.Hour
+	return nil
+}
+
+func (p *pruningWindow) get() time.Duration {
+	p.lock.RLock()
+	defer p.lock.RUnlock()
+	return p.duration
+}
 
 func (d *DiffKeysMap) GetTotalCount() int {
 	if d == nil {
@@ -164,6 +214,8 @@ func (m MutationDiffFetchListIdx) AddEntry(entry *MutationDifferFetchEntry) {
 type DifferDriver struct {
 	sourceFileDir     string
 	targetFileDir     string
+	sourceBucketUUID  string
+	targetBucketUUID  string
 	diffFileDir       string
 	diffKeysFileName  string
 	numberOfWorkers   int
@@ -186,9 +238,12 @@ type DifferDriver struct {
 	MapLock           *sync.RWMutex
 	srcMigrationHint  MigrationHintMap
 	DuplicatedHint    DuplicatedHintMap
+	bucketTopologySvc service_def.BucketTopologySvc
+	specifiedSpec     *metadata.ReplicationSpecification
+	logger            *xdcrLog.CommonLogger
 }
 
-func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32) *DifferDriver {
+func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32, sourceBucketUUID, targetBucketUUID string, bucketTopologySvc service_def.BucketTopologySvc, specifiedSpec *metadata.ReplicationSpecification, logger *xdcrLog.CommonLogger) *DifferDriver {
 	var fdPool *fdp.FdPool
 	if numberOfFds > 0 {
 		fdPool = fdp.NewFileDescriptorPool(numberOfFds)
@@ -215,12 +270,24 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName
 		TgtVbItemCntMap:   make(map[uint16]int),
 		MapLock:           &sync.RWMutex{},
 		DuplicatedHint:    DuplicatedHintMap{},
+		sourceBucketUUID:  sourceBucketUUID,
+		targetBucketUUID:  targetBucketUUID,
+		bucketTopologySvc: bucketTopologySvc,
+		specifiedSpec:     specifiedSpec,
+		logger:            logger,
 	}
 }
 
 func (dr *DifferDriver) Run() error {
 	loadDistribution := utils.BalanceLoad(dr.numberOfWorkers, base.NumberOfVbuckets)
-
+	err := sourcePruningWindow.set(dr.bucketTopologySvc, dr.specifiedSpec)
+	if err != nil {
+		return err
+	}
+	err1 := targetPruningWindow.set(dr.bucketTopologySvc, dr.specifiedSpec)
+	if err1 != nil {
+		return err1
+	}
 	go dr.reportStatus()
 
 	var differHandlers []*DifferHandler
@@ -407,7 +474,6 @@ func (dh *DifferHandler) run() error {
 		fmt.Printf("%v srcDiff handler failed to initialize. err=%v\n", dh.index, err)
 		return err
 	}
-
 	var vbno uint16
 	for _, vbno = range dh.vbList {
 		srcVbItemCnt := 0
@@ -416,14 +482,15 @@ func (dh *DifferHandler) run() error {
 			sourceFileName := utils.GetFileName(dh.sourceFileDir, vbno, bucketIndex)
 			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex)
 
-			filesDiffer, err := NewFilesDifferWithFDPool(sourceFileName, targetFileName, dh.fileDescPool, dh.collectionMapping, dh.colFilterStrings, dh.colFilterTgtIds)
+			filesDiffer, err := NewFilesDifferWithFDPool(sourceFileName, targetFileName, dh.fileDescPool, dh.collectionMapping, dh.colFilterStrings, dh.colFilterTgtIds, dh.driver.logger)
+			filesDiffer.file1.bucketUUID = dh.driver.sourceBucketUUID
+			filesDiffer.file2.bucketUUID = dh.driver.targetBucketUUID
 			if err != nil {
 				// Most likely FD overrun, program should exit. Print a msg just in case
-				fmt.Printf("Creating file differ for files %v and %v resulted in error: %v\n",
+				dh.driver.logger.Errorf("Creating file differ for files %v and %v resulted in error: %v\n",
 					sourceFileName, targetFileName, err)
 				return err
 			}
-
 			srcDiffMap, tgtDiffMap, migrationHints, diffBytes, err := filesDiffer.Diff()
 			if err != nil {
 				fmt.Printf("error getting srcDiff from file differ. err=%v\n", err)

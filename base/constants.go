@@ -75,9 +75,21 @@ const ClusterRunMaxPortNo uint16 = 9007
 const BodyLength = 104
 const KeyLenVariable = 2
 const MigrationFilterLen = 2
+const xattrSizeLen = 4 // To store the size of the individual Xattr Key-Value pair
 
-func GetFixedSizeMutationLen(keyLen int, colMigrationFilterMatched []uint8) int {
-	return KeyLenVariable + keyLen + BodyLength + MigrationFilterLen + len(colMigrationFilterMatched)*2
+const (
+	JsonBody     = "Body"
+	JsonMetadata = "Metadata"
+	Updated      = "Updated"
+)
+
+// This function is used to calculate the length of the byte array for serializing a mutation
+// @param keyLen denotes the length of the document key
+// @param size denoted the combined length of importCAS and HLV
+// @param colMigrationFilterMatched denotes the list of Migration Filters matched
+func GetFixedSizeMutationLen(keyLen int, size uint32, colMigrationFilterMatched []uint8) int {
+	return KeyLenVariable + keyLen + (2 * xattrSizeLen) + int(size) + BodyLength + MigrationFilterLen + len(colMigrationFilterMatched)*2 // (2*xattrSizeLen - to store the size of importCAS and HLV)
+
 }
 
 var VersionForRBACSupport = []int{5, 0}

@@ -10,6 +10,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -133,6 +134,8 @@ var options struct {
 	debugMode bool
 	// a common setup timeout duration - in seconds
 	setupTimeout int
+	//string denoting the xattrs that shouldn't be compared
+	fileContaingXattrKeysForNoComapre string
 }
 
 func argParse() {
@@ -238,7 +241,8 @@ func argParse() {
 		"The differ to be run with debug log level and the SDK/gocb logging will also be enabled.")
 	flag.IntVar(&options.setupTimeout, "setupTimeout", base.SetupTimeoutSeconds,
 		"Common setup timeout duration in seconds")
-
+	flag.StringVar(&options.fileContaingXattrKeysForNoComapre, "fileContaingXattrKeysForNoComapre", "",
+		"Path to the file containing the Xattr keys for NoCompare ")
 	flag.Parse()
 }
 
@@ -276,6 +280,7 @@ type xdcrDiffTool struct {
 	remoteClusterSvc        service_def.RemoteClusterSvc
 	replicationSpecSvc      service_def.ReplicationSpecSvc
 	collectionsManifestsSvc service_def.CollectionsManifestSvc
+	bucketTopologySvc       service_def.BucketTopologySvc
 	logger                  *xdcrLog.CommonLogger
 
 	xdcrTopologySvc service_def.XDCRCompTopologySvc
@@ -320,6 +325,8 @@ type xdcrDiffTool struct {
 	curState difftoolState
 
 	legacyMode bool
+	//Xattr Keys to be excluded for comparison
+	xattrKeysForNoCompare map[string]bool
 }
 
 func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
@@ -329,8 +336,23 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 		legacyMode:              legacyMode,
 		srcToTgtColIdsMap:       make(map[uint32][]uint32),
 		colFilterToTgtColIdsMap: map[string][]uint32{},
+		xattrKeysForNoCompare:   map[string]bool{},
 	}
-
+	if options.fileContaingXattrKeysForNoComapre != "" {
+		readFile, er := os.Open(options.fileContaingXattrKeysForNoComapre)
+		if er != nil {
+			fmt.Printf("Error in reading the file %v. err=%v\n", options.fileContaingXattrKeysForNoComapre, err)
+			return nil, er
+		}
+		fileScanner := bufio.NewScanner(readFile)
+		fileScanner.Split(bufio.ScanLines)
+		for fileScanner.Scan() {
+			difftool.xattrKeysForNoCompare[fileScanner.Text()] = true
+		}
+	}
+	// HLV and ImportCas needs to be stripped from the Xattrs
+	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_HLV] = true
+	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_IMPORTCAS] = true
 	logCtx := xdcrLog.DefaultLoggerContext
 	difftool.logger = xdcrLog.NewLogger("xdcrDiffTool", xdcrLog.DefaultLoggerContext)
 	if options.debugMode {
@@ -390,13 +412,15 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 			return nil, err
 		}
 
-		bucketTopologySvc, err := service_impl.NewBucketTopologyService(xdcrTopologyMock, difftool.remoteClusterSvc,
+		difftool.bucketTopologySvc, err = service_impl.NewBucketTopologyService(xdcrTopologyMock, difftool.remoteClusterSvc,
 			difftool.utils, xdcrBase.TopologyChangeCheckInterval, difftool.logger.LoggerContext(),
 			difftool.replicationSpecSvc, xdcrBase.HealthCheckInterval, securitySvc, streamApiWatcher.GetStreamApiWatcher)
-
+		if err != nil {
+			return nil, err
+		}
 		difftool.collectionsManifestsSvc, err = metadata_svc.NewCollectionsManifestService(difftool.remoteClusterSvc,
 			difftool.replicationSpecSvc, uiLogSvcMock, difftool.logger.LoggerContext(), difftool.utils, checkpointSvcMock,
-			xdcrTopologyMock, bucketTopologySvc, manifestsSvcMock)
+			xdcrTopologyMock, difftool.bucketTopologySvc, manifestsSvcMock)
 		if err != nil {
 			return nil, err
 		}
@@ -616,7 +640,6 @@ func main() {
 			os.Exit(1)
 		}
 	}
-
 	if options.runDataGeneration {
 		err := difftool.generateDataFiles()
 		if err != nil {
@@ -720,7 +743,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
 		difftool.srcCapabilities, difftool.srcCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity,
-		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode())
+		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode(), difftool.xattrKeysForNoCompare)
 
 	delayDurationBetweenSourceAndTarget := time.Duration(options.delayBetweenSourceAndTarget) * time.Second
 	difftool.logger.Infof("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
@@ -734,7 +757,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval, options.getStatsMaxBackoff,
 		options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
 		difftool.tgtCapabilities, difftool.tgtCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity,
-		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode())
+		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode(), difftool.xattrKeysForNoCompare)
 
 	difftool.curState.mtx.Lock()
 	difftool.curState.state = StateDcpStarted
@@ -765,7 +788,7 @@ func (difftool *xdcrDiffTool) diffDataFiles() error {
 
 	difftoolDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.fileDifferDir,
 		base.DiffKeysFileName, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBins),
-		int(options.numberOfFileDesc), difftool.srcToTgtColIdsMap, difftool.colFilterOrderedKeys, difftool.colFilterOrderedTargetColId)
+		int(options.numberOfFileDesc), difftool.srcToTgtColIdsMap, difftool.colFilterOrderedKeys, difftool.colFilterOrderedTargetColId, difftool.specifiedSpec.SourceBucketUUID, difftool.specifiedSpec.TargetBucketUUID, difftool.bucketTopologySvc, difftool.specifiedSpec, difftool.logger)
 	err = difftoolDriver.Run()
 	if err != nil {
 		difftool.logger.Errorf("Error from diffDataFiles = %v\n", err)
@@ -809,8 +832,8 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 		return
 	}
 
-	mutationDiffer := differ.NewMutationDiffer(difftool.specifiedSpec.SourceBucketName,
-		difftool.selfRef, difftool.specifiedSpec.TargetBucketName, difftool.specifiedRef,
+	mutationDiffer := differ.NewMutationDiffer(difftool.specifiedSpec.SourceBucketName, difftool.specifiedSpec.SourceBucketUUID,
+		difftool.selfRef, difftool.specifiedSpec.TargetBucketName, difftool.specifiedSpec.TargetBucketUUID, difftool.specifiedRef,
 		options.fileDifferDir, options.mutationDifferDir, int(options.numberOfWorkersForMutationDiffer),
 		int(options.mutationDifferBatchSize), int(options.mutationDifferTimeout), int(options.maxNumOfSendBatchRetry),
 		time.Duration(options.sendBatchRetryInterval)*time.Millisecond,
@@ -823,14 +846,14 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 	}
 }
 
-func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bucketBufferCap int, migrationMapping metadata.CollectionNamespaceMapping, mobileCompat int, expDelMode xdcrBase.FilterExpDelType) *dcp.DcpDriver {
+func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bucketBufferCap int, migrationMapping metadata.CollectionNamespaceMapping, mobileCompat int, expDelMode xdcrBase.FilterExpDelType, xattrKeysForNoCompare map[string]bool) *dcp.DcpDriver {
 	waitGroup.Add(1)
 	dcpDriver := dcp.NewDcpDriver(logger, name, url, bucketName, ref, fileDir, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBins),
 		int(dcpHandlerChanSize), time.Duration(bucketOpTimeout)*time.Second, int(maxNumOfGetStatsRetry),
 		time.Duration(getStatsRetryInterval)*time.Second, time.Duration(getStatsMaxBackoff)*time.Second,
 		int(checkpointInterval), errChan, waitGroup, completeBySeqno, fdPool, filter, capabilities, collectionIDs, colMigrationFilters,
-		utils, bucketBufferCap, migrationMapping, mobileCompat, expDelMode)
+		utils, bucketBufferCap, migrationMapping, mobileCompat, expDelMode, xattrKeysForNoCompare)
 	// dcp driver startup may take some time. Do it asynchronously
 	go startDcpDriverAysnc(dcpDriver, errChan, logger)
 	return dcpDriver
