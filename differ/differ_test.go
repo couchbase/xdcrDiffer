@@ -555,7 +555,7 @@ func Test_compareHlv(t *testing.T) {
 		},
 		//Test5 : both the HLVs are present - with PV pruned in one of them
 		{
-			name: "HLV present at both source and target with Missing PVs ",
+			name: "HLV present at both source and target with Missing PVs(Pruned version at Target) ",
 			args: args{
 				hlv1:        generateHLV(sourceBucketUUID, 30, 20, sourceBucketUUID, 20, hlv.VersionsMap{hlv.DocumentSourceId(randomString(10)): 1}, nil),
 				hlv2:        generateHLV(targetBucketUUID, 30, 30, sourceBucketUUID, 30, hlv.VersionsMap{}, nil),
