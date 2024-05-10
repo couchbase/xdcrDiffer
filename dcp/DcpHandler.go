@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"xdcrDiffer/base"
@@ -29,6 +30,7 @@ import (
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/couchbase/goxdcr/metadata"
 	xdcrUtils "github.com/couchbase/goxdcr/utils"
+	"github.com/couchbaselabs/gojsonsm"
 )
 
 // implements StreamObserver
@@ -541,7 +543,8 @@ func (mut *Mutation) Serialize() ([]byte, error) {
 	var bodyHash [64]byte
 	var xattrSize uint32
 	var xattr []byte
-	var bodyWithoutXattr, trimmedXattrPlusBody, hlv, importCas []byte
+	var bodyWithoutXattr, trimmedXattrPlusBody, hlv []byte
+	var importCas, pRev uint64
 	var err error
 	if mut.Datatype&xdcrBase.XattrDataType > 0 {
 		var KVsToBeExcluded map[string][]byte
@@ -556,17 +559,21 @@ func (mut *Mutation) Serialize() ([]byte, error) {
 			return nil, err
 		}
 		hlv = KVsToBeExcluded[xdcrBase.XATTR_HLV]
-		importCas = KVsToBeExcluded[xdcrBase.XATTR_IMPORTCAS]
+		mou, ok := KVsToBeExcluded[xdcrBase.XATTR_MOU]
+		if ok {
+			importCas, pRev, err = GetImportCasAndPrevFromMou(mou)
+			if err != nil {
+				return nil, err
+			}
+		}
 		bodyHash = sha512.Sum512(trimmedXattrPlusBody)
 	} else {
 		bodyHash = sha512.Sum512(mut.Value)
 	}
 
-	hlvLen := uint32(len(hlv))
-	importCasLen := uint32(len(importCas))
-	hlvPlusImportSize := hlvLen + importCasLen
+	hlvLen := uint64(len(hlv))
 	keyLen := len(mut.Key)
-	ret := make([]byte, base.GetFixedSizeMutationLen(keyLen, hlvPlusImportSize, mut.ColFiltersMatched))
+	ret := make([]byte, base.GetFixedSizeMutationLen(keyLen, hlvLen, mut.ColFiltersMatched))
 
 	pos := 0
 	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(keyLen))
@@ -587,14 +594,14 @@ func (mut *Mutation) Serialize() ([]byte, error) {
 	pos += 2
 	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(mut.Datatype))
 	pos += 2
-	binary.BigEndian.PutUint32(ret[pos:pos+4], hlvLen)
-	pos += 4
+	binary.BigEndian.PutUint64(ret[pos:pos+8], importCas)
+	pos += 8
+	binary.BigEndian.PutUint64(ret[pos:pos+8], pRev)
+	pos += 8
+	binary.BigEndian.PutUint64(ret[pos:pos+8], hlvLen)
+	pos += 8
 	copy(ret[pos:pos+int(hlvLen)], hlv)
 	pos += int(hlvLen)
-	binary.BigEndian.PutUint32(ret[pos:pos+4], importCasLen)
-	pos += 4
-	copy(ret[pos:pos+int(importCasLen)], importCas)
-	pos += int(importCasLen)
 	copy(ret[pos:], bodyHash[:])
 	pos += 64
 	binary.BigEndian.PutUint32(ret[pos:pos+4], mut.ColId)
@@ -653,4 +660,35 @@ func removeKVSubsetFromXattr(xattr []byte, size int, xattrSize uint32, xattrIter
 	}
 	trimmedXattrPlusBody, _ = xattrComposer.FinishAndAppendDocValue(bodyWithoutXattr)
 	return trimmedXattrPlusBody, KVsToBeExcluded, nil
+}
+
+func GetImportCasAndPrevFromMou(mou []byte) (importCas uint64, pRev uint64, err error) {
+	if xdcrBase.Equals(mou, xdcrBase.EmptyJsonObject) {
+		return
+	}
+	newMou := make([]byte, len(mou))
+	removedFromMou := make(map[string][]byte)
+	_, _, _, err = gojsonsm.MatchAndRemoveItemsFromJsonObject(mou, xdcrBase.MouXattrValuesForCR, newMou, removedFromMou)
+	if err != nil {
+		return
+	}
+	xattrImportCas, foundImportCas := removedFromMou[xdcrBase.IMPORTCAS]
+	xattrPRev, foundPRev := removedFromMou[xdcrBase.PREVIOUSREV]
+	if foundImportCas && xattrImportCas != nil {
+		// Remove the start/end quotes before converting it to uint64
+		xattrLen := len(xattrImportCas)
+		importCas, err = xdcrBase.HexLittleEndianToUint64(xattrImportCas[1 : xattrLen-1])
+		if err != nil {
+			return
+		}
+	}
+	if foundPRev && xattrPRev != nil {
+		// Remove the start/end quotes before converting it to uint64
+		xattrLen := len(xattrPRev)
+		pRev, err = strconv.ParseUint(string(xattrPRev[1:xattrLen-1]), 10, 64)
+		if err != nil {
+			return
+		}
+	}
+	return
 }

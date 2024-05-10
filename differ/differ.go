@@ -20,7 +20,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 	fdp "xdcrDiffer/fileDescriptorPool"
 	"xdcrDiffer/utils"
 
@@ -114,18 +113,12 @@ func NewFileAttribute(fileName string) *FileAttributes {
 
 type oneEntry struct {
 	Key               string
+	CrMeta            *crMeta.CRMetadata
+	pRev              uint64
 	BucketUUID        hlv.DocumentSourceId
 	Seqno             uint64
-	RevId             uint64
-	Cas               uint64
-	ImportCas         uint64
-	Flags             uint32
-	Expiry            uint32
-	OpCode            gomemcached.CommandCode
-	Datatype          uint8
 	Xattr             []byte
 	XattrSize         uint32
-	Hlv               *hlv.HLV
 	BodyHash          [sha512.Size]byte
 	ColId             uint32
 	ColMigrFilterLen  uint8
@@ -133,8 +126,9 @@ type oneEntry struct {
 }
 
 func (oneEntry *oneEntry) String() string {
+	docMeta := oneEntry.CrMeta.GetDocumentMetadata()
 	return fmt.Sprintf("<Key>: %v <Seqno>: %v <RevId>: %v <Cas>: %v <Flags>: %v <Expiry>: %v <OpCode>: %v <DataType>: %v <Hash>: %s <colId>: %v",
-		oneEntry.Key, oneEntry.Seqno, oneEntry.RevId, oneEntry.Cas, oneEntry.Flags, oneEntry.Expiry, oneEntry.OpCode, oneEntry.Datatype, hex.EncodeToString(oneEntry.BodyHash[:]), oneEntry.ColId)
+		oneEntry.Key, oneEntry.Seqno, docMeta.RevSeq, docMeta.Cas, docMeta.Flags, docMeta.Expiry, docMeta.Opcode, docMeta.DataType, hex.EncodeToString(oneEntry.BodyHash[:]), oneEntry.ColId)
 }
 
 type entryPair [2]*oneEntry
@@ -159,135 +153,74 @@ func shaCompare(a, b [sha512.Size]byte) bool {
 //
 // -1 - If entry name < other name
 func (entry oneEntry) Diff(other oneEntry) (int, bool) {
+	var err error
+	var match bool
 	if entry.Key != other.Key {
 		if entry.Key > other.Key {
 			return 1, false
 		} else {
 			return -1, false
 		}
-	} else if entry.OpCode != other.OpCode {
+	}
+	sourceDocMeta := entry.CrMeta.GetDocumentMetadata()
+	targetDocMeta := other.CrMeta.GetDocumentMetadata()
+	currSourceCas := sourceDocMeta.Cas
+	currTargetCas := targetDocMeta.Cas
+	SetVersion(entry.CrMeta, entry.pRev)
+	SetVersion(other.CrMeta, other.pRev)
+
+	err = SetHlv(entry.CrMeta, other.CrMeta, entry.BucketUUID, other.BucketUUID)
+	if err != nil {
+		// An err is populated only if implict construction of HLVs are not possible --> this implies that there is a diff
 		return 0, false
-	} else if entry.OpCode == gomemcached.UPR_MUTATION {
-		entryRevId := entry.GetRevId()
-		otherRevId := other.GetRevId()
-		if entryRevId != otherRevId && entryRevId != 0 && otherRevId != 0 { //Darshan : RevId comparison should be revisited
-			return 0, false
-		} else if entry.GetVersion() != other.GetVersion() {
-			return 0, false
-		} else if entry.Flags != other.Flags {
-			return 0, false
-		} else if !shaCompare(entry.BodyHash, other.BodyHash) {
-			return 0, false
-		} else if entry.Datatype != other.Datatype {
-			return 0, false
-		} else if !compareHlv(entry.Hlv, other.Hlv, entry.Cas, other.Cas, entry.BucketUUID, other.BucketUUID) {
-			return 0, false
+	}
+	match, err = entry.CrMeta.Diff(other.CrMeta, xdcrBase.GetHLVPruneFunction(currSourceCas, sourcePruningWindow.get()), xdcrBase.GetHLVPruneFunction(currTargetCas, targetPruningWindow.get()))
+	if err != nil { // error is returned by the Diff method only if either of the HLVs are nil
+		if entry.CrMeta.GetHLV() == nil && other.CrMeta.GetHLV() == nil { // if both the HLVs are nil return true
+			return 0, true
+		} else { // if only one them if nil => its a programming error(should not happen)
+			panic(fmt.Sprintf("Programming error - found one of HLVs to be nil. SourceHlv: %v, TargetHlv: %v", entry.CrMeta.GetHLV(), other.CrMeta.GetHLV()))
 		}
 	}
-	return 0, true
+	return 0, match
 }
 
-func compareHlv(hlv1, hlv2 *hlv.HLV, cas1, cas2 uint64, bucketUUID1, bucketUUID2 hlv.DocumentSourceId) bool {
-	//if both(source and target) have no HLV we return true
-	if hlv1 == nil && hlv2 == nil {
-		return true
-	} else if hlv1 != nil && hlv2 == nil { //this is the case where the document is replicated from target to source
-		if hlv1.GetCvSrc() != bucketUUID2 || hlv1.GetCvVer() != cas2 {
-			return false
+func SetHlv(crMeta1, crMeta2 *crMeta.CRMetadata, bucketUUID1, bucketUUID2 hlv.DocumentSourceId) error {
+	hlv1 := crMeta1.GetHLV()
+	hlv2 := crMeta2.GetHLV()
+	cas1 := crMeta1.GetDocumentMetadata().Cas
+	cas2 := crMeta2.GetDocumentMetadata().Cas
+	// if both the HLVS are nil or if both are present then take no action
+	if hlv1 != nil && hlv2 == nil { //this is the case where the document is replicated from target to source
+		if hlv1.GetCvSrc() != bucketUUID2 || hlv1.GetCvVer() != cas2 { // this implies that the source did not recieve the document from the target(cannot implicitly construct HLV for target)
+			return fmt.Errorf("Implicit construction of target HLV not possible")
 		} else {
-			hlv2, _ = hlv.NewHLV(bucketUUID2, cas2, 0, "", 0, nil, nil)
+			newHlv, _ := hlv.NewHLV(bucketUUID2, cas2, 0, "", 0, nil, nil)
+			crMeta2.SetHLV(newHlv)
 		}
-	} else if hlv1 == nil && hlv2 != nil { //this is the case where the document is replicated from source to target
+	}
+	if hlv1 == nil && hlv2 != nil { //this is the case where the document is replicated from source to target
 		if hlv2.GetCvSrc() != bucketUUID1 || hlv2.GetCvVer() != cas1 {
-			return false
+			return fmt.Errorf("Implicit construction of source HLV not possible")
 		} else {
-			hlv1, _ = hlv.NewHLV(bucketUUID1, cas1, 0, "", 0, nil, nil)
+			newHlv, _ := hlv.NewHLV(bucketUUID1, cas1, 0, "", 0, nil, nil)
+			crMeta1.SetHLV(newHlv)
 		}
 	}
-	return compareHlvItems(hlv1, hlv2, cas1, cas2)
-}
-
-func compareHlvItems(item1 *hlv.HLV, item2 *hlv.HLV, item1Cas uint64, item2Cas uint64) bool {
-	// the HLVs that this function recieves is up to date
-	if item1.GetCvCas() != item2.GetCvCas() {
-		return false
-	} else if item1.GetCvSrc() != item2.GetCvSrc() || item1.GetCvVer() != item2.GetCvVer() {
-		return false
-	} else if !comparePv(item1.GetPV(), item2.GetPV(), item1Cas, item2Cas) {
-		return false
-	}
-	return true
-}
-
-// Darshan:TODO Accomodate the CAS delta computation inorder to reduce the PV size MB-60961
-func comparePv(Pv1 hlv.VersionsMap, Pv2 hlv.VersionsMap, cas1 uint64, cas2 uint64) bool {
-	if len(Pv1) == len(Pv2) {
-		for key, value1 := range Pv1 {
-			value2, ok := Pv2[key]
-			if !ok {
-				return false
-			} else {
-				if value1 != value2 {
-					return false
-				}
-			}
-		}
-	} else { // Unequal length implies that the PVs are pruned
-		srcPruningWindow := sourcePruningWindow.get()
-		tgtPruningWindow := targetPruningWindow.get()
-		var pruningWindow time.Duration
-		iteratePv := Pv1
-		otherPv := Pv2
-		cas := cas1
-		pruningWindow = srcPruningWindow
-		if len(Pv2) > len(Pv1) {
-			iteratePv = Pv2
-			otherPv = Pv1
-			cas = cas2
-			pruningWindow = tgtPruningWindow
-		}
-		for key, value1 := range iteratePv {
-			value2, ok := otherPv[key]
-			if !ok {
-				if xdcrBase.CasDuration(value1, cas) < pruningWindow {
-					return false
-				}
-				continue
-			}
-			if value1 != value2 {
-				return false
-			}
-		}
-	}
-	return true
+	return nil
 }
 
 // Darshan:TODO Add compare MV when merge is implemented
-// Darshan:TODO Add the prev Revid support when MB-60385 is checked-in
-func (entry oneEntry) GetRevId() uint64 {
-	if entry.ImportCas == entry.Cas {
-		return 0
-	} else {
-		return entry.RevId
-	}
-}
-
-func (entry oneEntry) GetVersion() uint64 {
-	if entry.ImportCas == 0 {
-		return entry.Cas
-	} else {
-		if entry.Cas == entry.ImportCas {
-			return entry.Hlv.GetCvCas()
-		} else if entry.Cas < entry.ImportCas {
-			panic("Import Cas never be greater than the doc cas")
-		} else {
-			return entry.Cas
-		}
+func SetVersion(crMetadata *crMeta.CRMetadata, pRev uint64) {
+	docMeta := crMetadata.GetDocumentMetadata()
+	if crMetadata.GetImportCas() == docMeta.Cas {
+		docMeta.Cas = crMetadata.GetHLV().GetCvCas()
+		docMeta.RevSeq = pRev
 	}
 }
 
 func (entry *oneEntry) IsMutation() bool {
-	return entry.OpCode == gomemcached.UPR_MUTATION
+	return entry.CrMeta.GetDocumentMetadata().Opcode == gomemcached.UPR_MUTATION
 }
 
 func (srcEntry *oneEntry) MapsToTargetCol(tgtColId uint32, colFilterTgtIds []uint32, currentTgtFileColId uint32) bool {
@@ -369,6 +302,8 @@ func constructHlv(docCas uint64, importCAS uint64, bucketUUID hlv.DocumentSource
 
 func getOneEntry(readOp fdp.FileOp, bucketUUID hlv.DocumentSourceId) (*oneEntry, error) {
 	entry := &oneEntry{}
+	docMeta := &xdcrBase.DocumentMetadata{}
+	entry.CrMeta = &crMeta.CRMetadata{}
 	entry.BucketUUID = bucketUUID
 	keyLenBytes := make([]byte, 2)
 	bytesRead, err := readOp(keyLenBytes)
@@ -396,80 +331,78 @@ func getOneEntry(readOp fdp.FileOp, bucketUUID hlv.DocumentSourceId) (*oneEntry,
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read revIdBytes, bytes read: %v, err: %v", bytesRead, err)
 	}
-	entry.RevId = binary.BigEndian.Uint64(revIdBytes)
+	docMeta.RevSeq = binary.BigEndian.Uint64(revIdBytes)
 
 	casBytes := make([]byte, 8)
 	bytesRead, err = readOp(casBytes)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read casBytes, bytes read: %v, err: %v", bytesRead, err)
 	}
-	entry.Cas = binary.BigEndian.Uint64(casBytes)
+	docMeta.Cas = binary.BigEndian.Uint64(casBytes)
 
 	flagBytes := make([]byte, 4)
 	bytesRead, err = readOp(flagBytes)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read flagsBytes, bytes read: %v, err: %v", bytesRead, err)
 	}
-	entry.Flags = binary.BigEndian.Uint32(flagBytes)
+	docMeta.Flags = binary.BigEndian.Uint32(flagBytes)
 
 	expiryBytes := make([]byte, 4)
 	bytesRead, err = readOp(expiryBytes)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read expiryBytes, bytes read: %v, err: %v", bytesRead, err)
 	}
-	entry.Expiry = binary.BigEndian.Uint32(expiryBytes)
+	docMeta.Expiry = binary.BigEndian.Uint32(expiryBytes)
 
 	opCodeBytes := make([]byte, 2)
 	bytesRead, err = readOp(opCodeBytes)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read opCodeBytes, bytes read: %v, err: %v", bytesRead, err)
 	}
-	entry.OpCode = gomemcached.CommandCode(binary.BigEndian.Uint16(opCodeBytes))
+	docMeta.Opcode = gomemcached.CommandCode(binary.BigEndian.Uint16(opCodeBytes))
 
 	dataTypeBytes := make([]byte, 2)
 	bytesRead, err = readOp(dataTypeBytes)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read dataTypeBytes, bytes read: %v, err: %v", bytesRead, err)
 	}
-	entry.Datatype = uint8(binary.BigEndian.Uint16(dataTypeBytes))
+	docMeta.DataType = uint8(binary.BigEndian.Uint16(dataTypeBytes))
 
-	hlvSizebytes := make([]byte, 4)
+	importCasBytes := make([]byte, 8)
+	bytesRead, err = readOp(importCasBytes)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to read importCasBytes, bytes read: %v, err: %v", bytesRead, err)
+	}
+	entry.CrMeta.SetImportCas(binary.BigEndian.Uint64(importCasBytes))
+
+	pRevIdBytes := make([]byte, 8)
+	bytesRead, err = readOp(pRevIdBytes)
+	if err != nil {
+		return nil, fmt.Errorf("Unable to read pRevIdBytes, bytes read: %v, err: %v", bytesRead, err)
+	}
+	entry.pRev = binary.BigEndian.Uint64(pRevIdBytes)
+
+	hlvSizebytes := make([]byte, 8)
 	bytesRead, err = readOp(hlvSizebytes)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read HlvSizeBytes, bytes read: %v, err: %v", bytesRead, err)
 	}
-	hlvSize := uint32(binary.BigEndian.Uint32(hlvSizebytes))
+	hlvSize := binary.BigEndian.Uint64(hlvSizebytes)
+
 	HlvBytes := make([]byte, hlvSize)
 	bytesRead, err = readOp(HlvBytes)
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read hlv, bytes read: %v, err: %v", bytesRead, err)
 	}
-
-	importSizebytes := make([]byte, 4)
-	bytesRead, err = readOp(importSizebytes)
-	if err != nil {
-		return nil, fmt.Errorf("Unable to read ImportSizeBytes, bytes read: %v, err: %v", bytesRead, err)
-	}
-	importSize := uint32(binary.BigEndian.Uint32(importSizebytes))
-	importBytes := make([]byte, importSize)
-	bytesRead, err = readOp(importBytes)
-	if err != nil {
-		return nil, fmt.Errorf("Unable to read importCas, bytes read: %v, err: %v", bytesRead, err)
-	}
-	if len(importBytes) != 0 {
-		entry.ImportCas, err = xdcrBase.HexLittleEndianToUint64(importBytes[1 : importSize-1])
-		if err != nil {
-			return nil, fmt.Errorf("Unable to convert ImportCas from hexadecimal bytes to uint64, err: %v", err)
-		}
-	}
 	if len(HlvBytes) != 0 {
-
-		entry.Hlv, err = constructHlv(entry.Cas, entry.ImportCas, entry.BucketUUID, HlvBytes)
+		var hlv *hlv.HLV
+		hlv, err = constructHlv(docMeta.Cas, entry.CrMeta.GetImportCas(), entry.BucketUUID, HlvBytes)
+		entry.CrMeta.SetHLV(hlv)
 		if err != nil {
 			return nil, fmt.Errorf("Error in constructing HLV, err: %v", err)
 		}
 	} else {
-		entry.Hlv = nil
+		entry.CrMeta.SetHLV(nil)
 	}
 	hashBytes := make([]byte, sha512.Size)
 	bytesRead, err = readOp(hashBytes)
@@ -502,6 +435,7 @@ func getOneEntry(readOp fdp.FileOp, bucketUUID hlv.DocumentSourceId) (*oneEntry,
 		colFilterIds = append(colFilterIds, uint8(binary.BigEndian.Uint16(idByte)))
 	}
 	entry.ColFiltersMatched = colFilterIds
+	entry.CrMeta.SetDocumentMetadata(docMeta)
 	return entry, nil
 }
 

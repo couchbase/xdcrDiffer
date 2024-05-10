@@ -352,7 +352,8 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 	}
 	// HLV and ImportCas needs to be stripped from the Xattrs
 	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_HLV] = true
-	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_IMPORTCAS] = true
+	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_MOU] = true
+	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_MOBILE] = true
 	logCtx := xdcrLog.DefaultLoggerContext
 	difftool.logger = xdcrLog.NewLogger("xdcrDiffTool", xdcrLog.DefaultLoggerContext)
 	if options.debugMode {

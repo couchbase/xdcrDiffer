@@ -16,6 +16,7 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +25,7 @@ import (
 	"xdcrDiffer/utils"
 
 	"github.com/couchbase/gocbcore/v10"
+	"github.com/couchbase/gomemcached"
 	xdcrBase "github.com/couchbase/goxdcr/base"
 	xdcrCrMeta "github.com/couchbase/goxdcr/crMeta"
 	hlv "github.com/couchbase/goxdcr/hlv"
@@ -947,11 +949,11 @@ func (b *batch) get(key string, isSource bool, compareType string, colId uint32)
 		b.resultsLock.RUnlock()
 
 		if err != nil {
-			b.dw.logger.Errorf("Subdoc-get error occured for doc %v. err:%v\n", key, err)
+			b.dw.logger.Debugf("Subdoc-get error occured for doc %v. err:%v\n", key, err)
 		} else {
 			getResult.lock.Lock()
 			defer getResult.lock.Unlock()
-			getResult.HLV, getResult.importCas, getResult.parsingErr = getHlvImportCas(bucketUUID, result)
+			getResult.HLV, getResult.importCas, getResult.pRev, getResult.parsingErr = getHlvImportCas(bucketUUID, result)
 		}
 		b.waitGroup.Done()
 	}
@@ -1014,6 +1016,14 @@ func areGetResultsBodyTheSame(result1, result2 *GetResult) bool {
 	return reflect.DeepEqual(result1.Value, result2.Value)
 }
 
+// This function is used to docMeta for metadata comparison
+func NewDocMeta(result *GetResult) *xdcrBase.DocumentMetadata {
+	// This function is called if and only if both the documents on source and target are not deleted. So it is safe to hardcode the opcode to UPR_MUTATION.
+	// (crMeta.Diff() method compares the metadata only if the opcodes are equal to UPR_MUTATION).Hence setting it to UPR_MUTATION makes sure that metadata is compared.
+	return &xdcrBase.DocumentMetadata{Cas: uint64(result.Cas), RevSeq: uint64(result.SeqNo), Flags: result.Flags, Expiry: result.Expiry, DataType: result.Datatype, Opcode: gomemcached.UPR_MUTATION}
+
+}
+
 func areGetResultsTheSame(result1, result2 *GetResult, sourceUUID, targetUUID hlv.DocumentSourceId, includeBody bool) (bool, error) {
 	if result1.GetMetaResult == nil && result2.GetMetaResult == nil {
 		return true, nil
@@ -1031,15 +1041,43 @@ func areGetResultsTheSame(result1, result2 *GetResult, sourceUUID, targetUUID hl
 		}
 	} else if isDeleted(result1.GetMetaResult) && isDeleted(result2.GetMetaResult) {
 		return true, nil
+	} else if isDeleted(result1.GetMetaResult) && !isDeleted(result2.GetMetaResult) {
+		return false, nil
+	} else if !isDeleted(result1.GetMetaResult) && isDeleted(result2.GetMetaResult) {
+		return false, nil
 	} else {
 		// Only compare json and Xattr bits of the datatype
 		if result1.parsingErr != nil || result2.parsingErr != nil {
-			return false, fmt.Errorf("Cannot compare metadata for document with key %v due to HLV parsing error either at the source or at target. SourceErr: %v TargetError: %v", result1.key, result1.parsingErr, result2.parsingErr)
+			return false, fmt.Errorf("cannot compare metadata for document with key %v due to HLV parsing error either at the source or at target. SourceErr: %v TargetError: %v", result1.key, result1.parsingErr, result2.parsingErr)
 		}
-		metaSame := result1.Cas == result2.Cas && result1.SeqNo == result2.SeqNo && result1.Flags == result2.Flags &&
-			result1.Expiry == result2.Expiry && result1.Deleted == result2.Deleted && (result1.Datatype&base.JSONDataType == result2.Datatype&base.JSONDataType) &&
-			(result1.Datatype&xdcrBase.XattrDataType == result2.Datatype&xdcrBase.XattrDataType) && compareHlv(result1.HLV, result2.HLV, uint64(result1.Cas), uint64(result2.Cas), sourceUUID, targetUUID)
+		sourceCrMeta := &xdcrCrMeta.CRMetadata{}
+		targetCrMeta := &xdcrCrMeta.CRMetadata{}
 
+		sourceCrMeta.SetDocumentMetadata(NewDocMeta(result1))
+		sourceCrMeta.SetImportCas(result1.importCas)
+		sourceCrMeta.SetHLV(result1.HLV)
+
+		targetCrMeta.SetDocumentMetadata(NewDocMeta(result2))
+		targetCrMeta.SetImportCas(result2.importCas)
+		targetCrMeta.SetHLV(result2.HLV)
+
+		SetVersion(sourceCrMeta, result1.pRev)
+		SetVersion(targetCrMeta, result2.pRev)
+		err := SetHlv(sourceCrMeta, targetCrMeta, sourceUUID, targetUUID)
+		if err != nil {
+			// An err is populated only if implict construction of HLVs are not possible --> this implies that there is a diff
+			// return false and ignore the error.
+			return false, nil
+		}
+		metaSame, err1 := sourceCrMeta.Diff(targetCrMeta, xdcrBase.GetHLVPruneFunction(uint64(result1.Cas), sourcePruningWindow.get()), xdcrBase.GetHLVPruneFunction(uint64(result2.Cas), targetPruningWindow.get()))
+		if err1 != nil {
+			if sourceCrMeta.GetHLV() == nil && targetCrMeta.GetHLV() == nil { // if both the HLVs are nil return true
+				// If crMeta reports an error the metaSame will be set to false, so reset it to true since the HLVs are absent
+				metaSame = true
+			} else { // if only one them if nil => its a programming error(should not happen)
+				panic(fmt.Sprintf("Programming error - found one of HLVs to be nil. SourceHlv: %v, TargetHlv: %v", sourceCrMeta.GetHLV(), targetCrMeta.GetHLV() == nil))
+			}
+		}
 		if includeBody {
 			bodySame := areGetResultsBodyTheSame(result1, result2)
 			return (metaSame && bodySame), nil
@@ -1048,23 +1086,35 @@ func areGetResultsTheSame(result1, result2 *GetResult, sourceUUID, targetUUID hl
 	}
 }
 
-func getHlvImportCas(bucketUUID string, result *gocbcore.LookupInResult) (Hlv *hlv.HLV, importCas uint64, err error) {
+func getHlvImportCas(bucketUUID string, result *gocbcore.LookupInResult) (Hlv *hlv.HLV, importCas uint64, pRev uint64, err error) {
 	if result == nil {
 		return
 	}
 	var importCasBytes []byte
 	var hlvBytes []byte
-	if result.Ops[1].Err == nil {
-		importCasBytes = result.Ops[1].Value
-	}
+	var pRevBytes []byte
 	if result.Ops[0].Err == nil {
 		hlvBytes = result.Ops[0].Value
 	}
-	importLen := len(importCasBytes)
+	if result.Ops[1].Err == nil {
+		importCasBytes = result.Ops[1].Value
+	}
+	if result.Ops[2].Err == nil {
+		pRevBytes = result.Ops[2].Value
+	}
 	hlvLen := len(hlvBytes)
+	importLen := len(importCasBytes)
+	pRevLen := len(pRevBytes)
 	if importCasBytes != nil && importLen != 0 {
 		// Remove the start/end quotes before converting it to uint64
 		importCas, err = xdcrBase.HexLittleEndianToUint64(importCasBytes[1 : importLen-1])
+		if err != nil {
+			return
+		}
+	}
+	if pRevBytes != nil && pRevLen != 0 {
+		// Remove the start/end quotes before converting it to uint64
+		pRev, err = strconv.ParseUint(string(pRevBytes[1:pRevLen-1]), 10, 64)
 		if err != nil {
 			return
 		}
@@ -1092,6 +1142,7 @@ type GetResult struct {
 	key        string
 	Value      []byte
 	importCas  uint64
+	pRev       uint64
 	bodyErr    error
 	metaErr    error
 	parsingErr error

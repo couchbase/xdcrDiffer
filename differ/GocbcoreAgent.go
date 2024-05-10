@@ -150,6 +150,12 @@ func (a *GocbcoreAgent) GetHlv(key string, callbackFunc func(result *gocbcore.Lo
 				Path:  xdcrBase.XATTR_IMPORTCAS,
 				Value: nil,
 			},
+			{
+				Op:    memd.SubDocOpType(memd.CmdSubDocGet),
+				Flags: memd.SubdocFlag(xdcrBase.SUBDOC_FLAG_XATTR),
+				Path:  xdcrBase.XATTR_PREVIOUSREV,
+				Value: nil,
+			},
 		},
 		RetryStrategy: nil,
 		CollectionID:  colId,
