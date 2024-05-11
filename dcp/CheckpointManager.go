@@ -350,11 +350,16 @@ func (cm *CheckpointManager) getStatsWithRetry() (map[string]map[string]string, 
 			if cbErr != nil {
 				err = cbErr
 			} else {
+				errMap := make(xdcrBase.ErrorMap)
 				for server, singleServerStats := range result.Servers {
 					if singleServerStats.Error != nil {
-						err = singleServerStats.Error
-						return
+						errMap[server] = singleServerStats.Error
+						// Even if there is one error, we should continue
+						cm.logger.Errorf("StatsMap for server %v received err: %v", server,
+							singleServerStats.Error)
+						continue
 					}
+					cm.logger.Debugf("Server %v received stats %v", server, singleServerStats.Stats)
 					statsMap[server] = make(map[string]string)
 					for k, v := range singleServerStats.Stats {
 						statsMap[server][k] = v
@@ -563,9 +568,9 @@ func (cm *CheckpointManager) RecordFilterEvent(vbno uint16, filterResult base.Fi
 }
 
 // no need to lock seqoMap since
-// 1. MutationProcessedEvent on a Vbno are serialized
-// 2. checkpointManager reads seqnoMap when it saves checkpoints.
-//    This is done after all DcpHandlers are stopped and MutationProcessedEvent cease to happen
+//  1. MutationProcessedEvent on a Vbno are serialized
+//  2. checkpointManager reads seqnoMap when it saves checkpoints.
+//     This is done after all DcpHandlers are stopped and MutationProcessedEvent cease to happen
 func (cm *CheckpointManager) HandleMutationEvent(mut *Mutation, filterResult base.FilterResultType) bool {
 	if cm.dcpDriver.completeBySeqno {
 		endSeqno := cm.endSeqnoMap[mut.Vbno]
