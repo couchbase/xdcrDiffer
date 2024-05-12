@@ -12,18 +12,19 @@ package dcp
 import (
 	"crypto/tls"
 	"fmt"
-	gocb "github.com/couchbase/gocb/v2"
-	gocbcore "github.com/couchbase/gocbcore/v9"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	xdcrLog "github.com/couchbase/goxdcr/log"
-	"github.com/couchbase/goxdcr/metadata"
-	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 	"xdcrDiffer/base"
 	"xdcrDiffer/utils"
+
+	gocb "github.com/couchbase/gocb/v2"
+	gocbcore "github.com/couchbase/gocbcore/v9"
+	xdcrBase "github.com/couchbase/goxdcr/base"
+	xdcrLog "github.com/couchbase/goxdcr/log"
+	"github.com/couchbase/goxdcr/metadata"
+	xdcrUtils "github.com/couchbase/goxdcr/utils"
 )
 
 type DcpClient struct {
@@ -261,6 +262,7 @@ func initializeBucketWithSecurity(dcpDriver *DcpDriver, kvVbMap map[string][]uin
 		auth = &base.CertificateAuth{
 			PasswordAuth:     pwAuth,
 			CertificateBytes: dcpDriver.ref.Certificate(),
+			PrivateKey:       dcpDriver.privateKey,
 		}
 
 		sslPort, found := kvSSLPortMap[bucketConnStr]

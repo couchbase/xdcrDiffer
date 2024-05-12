@@ -13,15 +13,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	xdcrParts "github.com/couchbase/goxdcr/base/filter"
-	xdcrLog "github.com/couchbase/goxdcr/log"
-	"github.com/couchbase/goxdcr/metadata"
-	"github.com/couchbase/goxdcr/metadata_svc"
-	"github.com/couchbase/goxdcr/service_def"
-	service_def_mock "github.com/couchbase/goxdcr/service_def/mocks"
-	xdcrUtils "github.com/couchbase/goxdcr/utils"
-	"github.com/stretchr/testify/mock"
 	"io/ioutil"
 	"net"
 	"os"
@@ -34,6 +25,16 @@ import (
 	"xdcrDiffer/differ"
 	fdp "xdcrDiffer/fileDescriptorPool"
 	"xdcrDiffer/utils"
+
+	xdcrBase "github.com/couchbase/goxdcr/base"
+	xdcrParts "github.com/couchbase/goxdcr/base/filter"
+	xdcrLog "github.com/couchbase/goxdcr/log"
+	"github.com/couchbase/goxdcr/metadata"
+	"github.com/couchbase/goxdcr/metadata_svc"
+	"github.com/couchbase/goxdcr/service_def"
+	service_def_mock "github.com/couchbase/goxdcr/service_def/mocks"
+	xdcrUtils "github.com/couchbase/goxdcr/utils"
+	"github.com/stretchr/testify/mock"
 )
 
 var done = make(chan bool)
@@ -126,6 +127,10 @@ var options struct {
 	debugMode bool
 	// a common setup timeout duration - in seconds
 	setupTimeout int
+	// takes in the source private key as input - for TLS
+	sourcePrivateKey string
+	// takes in the target private key for - for TLS
+	targetPrivateKey string
 }
 
 func argParse() {
@@ -231,6 +236,10 @@ func argParse() {
 		"The differ to be run with debug log level and the SDK/gocb logging will also be enabled.")
 	flag.IntVar(&options.setupTimeout, "setupTimeout", base.SetupTimeoutSeconds,
 		"Common setup timeout duration in seconds")
+	flag.StringVar(&options.sourcePrivateKey, "sourcePrivateKey", "",
+		" source private key for TLS connections")
+	flag.StringVar(&options.targetPrivateKey, "targetPrivateKey", "",
+		" target private key for TLS connections")
 
 	flag.Parse()
 }
@@ -306,9 +315,7 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 		srcToTgtColIdsMap:       make(map[uint32][]uint32),
 		colFilterToTgtColIdsMap: map[string][]uint32{},
 	}
-
 	difftool.logger = xdcrLog.NewLogger("xdcrDiffTool", nil)
-
 	difftool.selfRef, _ = metadata.NewRemoteClusterReference("", base.SelfReferenceName, options.sourceUrl, options.sourceUsername, options.sourcePassword,
 		"", false, "", nil, nil, nil, nil)
 
@@ -602,7 +609,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.numberOfWorkersPerSourceDcpClient, options.numberOfBins, options.sourceDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
-		difftool.srcCapabilities, difftool.srcCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity)
+		difftool.srcCapabilities, difftool.srcCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity, options.sourcePrivateKey)
 
 	delayDurationBetweenSourceAndTarget := time.Duration(options.delayBetweenSourceAndTarget) * time.Second
 	difftool.logger.Infof("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
@@ -615,7 +622,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.numberOfTargetDcpClients, options.numberOfWorkersPerTargetDcpClient, options.numberOfBins, options.targetDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval, options.getStatsMaxBackoff,
 		options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
-		difftool.tgtCapabilities, difftool.tgtCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity)
+		difftool.tgtCapabilities, difftool.tgtCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity, options.targetPrivateKey)
 
 	difftool.curState.mtx.Lock()
 	difftool.curState.state = StateDcpStarted
@@ -703,14 +710,14 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 	}
 }
 
-func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bucketBufferCap int) *dcp.DcpDriver {
+func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bucketBufferCap int, privateKey string) *dcp.DcpDriver {
 	waitGroup.Add(1)
 	dcpDriver := dcp.NewDcpDriver(logger, name, url, bucketName, ref, fileDir, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBins),
 		int(dcpHandlerChanSize), time.Duration(bucketOpTimeout)*time.Second, int(maxNumOfGetStatsRetry),
 		time.Duration(getStatsRetryInterval)*time.Second, time.Duration(getStatsMaxBackoff)*time.Second,
 		int(checkpointInterval), errChan, waitGroup, completeBySeqno, fdPool, filter, capabilities, collectionIDs, colMigrationFilters,
-		utils, bucketBufferCap)
+		utils, bucketBufferCap, privateKey)
 	// dcp driver startup may take some time. Do it asynchronously
 	go startDcpDriverAysnc(dcpDriver, errChan, logger)
 	return dcpDriver

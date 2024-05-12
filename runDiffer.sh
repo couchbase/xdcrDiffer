@@ -25,7 +25,7 @@ function printHelp() {
 	findExec
 
 	cat <<EOF
-Usage: $0 -u <username> -p <password> -h <hostname:port> -s <sourceBucket> -t <targetBucket> -r <remoteClusterName> [-v <targetUrl>] [-n <remoteClusterUsername> -q <remoteClusterPassword>] [-c clean] [-b ] [-e <mutationRetries>] [-w <setupTimeoutInSeconds>]
+Usage: $0 -u <username> -p <password> -h <hostname:port> -s <sourceBucket> -t <targetBucket> -r <remoteClusterName> [-v <targetUrl>] [-n <remoteClusterUsername> -q <remoteClusterPassword>] [-c clean] [-b ] [-e <mutationRetries>] [-w <setupTimeoutInSeconds>] [-k <sourcePrivateKey> ] [-f <TargetPrivateKey>]
 
 This script will set up the necessary environment variable to allow the XDCR diff tool to connect to the metakv service in the
 specified source cluster (NOTE: over http://) and retrieve the specified replication spec and run the difftool on it.
@@ -54,7 +54,7 @@ function killBgTail {
 	fi
 }
 
-while getopts ":h:p:u:r:s:t:n:q:v:cbe:w:" opt; do
+while getopts ":h:p:u:r:s:t:n:q:v:cbe:w:k:f:" opt; do
 	case ${opt} in
 	u)
 		username=$OPTARG
@@ -97,6 +97,12 @@ while getopts ":h:p:u:r:s:t:n:q:v:cbe:w:" opt; do
 		;;
 	w)
 		setupTimeout=$OPTARG
+		;;
+	k)
+		sourcePrivateKey=$OPTARG
+		;;
+	f)
+		targetPrivateKey=$OPTARG
 		;;
 	\?)
 		echo "Invalid option: $OPTARG" 1>&2
@@ -198,6 +204,14 @@ fi
 if [[ ! -z "$setupTimeout" ]]; then
 	execString="${execString} -setupTimeout"
 	execString="${execString} $setupTimeout"
+fi
+if [[ ! -z "$sourcePrivateKey" ]]; then
+	execString="${execString} -sourcePrivateKey"
+	execString="${execString} $sourcePrivateKey"
+fi
+if [[ ! -z "$targetPrivateKey" ]]; then
+	execString="${execString} -targetPrivateKey"
+	execString="${execString} $targetPrivateKey"
 fi
 
 # Execute the differ in background and watch the pid to be finished

@@ -3,10 +3,11 @@ package base
 import (
 	"crypto/tls"
 	"fmt"
-	"github.com/couchbase/gocbcore/v9"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/couchbase/gocbcore/v9"
 )
 
 type GocbcoreAgentCommon struct {
@@ -25,6 +26,7 @@ type PasswordAuth struct {
 type CertificateAuth struct {
 	PasswordAuth
 	CertificateBytes []byte
+	PrivateKey       []byte
 }
 
 func (c *CertificateAuth) SupportsTLS() bool {
@@ -36,7 +38,8 @@ func (c *CertificateAuth) SupportsNonTLS() bool {
 }
 
 func (c *CertificateAuth) Certificate(req gocbcore.AuthCertRequest) (*tls.Certificate, error) {
-	return &tls.Certificate{Certificate: [][]byte{c.CertificateBytes}}, nil
+	cert, err := tls.X509KeyPair(c.CertificateBytes, c.PrivateKey)
+	return &cert, err
 }
 
 func (c *CertificateAuth) Credentials(req gocbcore.AuthCredsRequest) ([]gocbcore.UserPassPair, error) {
