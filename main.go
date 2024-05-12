@@ -127,9 +127,9 @@ var options struct {
 	debugMode bool
 	// a common setup timeout duration - in seconds
 	setupTimeout int
-	// takes in the source private key as input - for TLS
+	// takes in the path to file containing source private key - for TLS
 	sourcePrivateKey string
-	// takes in the target private key for - for TLS
+	// takes in the path to the file containing target private key  - for TLS
 	targetPrivateKey string
 }
 
@@ -602,19 +602,32 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		difftool.logger.Errorf("Error creating filter: %v", err.Error())
 		os.Exit(1)
 	}
-
+	var sourcePrivateKey, targetPrivateKey []byte
+	var fileErr error
+	if options.sourcePrivateKey != "" {
+		sourcePrivateKey, fileErr = os.ReadFile(options.sourcePrivateKey)
+		if fileErr != nil {
+			difftool.logger.Errorf("unbale to read the file containing source Private Key")
+		}
+	}
 	difftool.sourceDcpDriver = startDcpDriver(difftool.logger, base.SourceClusterName, options.sourceUrl, difftool.specifiedSpec.SourceBucketName,
 		difftool.selfRef, options.sourceFileDir, options.checkpointFileDir,
 		options.oldSourceCheckpointFileName, options.newCheckpointFileName, options.numberOfSourceDcpClients,
 		options.numberOfWorkersPerSourceDcpClient, options.numberOfBins, options.sourceDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
-		difftool.srcCapabilities, difftool.srcCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity, options.sourcePrivateKey)
+		difftool.srcCapabilities, difftool.srcCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity, sourcePrivateKey)
 
 	delayDurationBetweenSourceAndTarget := time.Duration(options.delayBetweenSourceAndTarget) * time.Second
 	difftool.logger.Infof("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
 	time.Sleep(delayDurationBetweenSourceAndTarget)
 
+	if options.targetPrivateKey != "" {
+		targetPrivateKey, fileErr = os.ReadFile(options.targetPrivateKey)
+		if fileErr != nil {
+			difftool.logger.Errorf("unbale to read the file containing target Private Key")
+		}
+	}
 	difftool.logger.Infof("Starting target dcp clients\n")
 	difftool.targetDcpDriver = startDcpDriver(difftool.logger, base.TargetClusterName, difftool.specifiedRef.HostName_,
 		difftool.specifiedSpec.TargetBucketName, difftool.specifiedRef,
@@ -622,7 +635,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.numberOfTargetDcpClients, options.numberOfWorkersPerTargetDcpClient, options.numberOfBins, options.targetDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval, options.getStatsMaxBackoff,
 		options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
-		difftool.tgtCapabilities, difftool.tgtCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity, options.targetPrivateKey)
+		difftool.tgtCapabilities, difftool.tgtCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity, targetPrivateKey)
 
 	difftool.curState.mtx.Lock()
 	difftool.curState.state = StateDcpStarted
@@ -710,7 +723,7 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 	}
 }
 
-func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bucketBufferCap int, privateKey string) *dcp.DcpDriver {
+func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bucketBufferCap int, privateKey []byte) *dcp.DcpDriver {
 	waitGroup.Add(1)
 	dcpDriver := dcp.NewDcpDriver(logger, name, url, bucketName, ref, fileDir, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBins),

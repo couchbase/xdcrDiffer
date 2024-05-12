@@ -90,7 +90,7 @@ const (
 	DriverStateStopped DriverState = iota
 )
 
-func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration, checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIds []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, privateKey string) *DcpDriver {
+func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration, checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIds []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, privateKey []byte) *DcpDriver {
 	dcpDriver := &DcpDriver{
 		Name:                name,
 		url:                 url,
@@ -118,7 +118,7 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, re
 		colMigrationFilters: colMigrationFilters,
 		utils:               utils,
 		bufferCapacity:      bufferCap,
-		privateKey:          []byte(privateKey),
+		privateKey:          privateKey,
 	}
 
 	var vbno uint16
