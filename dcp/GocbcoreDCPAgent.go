@@ -3,6 +3,8 @@ package dcp
 import (
 	"crypto/x509"
 	"fmt"
+	"github.com/couchbase/goxdcr/metadata"
+	"reflect"
 	"time"
 	"xdcrDiffer/base"
 
@@ -16,8 +18,8 @@ type GocbcoreDCPFeed struct {
 	dcpAgent *gocbcore.DCPAgent
 }
 
-func (f *GocbcoreDCPFeed) setupDCPAgent(auth interface{}, collections bool) error {
-	agentConfig, shouldBeSecure, err := f.setupDCPAgentConfig(auth, collections)
+func (f *GocbcoreDCPFeed) setupDCPAgent(auth interface{}, collections bool, ref *metadata.RemoteClusterReference) error {
+	agentConfig, shouldBeSecure, err := f.setupDCPAgentConfig(auth, collections, ref)
 	if err != nil {
 		return err
 	}
@@ -64,10 +66,13 @@ func NewDCPFeedParams() *DCPFeedParams {
 	return &DCPFeedParams{IncludeXAttrs: true}
 }
 
-func (f *GocbcoreDCPFeed) setupDCPAgentConfig(authMech interface{}, collections bool) (*gocbcore.DCPAgentConfig, bool, error) {
-	useTLS, x509Provider, auth, err := getAgentConfigs(authMech)
+func (f *GocbcoreDCPFeed) setupDCPAgentConfig(authMech interface{}, collections bool, ref *metadata.RemoteClusterReference) (*gocbcore.DCPAgentConfig, bool, error) {
+	useTLS, x509Provider, auth, err := getAgentConfigs(authMech, ref)
 	if err != nil {
 		return nil, false, err
+	}
+	if auth == nil {
+		panic("Nil auth")
 	}
 	return &gocbcore.DCPAgentConfig{
 		UserAgent:         f.Name,
@@ -81,11 +86,22 @@ func (f *GocbcoreDCPFeed) setupDCPAgentConfig(authMech interface{}, collections 
 	}, useTLS, nil
 }
 
-func getAgentConfigs(authMech interface{}) (bool, func() *x509.CertPool, gocbcore.AuthProvider, error) {
+func getAgentConfigs(authMech interface{}, ref *metadata.RemoteClusterReference) (bool, func() *x509.CertPool, gocbcore.AuthProvider, error) {
+	certPool := x509.NewCertPool()
 	var useTLS bool
-	x509Provider := func() *x509.CertPool {
-		return nil
+
+	if ref.HttpAuthMech() == xdcrBase.HttpAuthMechHttps {
+		// https means we need to at a min return a root CA
+		ok := certPool.AppendCertsFromPEM(ref.Certificate())
+		if !ok {
+			return false, nil, nil, fmt.Errorf("Invalid rootCA %s", ref.Certificate())
+		}
+		useTLS = true
 	}
+	x509Provider := func() *x509.CertPool {
+		return certPool
+	}
+
 	var auth gocbcore.AuthProvider
 	if pw, ok := authMech.(*base.PasswordAuth); ok {
 		auth = gocbcore.PasswordAuthProvider{
@@ -95,15 +111,16 @@ func getAgentConfigs(authMech interface{}) (bool, func() *x509.CertPool, gocbcor
 	} else if cert, ok := authMech.(*base.CertificateAuth); ok {
 		// The base.CertificateAuth should implement the methods for a provider
 		auth = cert
-		useTLS = true
-		certPool := x509.NewCertPool()
-		ok := certPool.AppendCertsFromPEM(cert.CertificateBytes)
+		ok = certPool.AppendCertsFromPEM(cert.CertificateBytes)
 		if !ok {
-			return false, nil, nil, xdcrBase.InvalidCerfiticateError
+			return useTLS, nil, nil, fmt.Errorf("Invalid client cert %s", cert.CertificateBytes)
 		}
-		x509Provider = func() *x509.CertPool {
-			return certPool
+		ok = certPool.AppendCertsFromPEM(cert.PrivateKey)
+		if !ok {
+			return useTLS, nil, nil, fmt.Errorf("Invalid client key %s", cert.PrivateKey)
 		}
+	} else {
+		panic(fmt.Sprintf("unknown authmech: %v", reflect.TypeOf(authMech)))
 	}
 	return useTLS, x509Provider, auth, nil
 }
@@ -144,7 +161,7 @@ func (f *GocbcoreDCPFeed) setupGocbcoreDCPAgent(config *gocbcore.DCPAgentConfig,
 	return
 }
 
-func NewGocbcoreDCPFeed(id string, servers []string, bucketName string, auth interface{}, collections bool) (*GocbcoreDCPFeed, error) {
+func NewGocbcoreDCPFeed(id string, servers []string, bucketName string, auth interface{}, collections bool, ref *metadata.RemoteClusterReference) (*GocbcoreDCPFeed, error) {
 	gocbcoreDcpFeed := &GocbcoreDCPFeed{
 		GocbcoreAgentCommon: base.GocbcoreAgentCommon{
 			Name:         id,
@@ -155,6 +172,10 @@ func NewGocbcoreDCPFeed(id string, servers []string, bucketName string, auth int
 		dcpAgent: nil,
 	}
 
-	err := gocbcoreDcpFeed.setupDCPAgent(auth, collections)
+	if auth == nil {
+		panic("nil auth")
+	}
+
+	err := gocbcoreDcpFeed.setupDCPAgent(auth, collections, ref)
 	return gocbcoreDcpFeed, err
 }
