@@ -1089,11 +1089,19 @@ func (d *MutationDiffer) openBucket(bucketName string, reference *metadata.Remot
 		return err
 	}
 
-	if reference.HttpAuthMech() == xdcrBase.HttpAuthMechHttps {
+	useSecurePrefix := reference.HttpAuthMech() == xdcrBase.HttpAuthMechHttps
+
+	if !source && len(reference.ClientKey()) > 0 && len(reference.ClientCertificate()) > 0 {
 		auth = &base.CertificateAuth{
 			PasswordAuth:     pwAuth,
-			CertificateBytes: reference.Certificate(),
+			CertificateBytes: reference.ClientCertificate(),
+			PrivateKey:       reference.ClientKey(),
 		}
+	} else {
+		auth = &pwAuth
+	}
+
+	if useSecurePrefix {
 		err = d.initializeKvSSLMap(source)
 		if err != nil {
 			return err
@@ -1121,11 +1129,10 @@ func (d *MutationDiffer) openBucket(bucketName string, reference *metadata.Remot
 		connStr = xdcrBase.GetHostAddr(xdcrBase.GetHostName(connStr), sslPort)
 		base.TagCouchbaseSecurePrefix(&connStr)
 	} else {
-		auth = &pwAuth
 		base.TagHttpPrefix(&connStr)
 	}
 
-	agent, err := NewGocbcoreAgent(name, []string{connStr}, bucketName, auth, d.batchSize, capability)
+	agent, err := NewGocbcoreAgent(name, []string{connStr}, bucketName, auth, d.batchSize, capability, reference)
 
 	if source {
 		d.sourceBucket = agent

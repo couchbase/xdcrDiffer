@@ -19,6 +19,7 @@ import (
 	"github.com/couchbase/goxdcr/metadata"
 	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -210,14 +211,20 @@ func (c *DcpClient) initializeCluster() (err error) {
 			return err
 		}
 	}
+
 	return nil
 }
 
 func initializeClusterWithSecurity(dcpDriver *DcpDriver) (*gocb.Cluster, error) {
 	clusterOpts := gocb.ClusterOptions{}
 
-	if dcpDriver.ref.HttpAuthMech() == xdcrBase.HttpAuthMechHttps {
-		tlsCert := tls.Certificate{Certificate: [][]byte{dcpDriver.ref.Certificate()}}
+	useCouchbaseSecureStr := dcpDriver.ref.HttpAuthMech() == xdcrBase.HttpAuthMechHttps
+
+	if dcpDriver.ref.ClientCertificate() != nil && dcpDriver.ref.ClientKey() != nil {
+		tlsCert := tls.Certificate{
+			Certificate: [][]byte{dcpDriver.ref.Certificate()},
+			PrivateKey:  dcpDriver.ref.ClientKey(),
+		}
 		clusterOpts.Authenticator = gocb.CertificateAuthenticator{ClientCertificate: &tlsCert}
 	} else {
 		clusterOpts.Authenticator = gocb.PasswordAuthenticator{
@@ -226,25 +233,32 @@ func initializeClusterWithSecurity(dcpDriver *DcpDriver) (*gocb.Cluster, error) 
 		}
 	}
 
-	cluster, err := gocb.Connect(utils.PopulateCCCPConnectString(dcpDriver.url), clusterOpts)
+	cccpString := utils.PopulateCCCPConnectString(dcpDriver.url)
+	if useCouchbaseSecureStr {
+		cccpString = strings.TrimPrefix(cccpString, base.CouchbasePrefix)
+		cccpString = fmt.Sprintf("%v%v", base.CouchbaseSecurePrefix, cccpString)
+	}
+
+	cluster, err := gocb.Connect(cccpString, clusterOpts)
 	if err != nil {
 		dcpDriver.logger.Errorf("Error connecting to cluster %v. err=%v\n", dcpDriver.url, err)
 		return nil, err
 	}
+
 	return cluster, nil
 }
 
 func (c *DcpClient) initializeBucket() (err error) {
-	auth, bucketConnStr, err := initializeBucketWithSecurity(c.dcpDriver, c.kvVbMap, c.kvSSLPortMap, true)
+	auth, bucketConnStr, _, err := initializeBucketWithSecurity(c.dcpDriver, c.kvVbMap, c.kvSSLPortMap, true)
 	if err != nil {
 		return err
 	}
 
-	c.gocbcoreDcpFeed, err = NewGocbcoreDCPFeed(c.Name, []string{bucketConnStr}, c.dcpDriver.bucketName, auth, c.capabilities.HasCollectionSupport())
+	c.gocbcoreDcpFeed, err = NewGocbcoreDCPFeed(c.Name, []string{bucketConnStr}, c.dcpDriver.bucketName, auth, c.capabilities.HasCollectionSupport(), c.dcpDriver.ref)
 	return
 }
 
-func initializeBucketWithSecurity(dcpDriver *DcpDriver, kvVbMap map[string][]uint16, kvSSLPortMap map[string]uint16, tagPrefix bool) (interface{}, string, error) {
+func initializeBucketWithSecurity(dcpDriver *DcpDriver, kvVbMap map[string][]uint16, kvSSLPortMap map[string]uint16, tagPrefix bool) (interface{}, string, bool, error) {
 	var auth interface{}
 	pwAuth := base.PasswordAuth{
 		Username: dcpDriver.ref.UserName(),
@@ -257,27 +271,35 @@ func initializeBucketWithSecurity(dcpDriver *DcpDriver, kvVbMap map[string][]uin
 		break
 	}
 
-	if dcpDriver.ref.HttpAuthMech() == xdcrBase.HttpAuthMechHttps {
-		auth = &base.CertificateAuth{
-			PasswordAuth:     pwAuth,
-			CertificateBytes: dcpDriver.ref.Certificate(),
-		}
+	useSecurePrefix := dcpDriver.ref.HttpAuthMech() == xdcrBase.HttpAuthMechHttps
 
+	if dcpDriver.Name != base.SourceClusterName && len(dcpDriver.ref.ClientKey()) > 0 && len(dcpDriver.ref.ClientCertificate()) > 0 {
+		auth = &base.CertificateAuth{
+			// For client cert auth, no pw or username given
+			PasswordAuth:     base.PasswordAuth{},
+			CertificateBytes: dcpDriver.ref.ClientCertificate(),
+			PrivateKey:       dcpDriver.ref.ClientKey(),
+		}
+	} else {
+		auth = &pwAuth
+	}
+
+	if useSecurePrefix {
 		sslPort, found := kvSSLPortMap[bucketConnStr]
 		if !found {
-			return nil, "", fmt.Errorf("Cannot find SSL port for %v in map %v", bucketConnStr, kvSSLPortMap)
+			return nil, "", false, fmt.Errorf("Cannot find SSL port for %v in map %v", bucketConnStr, kvSSLPortMap)
 		}
 		bucketConnStr = xdcrBase.GetHostAddr(xdcrBase.GetHostName(bucketConnStr), sslPort)
 		if tagPrefix {
 			base.TagCouchbaseSecurePrefix(&bucketConnStr)
 		}
 	} else {
-		auth = &pwAuth
 		if tagPrefix {
 			bucketConnStr = fmt.Sprintf("%v%v", base.CouchbasePrefix, bucketConnStr)
 		}
 	}
-	return auth, bucketConnStr, nil
+
+	return auth, bucketConnStr, useSecurePrefix, nil
 }
 
 func (c *DcpClient) initializeDcpHandlers() error {

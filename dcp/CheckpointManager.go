@@ -608,12 +608,16 @@ func (cm *CheckpointManager) getSnapshot(vbno uint16) (startSeqno, endSeqno uint
 }
 
 func (cm *CheckpointManager) initializeBucket() (err error) {
-	auth, bucketConnStr, err := initializeBucketWithSecurity(cm.dcpDriver, cm.kvVbMap, cm.kvSSLPortMap, false)
+	auth, bucketConnStr, useTLS, err := initializeBucketWithSecurity(cm.dcpDriver, cm.kvVbMap, cm.kvSSLPortMap, false)
 	if err != nil {
 		return
 	}
 
-	useTLS, x509Provider, authProvider, err := getAgentConfigs(auth)
+	useTLS, x509Provider, authProvider, err := getAgentConfigs(auth, cm.dcpDriver.ref)
+	if err != nil {
+		cm.logger.Errorf("getAgentConfigs had err %v", err)
+		return
+	}
 
 	agentConfig := &gocbcore.AgentConfig{
 		MemdAddrs:         []string{bucketConnStr},
@@ -657,7 +661,6 @@ func (cm *CheckpointManager) initializeBucket() (err error) {
 		err = fmt.Errorf("%v requested secure but agent says not secure", cm.clusterName)
 		return
 	}
-
 	return
 }
 

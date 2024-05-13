@@ -25,6 +25,7 @@ type PasswordAuth struct {
 type CertificateAuth struct {
 	PasswordAuth
 	CertificateBytes []byte
+	PrivateKey       []byte
 }
 
 func (c *CertificateAuth) SupportsTLS() bool {
@@ -36,7 +37,7 @@ func (c *CertificateAuth) SupportsNonTLS() bool {
 }
 
 func (c *CertificateAuth) Certificate(req gocbcore.AuthCertRequest) (*tls.Certificate, error) {
-	return &tls.Certificate{Certificate: [][]byte{c.CertificateBytes}}, nil
+	return &tls.Certificate{Certificate: [][]byte{c.CertificateBytes, c.PrivateKey}}, nil
 }
 
 func (c *CertificateAuth) Credentials(req gocbcore.AuthCredsRequest) ([]gocbcore.UserPassPair, error) {
