@@ -220,7 +220,8 @@ func initializeClusterWithSecurity(dcpDriver *DcpDriver) (*gocb.Cluster, error) 
 
 	useCouchbaseSecureStr := dcpDriver.ref.HttpAuthMech() == xdcrBase.HttpAuthMechHttps
 
-	if dcpDriver.ref.ClientCertificate() != nil && dcpDriver.ref.ClientKey() != nil {
+	// If it is a source cluster, use cbauth username/pw and not client certs
+	if dcpDriver.Name != base.SourceClusterName && len(dcpDriver.ref.ClientCertificate()) > 0 && len(dcpDriver.ref.ClientKey()) > 0 {
 		tlsCert := tls.Certificate{
 			Certificate: [][]byte{dcpDriver.ref.Certificate()},
 			PrivateKey:  dcpDriver.ref.ClientKey(),
@@ -249,7 +250,7 @@ func initializeClusterWithSecurity(dcpDriver *DcpDriver) (*gocb.Cluster, error) 
 }
 
 func (c *DcpClient) initializeBucket() (err error) {
-	auth, bucketConnStr, _, err := initializeBucketWithSecurity(c.dcpDriver, c.kvVbMap, c.kvSSLPortMap, true)
+	auth, bucketConnStr, err := initializeBucketWithSecurity(c.dcpDriver, c.kvVbMap, c.kvSSLPortMap, true)
 	if err != nil {
 		return err
 	}
@@ -258,7 +259,7 @@ func (c *DcpClient) initializeBucket() (err error) {
 	return
 }
 
-func initializeBucketWithSecurity(dcpDriver *DcpDriver, kvVbMap map[string][]uint16, kvSSLPortMap map[string]uint16, tagPrefix bool) (interface{}, string, bool, error) {
+func initializeBucketWithSecurity(dcpDriver *DcpDriver, kvVbMap map[string][]uint16, kvSSLPortMap map[string]uint16, tagPrefix bool) (interface{}, string, error) {
 	var auth interface{}
 	pwAuth := base.PasswordAuth{
 		Username: dcpDriver.ref.UserName(),
@@ -287,7 +288,7 @@ func initializeBucketWithSecurity(dcpDriver *DcpDriver, kvVbMap map[string][]uin
 	if useSecurePrefix {
 		sslPort, found := kvSSLPortMap[bucketConnStr]
 		if !found {
-			return nil, "", false, fmt.Errorf("Cannot find SSL port for %v in map %v", bucketConnStr, kvSSLPortMap)
+			return nil, "", fmt.Errorf("Cannot find SSL port for %v in map %v", bucketConnStr, kvSSLPortMap)
 		}
 		bucketConnStr = xdcrBase.GetHostAddr(xdcrBase.GetHostName(bucketConnStr), sslPort)
 		if tagPrefix {
@@ -299,7 +300,7 @@ func initializeBucketWithSecurity(dcpDriver *DcpDriver, kvVbMap map[string][]uin
 		}
 	}
 
-	return auth, bucketConnStr, useSecurePrefix, nil
+	return auth, bucketConnStr, nil
 }
 
 func (c *DcpClient) initializeDcpHandlers() error {

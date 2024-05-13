@@ -608,7 +608,7 @@ func (cm *CheckpointManager) getSnapshot(vbno uint16) (startSeqno, endSeqno uint
 }
 
 func (cm *CheckpointManager) initializeBucket() (err error) {
-	auth, bucketConnStr, useTLS, err := initializeBucketWithSecurity(cm.dcpDriver, cm.kvVbMap, cm.kvSSLPortMap, false)
+	auth, bucketConnStr, err := initializeBucketWithSecurity(cm.dcpDriver, cm.kvVbMap, cm.kvSSLPortMap, false)
 	if err != nil {
 		return
 	}

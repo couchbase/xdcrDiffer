@@ -94,7 +94,7 @@ func getAgentConfigs(authMech interface{}, ref *metadata.RemoteClusterReference)
 		// https means we need to at a min return a root CA
 		ok := certPool.AppendCertsFromPEM(ref.Certificate())
 		if !ok {
-			return false, nil, nil, fmt.Errorf("Invalid rootCA")
+			return false, nil, nil, fmt.Errorf("Invalid rootCA %s", ref.Certificate())
 		}
 		useTLS = true
 	}

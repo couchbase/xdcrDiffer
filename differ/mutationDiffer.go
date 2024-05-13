@@ -1093,7 +1093,8 @@ func (d *MutationDiffer) openBucket(bucketName string, reference *metadata.Remot
 
 	if !source && len(reference.ClientKey()) > 0 && len(reference.ClientCertificate()) > 0 {
 		auth = &base.CertificateAuth{
-			PasswordAuth:     pwAuth,
+			// client cert auth requires no password
+			PasswordAuth:     base.PasswordAuth{},
 			CertificateBytes: reference.ClientCertificate(),
 			PrivateKey:       reference.ClientKey(),
 		}
