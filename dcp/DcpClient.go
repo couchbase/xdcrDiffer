@@ -13,6 +13,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -213,14 +214,21 @@ func (c *DcpClient) initializeCluster() (err error) {
 			return err
 		}
 	}
+
 	return nil
 }
 
 func initializeClusterWithSecurity(dcpDriver *DcpDriver) (*gocb.Cluster, error) {
 	clusterOpts := gocb.ClusterOptions{}
 
-	if dcpDriver.ref.HttpAuthMech() == xdcrBase.HttpAuthMechHttps {
-		tlsCert := tls.Certificate{Certificate: [][]byte{dcpDriver.ref.Certificates()}}
+	useCouchbaseSecureStr := dcpDriver.ref.HttpAuthMech() == xdcrBase.HttpAuthMechHttps
+
+	// If it is a source cluster, use cbauth username/pw and not client certs
+	if dcpDriver.Name != base.SourceClusterName && len(dcpDriver.ref.ClientCertificate()) > 0 && len(dcpDriver.ref.ClientKey()) > 0 {
+		tlsCert := tls.Certificate{
+			Certificate: [][]byte{dcpDriver.ref.Certificates()},
+			PrivateKey:  dcpDriver.ref.ClientKey(),
+		}
 		clusterOpts.Authenticator = gocb.CertificateAuthenticator{ClientCertificate: &tlsCert}
 	} else {
 		clusterOpts.Authenticator = gocb.PasswordAuthenticator{
@@ -229,11 +237,18 @@ func initializeClusterWithSecurity(dcpDriver *DcpDriver) (*gocb.Cluster, error) 
 		}
 	}
 
-	cluster, err := gocb.Connect(utils.PopulateCCCPConnectString(dcpDriver.url), clusterOpts)
+	cccpString := utils.PopulateCCCPConnectString(dcpDriver.url)
+	if useCouchbaseSecureStr {
+		cccpString = strings.TrimPrefix(cccpString, base.CouchbasePrefix)
+		cccpString = fmt.Sprintf("%v%v", base.CouchbaseSecurePrefix, cccpString)
+	}
+
+	cluster, err := gocb.Connect(cccpString, clusterOpts)
 	if err != nil {
 		dcpDriver.logger.Errorf("Error connecting to cluster %v. err=%v\n", dcpDriver.url, err)
 		return nil, err
 	}
+
 	return cluster, nil
 }
 
@@ -243,7 +258,7 @@ func (c *DcpClient) initializeBucket() (err error) {
 		return err
 	}
 
-	c.gocbcoreDcpFeed, err = NewGocbcoreDCPFeed(c.Name, []string{bucketConnStr}, c.dcpDriver.bucketName, auth, c.capabilities.HasCollectionSupport())
+	c.gocbcoreDcpFeed, err = NewGocbcoreDCPFeed(c.Name, []string{bucketConnStr}, c.dcpDriver.bucketName, auth, c.capabilities.HasCollectionSupport(), c.dcpDriver.ref)
 	return
 }
 
@@ -260,12 +275,20 @@ func initializeBucketWithSecurity(dcpDriver *DcpDriver, kvVbMap map[string][]uin
 		break
 	}
 
-	if dcpDriver.ref.HttpAuthMech() == xdcrBase.HttpAuthMechHttps {
-		auth = &base.CertificateAuth{
-			PasswordAuth:     pwAuth,
-			CertificateBytes: dcpDriver.ref.Certificates(),
-		}
+	useSecurePrefix := dcpDriver.ref.HttpAuthMech() == xdcrBase.HttpAuthMechHttps
 
+	if dcpDriver.Name != base.SourceClusterName && len(dcpDriver.ref.ClientKey()) > 0 && len(dcpDriver.ref.ClientCertificate()) > 0 {
+		auth = &base.CertificateAuth{
+			// For client cert auth, no pw or username given
+			PasswordAuth:     base.PasswordAuth{},
+			CertificateBytes: dcpDriver.ref.ClientCertificate(),
+			PrivateKey:       dcpDriver.ref.ClientKey(),
+		}
+	} else {
+		auth = &pwAuth
+	}
+
+	if useSecurePrefix {
 		sslPort, found := kvSSLPortMap[bucketConnStr]
 		if !found {
 			return nil, "", fmt.Errorf("Cannot find SSL port for %v in map %v", bucketConnStr, kvSSLPortMap)
@@ -275,11 +298,11 @@ func initializeBucketWithSecurity(dcpDriver *DcpDriver, kvVbMap map[string][]uin
 			base.TagCouchbaseSecurePrefix(&bucketConnStr)
 		}
 	} else {
-		auth = &pwAuth
 		if tagPrefix {
 			bucketConnStr = fmt.Sprintf("%v%v", base.CouchbasePrefix, bucketConnStr)
 		}
 	}
+
 	return auth, bucketConnStr, nil
 }
 
