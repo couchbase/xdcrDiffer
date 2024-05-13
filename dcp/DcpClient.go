@@ -223,7 +223,7 @@ func initializeClusterWithSecurity(dcpDriver *DcpDriver) (*gocb.Cluster, error) 
 
 	// If it is a source cluster, use cbauth username/pw and not client certs
 	if dcpDriver.Name != base.SourceClusterName && len(dcpDriver.ref.ClientCertificate()) > 0 && len(dcpDriver.ref.ClientKey()) > 0 {
-		tlsCert, err := tls.X509KeyPair(dcpDriver.ref.Certificate(), dcpDriver.ref.ClientKey())
+		tlsCert, err := tls.X509KeyPair(dcpDriver.ref.ClientCertificate(), dcpDriver.ref.ClientKey())
 		if err != nil {
 			dcpDriver.logger.Errorf("error generating tlsCert from the cluster reference: %v\n", err)
 			return nil, err
