@@ -182,6 +182,8 @@ func (d *MutationDiffer) Run() error {
 		return err
 	}
 
+	d.logger.Infof("Mutation differ initialized\n")
+
 	d.fetchAndDiff(combinedFetchList)
 
 	// Retry multiple times if asked to, in order to minimize in flight differences
@@ -1104,10 +1106,12 @@ func (d *MutationDiffer) initialize() error {
 	var err error
 	err = d.openBucket(d.sourceBucketName, d.sourceReference, true)
 	if err != nil {
+		d.logger.Errorf("error opening source bucket %v", err)
 		return err
 	}
 	err = d.openBucket(d.targetBucketName, d.targetReference, false)
 	if err != nil {
+		d.logger.Errorf("error opening target bucket %v", err)
 		return err
 	}
 	return nil
