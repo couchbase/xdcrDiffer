@@ -12,12 +12,6 @@ package dcp
 import (
 	"crypto/tls"
 	"fmt"
-	gocb "github.com/couchbase/gocb/v2"
-	gocbcore "github.com/couchbase/gocbcore/v9"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	xdcrLog "github.com/couchbase/goxdcr/log"
-	"github.com/couchbase/goxdcr/metadata"
-	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"math"
 	"strings"
 	"sync"
@@ -25,6 +19,13 @@ import (
 	"time"
 	"xdcrDiffer/base"
 	"xdcrDiffer/utils"
+
+	gocb "github.com/couchbase/gocb/v2"
+	gocbcore "github.com/couchbase/gocbcore/v9"
+	xdcrBase "github.com/couchbase/goxdcr/base"
+	xdcrLog "github.com/couchbase/goxdcr/log"
+	"github.com/couchbase/goxdcr/metadata"
+	xdcrUtils "github.com/couchbase/goxdcr/utils"
 )
 
 type DcpClient struct {
@@ -222,10 +223,12 @@ func initializeClusterWithSecurity(dcpDriver *DcpDriver) (*gocb.Cluster, error) 
 
 	// If it is a source cluster, use cbauth username/pw and not client certs
 	if dcpDriver.Name != base.SourceClusterName && len(dcpDriver.ref.ClientCertificate()) > 0 && len(dcpDriver.ref.ClientKey()) > 0 {
-		tlsCert := tls.Certificate{
-			Certificate: [][]byte{dcpDriver.ref.Certificate()},
-			PrivateKey:  dcpDriver.ref.ClientKey(),
+		tlsCert, err := tls.X509KeyPair(dcpDriver.ref.ClientCertificate(), dcpDriver.ref.ClientKey())
+		if err != nil {
+			dcpDriver.logger.Errorf("error generating tlsCert from the cluster reference: %v\n", err)
+			return nil, err
 		}
+
 		clusterOpts.Authenticator = gocb.CertificateAuthenticator{ClientCertificate: &tlsCert}
 	} else {
 		clusterOpts.Authenticator = gocb.PasswordAuthenticator{

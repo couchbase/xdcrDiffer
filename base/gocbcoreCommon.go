@@ -37,7 +37,11 @@ func (c *CertificateAuth) SupportsNonTLS() bool {
 }
 
 func (c *CertificateAuth) Certificate(req gocbcore.AuthCertRequest) (*tls.Certificate, error) {
-	return &tls.Certificate{Certificate: [][]byte{c.CertificateBytes, c.PrivateKey}}, nil
+	clientCert, err := tls.X509KeyPair(c.CertificateBytes, c.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("Invalid keypair")
+	}
+	return &clientCert, nil
 }
 
 func (c *CertificateAuth) Credentials(req gocbcore.AuthCredsRequest) ([]gocbcore.UserPassPair, error) {
