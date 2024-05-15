@@ -182,6 +182,8 @@ func (d *MutationDiffer) Run() error {
 		return err
 	}
 
+	d.logger.Infof("Mutation differ initialized\n")
+
 	d.fetchAndDiff(combinedFetchList)
 
 	// Retry multiple times if asked to, in order to minimize in flight differences
@@ -1104,10 +1106,12 @@ func (d *MutationDiffer) initialize() error {
 	var err error
 	err = d.openBucket(d.sourceBucketName, d.sourceReference, true)
 	if err != nil {
+		d.logger.Errorf("error opening source bucket %v", err)
 		return err
 	}
 	err = d.openBucket(d.targetBucketName, d.targetReference, false)
 	if err != nil {
+		d.logger.Errorf("error opening target bucket %v", err)
 		return err
 	}
 	return nil
@@ -1142,11 +1146,20 @@ func (d *MutationDiffer) openBucket(bucketName string, reference *metadata.Remot
 		return err
 	}
 
-	if reference.HttpAuthMech() == xdcrBase.HttpAuthMechHttps {
+	useSecurePrefix := reference.HttpAuthMech() == xdcrBase.HttpAuthMechHttps
+
+	if !source && len(reference.ClientKey()) > 0 && len(reference.ClientCertificate()) > 0 {
 		auth = &base.CertificateAuth{
-			PasswordAuth:     pwAuth,
-			CertificateBytes: reference.Certificates(),
+			// client cert auth requires no password
+			PasswordAuth:     base.PasswordAuth{},
+			CertificateBytes: reference.ClientCertificate(),
+			PrivateKey:       reference.ClientKey(),
 		}
+	} else {
+		auth = &pwAuth
+	}
+
+	if useSecurePrefix {
 		err = d.initializeKvSSLMap(source)
 		if err != nil {
 			return err
@@ -1174,11 +1187,10 @@ func (d *MutationDiffer) openBucket(bucketName string, reference *metadata.Remot
 		connStr = xdcrBase.GetHostAddr(xdcrBase.GetHostName(connStr), sslPort)
 		base.TagCouchbaseSecurePrefix(&connStr)
 	} else {
-		auth = &pwAuth
 		base.TagHttpPrefix(&connStr)
 	}
 
-	agent, err := NewGocbcoreAgent(name, []string{connStr}, bucketName, auth, d.batchSize, capability)
+	agent, err := NewGocbcoreAgent(name, []string{connStr}, bucketName, auth, d.batchSize, capability, reference)
 
 	if source {
 		d.sourceBucketAgent = agent
