@@ -1106,15 +1106,25 @@ func (d *MutationDiffer) openBucket(bucketName string, reference *metadata.Remot
 		auth = &pwAuth
 	}
 
+	err = d.initializeKvSSLMap(source)
+	if err != nil {
+		return err
+	}
+	err = d.initializeKVVBMap(source)
+	if err != nil {
+		return err
+	}
+
+	kvVbMap := d.srcKvVbMap
+	if !source {
+		kvVbMap = d.tgtKvVbMap
+	}
+	for k, _ := range kvVbMap {
+		connStr = k
+		break
+	}
+
 	if useSecurePrefix {
-		err = d.initializeKvSSLMap(source)
-		if err != nil {
-			return err
-		}
-		err = d.initializeKVVBMap(source)
-		if err != nil {
-			return err
-		}
 		// For SSL, the connStr will be secure SSL port to KV directly through CCCP
 		var sslPort uint16
 		var kvVbMap = d.srcKvVbMap
@@ -1134,7 +1144,7 @@ func (d *MutationDiffer) openBucket(bucketName string, reference *metadata.Remot
 		connStr = xdcrBase.GetHostAddr(xdcrBase.GetHostName(connStr), sslPort)
 		base.TagCouchbaseSecurePrefix(&connStr)
 	} else {
-		base.TagHttpPrefix(&connStr)
+		connStr = fmt.Sprintf("%v%v", base.CouchbasePrefix, connStr)
 	}
 
 	agent, err := NewGocbcoreAgent(name, []string{connStr}, bucketName, auth, d.batchSize, capability, reference)
