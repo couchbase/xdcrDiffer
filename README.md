@@ -52,6 +52,32 @@ Then simply run make once the dependencies are satisfied:
 neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer$ make
 ```
 
+### Building with Docker
+
+Docker build:
+```
+docker build -t xdcr-differ:1.0.0 .
+```
+
+#### Multiple platform using docker buildx
+
+Creating the builder: 
+(for additional configuration -> https://docs.docker.com/build/buildkit/configure/)
+
+CTX=mycontext
+docker buildx ls | grep -w ${CTX}  || docker buildx create --name ${CTX}
+
+Docker buildx build for local/developer machine only: 
+```
+docker buildx build  --builder mycontext --platform "linux/arm64" --load -t xdcr-differ:1.0.0 .
+```
+
+Docker buildx build and image push: 
+```
+docker buildx build  --builder mycontext --platform "linux/amd64,linux/arm64" --push -t <myregistry>/xdcr-differ:1.0.0 .
+```
+
+
 ### Running
 #### Preparing Couchbase Clusters
 Before running the differ to examine consistencies between two clusters, it is *highly recommended* to first set the Metadata Purge Interval to a low value, and then once that period has elapsed, run compaction on both clusters to ensure that tombstones are removed. Compaction will also ensure that the differ will only receive the minimum amount of data necessary, which will help minimize the storage requirement for the diff tool.
