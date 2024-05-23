@@ -114,7 +114,6 @@ func NewFileAttribute(fileName string) *FileAttributes {
 type oneEntry struct {
 	Key               string
 	CrMeta            *crMeta.CRMetadata
-	pRev              uint64
 	BucketUUID        hlv.DocumentSourceId
 	Seqno             uint64
 	Xattr             []byte
@@ -126,7 +125,13 @@ type oneEntry struct {
 }
 
 func (oneEntry *oneEntry) String() string {
+	if oneEntry.CrMeta == nil {
+		panic(fmt.Sprintf("Coding Error: crMeta can never be nil. entry for document %s has crMeta to be nil", oneEntry.Key))
+	}
 	docMeta := oneEntry.CrMeta.GetDocumentMetadata()
+	if docMeta == nil {
+		panic(fmt.Sprintf("Coding Error: docMeta can never be nil. entry for document %s has docMeta to be nil", oneEntry.Key))
+	}
 	return fmt.Sprintf("<Key>: %v <Seqno>: %v <RevId>: %v <Cas>: %v <Flags>: %v <Expiry>: %v <OpCode>: %v <DataType>: %v <Hash>: %s <colId>: %v",
 		oneEntry.Key, oneEntry.Seqno, docMeta.RevSeq, docMeta.Cas, docMeta.Flags, docMeta.Expiry, docMeta.Opcode, docMeta.DataType, hex.EncodeToString(oneEntry.BodyHash[:]), oneEntry.ColId)
 }
@@ -162,19 +167,13 @@ func (entry oneEntry) Diff(other oneEntry) (int, bool) {
 			return -1, false
 		}
 	}
-	sourceDocMeta := entry.CrMeta.GetDocumentMetadata()
-	targetDocMeta := other.CrMeta.GetDocumentMetadata()
-	currSourceCas := sourceDocMeta.Cas
-	currTargetCas := targetDocMeta.Cas
-	SetVersion(entry.CrMeta, entry.pRev)
-	SetVersion(other.CrMeta, other.pRev)
 
 	err = SetHlv(entry.CrMeta, other.CrMeta, entry.BucketUUID, other.BucketUUID)
 	if err != nil {
 		// An err is populated only if implict construction of HLVs are not possible --> this implies that there is a diff
 		return 0, false
 	}
-	match, err = entry.CrMeta.Diff(other.CrMeta, xdcrBase.GetHLVPruneFunction(currSourceCas, sourcePruningWindow.get()), xdcrBase.GetHLVPruneFunction(currTargetCas, targetPruningWindow.get()))
+	match, err = entry.CrMeta.Diff(other.CrMeta, xdcrBase.GetHLVPruneFunction(entry.CrMeta.GetDocumentMetadata().Cas, sourcePruningWindow.get()), xdcrBase.GetHLVPruneFunction(other.CrMeta.GetDocumentMetadata().Cas, targetPruningWindow.get()))
 	if err != nil { // error is returned by the Diff method only if either of the HLVs are nil
 		if entry.CrMeta.GetHLV() == nil && other.CrMeta.GetHLV() == nil { // if both the HLVs are nil return true
 			return 0, true
@@ -208,15 +207,6 @@ func SetHlv(crMeta1, crMeta2 *crMeta.CRMetadata, bucketUUID1, bucketUUID2 hlv.Do
 		}
 	}
 	return nil
-}
-
-// Darshan:TODO Add compare MV when merge is implemented
-func SetVersion(crMetadata *crMeta.CRMetadata, pRev uint64) {
-	docMeta := crMetadata.GetDocumentMetadata()
-	if crMetadata.GetImportCas() == docMeta.Cas {
-		docMeta.Cas = crMetadata.GetHLV().GetCvCas()
-		docMeta.RevSeq = pRev
-	}
 }
 
 func (entry *oneEntry) IsMutation() bool {
@@ -282,22 +272,13 @@ func NewFilesDifferWithFDPool(file1, file2 string, fdPool *fdp.FdPool, collectio
 	return differ, nil
 }
 
-func constructHlv(docCas uint64, importCAS uint64, bucketUUID hlv.DocumentSourceId, hlvbytes []byte) (*hlv.HLV, error) {
-	cvCas, cvSrc, cvVer, pvMap, mvMap, err := crMeta.ParseHlvFields(docCas, hlvbytes)
+func UpdateCrMeta(crMetadata *crMeta.CRMetadata, bucketUUID hlv.DocumentSourceId, hlvbytes []byte, pRev uint64) error {
+	cvCas, cvSrc, cvVer, pvMap, mvMap, err := crMeta.ParseHlvFields(crMetadata.GetDocumentMetadata().Cas, hlvbytes)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	var Hlv *hlv.HLV
-	var err1 error
-	if docCas == importCAS {
-		Hlv, err1 = hlv.NewHLV(bucketUUID, cvCas, cvCas, cvSrc, cvVer, pvMap, mvMap)
-	} else {
-		Hlv, err1 = hlv.NewHLV(bucketUUID, docCas, cvCas, cvSrc, cvVer, pvMap, mvMap)
-	}
-	if err1 != nil {
-		return nil, err1
-	}
-	return Hlv, nil
+	err = crMetadata.UpdateHLVIfNeeded(bucketUUID, crMetadata.GetDocumentMetadata().Cas, cvCas, cvSrc, cvVer, pvMap, mvMap, crMetadata.GetImportCas(), pRev)
+	return err
 }
 
 func getOneEntry(readOp fdp.FileOp, bucketUUID hlv.DocumentSourceId) (*oneEntry, error) {
@@ -368,6 +349,8 @@ func getOneEntry(readOp fdp.FileOp, bucketUUID hlv.DocumentSourceId) (*oneEntry,
 	}
 	docMeta.DataType = uint8(binary.BigEndian.Uint16(dataTypeBytes))
 
+	entry.CrMeta.SetDocumentMetadata(docMeta)
+
 	importCasBytes := make([]byte, 8)
 	bytesRead, err = readOp(importCasBytes)
 	if err != nil {
@@ -380,7 +363,7 @@ func getOneEntry(readOp fdp.FileOp, bucketUUID hlv.DocumentSourceId) (*oneEntry,
 	if err != nil {
 		return nil, fmt.Errorf("Unable to read pRevIdBytes, bytes read: %v, err: %v", bytesRead, err)
 	}
-	entry.pRev = binary.BigEndian.Uint64(pRevIdBytes)
+	pRev := binary.BigEndian.Uint64(pRevIdBytes)
 
 	hlvSizebytes := make([]byte, 8)
 	bytesRead, err = readOp(hlvSizebytes)
@@ -395,13 +378,13 @@ func getOneEntry(readOp fdp.FileOp, bucketUUID hlv.DocumentSourceId) (*oneEntry,
 		return nil, fmt.Errorf("Unable to read hlv, bytes read: %v, err: %v", bytesRead, err)
 	}
 	if len(HlvBytes) != 0 {
-		var hlv *hlv.HLV
-		hlv, err = constructHlv(docMeta.Cas, entry.CrMeta.GetImportCas(), entry.BucketUUID, HlvBytes)
-		entry.CrMeta.SetHLV(hlv)
+		// UpdateCrMeta sets the appropriate doc version incase the mutation is an import Mutation
+		err = UpdateCrMeta(entry.CrMeta, entry.BucketUUID, HlvBytes, pRev) // creates the HLV and sets it to crMeta ; updates the version if ImportCas is present
 		if err != nil {
 			return nil, fmt.Errorf("Error in constructing HLV, err: %v", err)
 		}
 	} else {
+		// if HLV is not present then it implies that importCas is not present; True docCas and RevID represent the version of the doc
 		entry.CrMeta.SetHLV(nil)
 	}
 	hashBytes := make([]byte, sha512.Size)
@@ -435,7 +418,6 @@ func getOneEntry(readOp fdp.FileOp, bucketUUID hlv.DocumentSourceId) (*oneEntry,
 		colFilterIds = append(colFilterIds, uint8(binary.BigEndian.Uint16(idByte)))
 	}
 	entry.ColFiltersMatched = colFilterIds
-	entry.CrMeta.SetDocumentMetadata(docMeta)
 	return entry, nil
 }
 
@@ -556,6 +538,8 @@ func (differ *FilesDiffer) diffSorted() (map[uint32][]string, map[uint32][]strin
 					j++
 				} else {
 					if keyCompare == 0 {
+						fmt.Printf("Doc Key %s source %v target %v isImportSource %v isImportTarget %v\n", item1.Key, item1.CrMeta.GetDocumentMetadata(), item2.CrMeta.GetDocumentMetadata(), item1.CrMeta.IsImportMutation(), item2.CrMeta.IsImportMutation())
+						fmt.Printf("Source HLV %v Target HLV %v\n", item1.CrMeta.GetHLV(), item2.CrMeta.GetHLV())
 						// Both document are the same, but others mismatched
 						if validComparison {
 							var onePair entryPair

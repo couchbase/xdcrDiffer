@@ -98,13 +98,13 @@ func (r *GetResult) MarshalJSON() ([]byte, error) {
 
 	// GetMetaResult nil implies that the compareType is "body only"
 	if r.GetMetaResult == nil {
-		dataToBeEncoded[base.JsonBody] = r.Value
+		dataToBeEncoded[base.JsonBody] = r.value
 		return json.Marshal(dataToBeEncoded)
 	}
 
 	// compareType can either be "meta only" or "both body and meta"
-	if r.Value != nil { // indicates compareType is "both body and meta"
-		dataToBeEncoded[base.JsonBody] = r.Value
+	if r.value != nil { // indicates compareType is "both body and meta"
+		dataToBeEncoded[base.JsonBody] = r.value
 	}
 
 	dataToBeEncoded[base.JsonMetadata] = r.GetMetaResult
@@ -910,7 +910,7 @@ func (b *batch) get(key string, isSource bool, compareType string, colId uint32)
 		if err != nil {
 			getResult.bodyErr = err
 		} else {
-			getResult.Value = result.Value
+			getResult.value = result.Value
 		}
 		b.waitGroup.Done()
 	}
@@ -953,7 +953,7 @@ func (b *batch) get(key string, isSource bool, compareType string, colId uint32)
 		} else {
 			getResult.lock.Lock()
 			defer getResult.lock.Unlock()
-			getResult.HLV, getResult.importCas, getResult.pRev, getResult.parsingErr = getHlvImportCas(bucketUUID, result)
+			getResult.hlvBytes, getResult.importCas, getResult.pRev, getResult.parsingErr = getHlvImportCas(bucketUUID, result)
 		}
 		b.waitGroup.Done()
 	}
@@ -1006,14 +1006,14 @@ func isKeyNotFoundError(err error) bool {
 
 func areGetResultsBodyTheSame(result1, result2 *GetResult) bool {
 
-	if result1.Value == nil {
-		return result2.Value == nil
+	if result1.value == nil {
+		return result2.value == nil
 	}
-	if result2.Value == nil {
+	if result2.value == nil {
 		return false
 	}
 
-	return reflect.DeepEqual(result1.Value, result2.Value)
+	return reflect.DeepEqual(result1.value, result2.value)
 }
 
 // This function is used to docMeta for metadata comparison
@@ -1046,24 +1046,34 @@ func areGetResultsTheSame(result1, result2 *GetResult, sourceUUID, targetUUID hl
 	} else if !isDeleted(result1.GetMetaResult) && isDeleted(result2.GetMetaResult) {
 		return false, nil
 	} else {
-		// Only compare json and Xattr bits of the datatype
+		// this parsingError is set if importCas and pRev is present, and there is an error while converting them to uint64
 		if result1.parsingErr != nil || result2.parsingErr != nil {
-			return false, fmt.Errorf("cannot compare metadata for document with key %v due to HLV parsing error either at the source or at target. SourceErr: %v TargetError: %v", result1.key, result1.parsingErr, result2.parsingErr)
+			return false, fmt.Errorf("cannot compare metadata for document with key %v due to parsing error either at the source or at target. SourceErr: %v TargetError: %v", result1.key, result1.parsingErr, result2.parsingErr)
 		}
 		sourceCrMeta := &xdcrCrMeta.CRMetadata{}
 		targetCrMeta := &xdcrCrMeta.CRMetadata{}
 
 		sourceCrMeta.SetDocumentMetadata(NewDocMeta(result1))
 		sourceCrMeta.SetImportCas(result1.importCas)
-		sourceCrMeta.SetHLV(result1.HLV)
+		if result1.hlvBytes != nil && len(result1.hlvBytes) != 0 {
+			err := UpdateCrMeta(sourceCrMeta, sourceUUID, result1.hlvBytes, result1.pRev)
+			if err != nil {
+				return false, fmt.Errorf("cannot compare metadata for document with key %v due to HLV parsing error either at source. SourceErr: %v ", result1.key, err)
+			}
+		}
 
 		targetCrMeta.SetDocumentMetadata(NewDocMeta(result2))
 		targetCrMeta.SetImportCas(result2.importCas)
-		targetCrMeta.SetHLV(result2.HLV)
+		if result2.hlvBytes != nil && len(result2.hlvBytes) != 0 {
+			err := UpdateCrMeta(targetCrMeta, targetUUID, result2.hlvBytes, result2.pRev)
+			if err != nil {
+				return false, fmt.Errorf("cannot compare metadata for document with key %v due to HLV parsing error either at target. TargetErr: %v ", result2.key, err)
+			}
+		}
 
-		SetVersion(sourceCrMeta, result1.pRev)
-		SetVersion(targetCrMeta, result2.pRev)
 		err := SetHlv(sourceCrMeta, targetCrMeta, sourceUUID, targetUUID)
+		result1.HLV = sourceCrMeta.GetHLV()
+		result2.HLV = targetCrMeta.GetHLV()
 		if err != nil {
 			// An err is populated only if implict construction of HLVs are not possible --> this implies that there is a diff
 			// return false and ignore the error.
@@ -1086,12 +1096,11 @@ func areGetResultsTheSame(result1, result2 *GetResult, sourceUUID, targetUUID hl
 	}
 }
 
-func getHlvImportCas(bucketUUID string, result *gocbcore.LookupInResult) (Hlv *hlv.HLV, importCas uint64, pRev uint64, err error) {
+func getHlvImportCas(bucketUUID string, result *gocbcore.LookupInResult) (hlvBytes []byte, importCas uint64, pRev uint64, err error) {
 	if result == nil {
 		return
 	}
 	var importCasBytes []byte
-	var hlvBytes []byte
 	var pRevBytes []byte
 	if result.Ops[0].Err == nil {
 		hlvBytes = result.Ops[0].Value
@@ -1102,7 +1111,6 @@ func getHlvImportCas(bucketUUID string, result *gocbcore.LookupInResult) (Hlv *h
 	if result.Ops[2].Err == nil {
 		pRevBytes = result.Ops[2].Value
 	}
-	hlvLen := len(hlvBytes)
 	importLen := len(importCasBytes)
 	pRevLen := len(pRevBytes)
 	if importCasBytes != nil && importLen != 0 {
@@ -1119,15 +1127,6 @@ func getHlvImportCas(bucketUUID string, result *gocbcore.LookupInResult) (Hlv *h
 			return
 		}
 	}
-	if hlvBytes != nil && hlvLen != 0 {
-		var bucketId hlv.DocumentSourceId
-		bucketId, err = hlv.UUIDtoDocumentSource(bucketUUID)
-		if err != nil {
-			err = fmt.Errorf("Error occured while converting the bucket UUID %v to HLV required format. err: %v", bucketUUID, err)
-			return
-		}
-		Hlv, err = constructHlv(uint64(result.Cas), importCas, bucketId, hlvBytes)
-	}
 	return
 }
 
@@ -1140,13 +1139,14 @@ func isDeleted(result *gocbcore.GetMetaResult) bool {
 
 type GetResult struct {
 	key        string
-	Value      []byte
+	value      []byte
 	importCas  uint64
 	pRev       uint64
 	bodyErr    error
 	metaErr    error
 	parsingErr error
 	*gocbcore.GetMetaResult
+	hlvBytes []byte
 	*hlv.HLV
 	lock sync.RWMutex
 }
