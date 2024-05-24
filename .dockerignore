@@ -1,0 +1,10 @@
+.DS_Store
+.project
+fileDiff/
+mutationDiff/
+source/
+target/
+xdcrDiffer
+go.mod
+go.sum
+xdcrDiffer.log
