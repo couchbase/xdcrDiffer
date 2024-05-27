@@ -538,8 +538,6 @@ func (differ *FilesDiffer) diffSorted() (map[uint32][]string, map[uint32][]strin
 					j++
 				} else {
 					if keyCompare == 0 {
-						fmt.Printf("Doc Key %s source %v target %v isImportSource %v isImportTarget %v\n", item1.Key, item1.CrMeta.GetDocumentMetadata(), item2.CrMeta.GetDocumentMetadata(), item1.CrMeta.IsImportMutation(), item2.CrMeta.IsImportMutation())
-						fmt.Printf("Source HLV %v Target HLV %v\n", item1.CrMeta.GetHLV(), item2.CrMeta.GetHLV())
 						// Both document are the same, but others mismatched
 						if validComparison {
 							var onePair entryPair
