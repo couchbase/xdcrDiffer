@@ -18,8 +18,8 @@ type GocbcoreAgent struct {
 	agent *gocbcore.Agent
 }
 
-func (a *GocbcoreAgent) setupAgent(auth interface{}, batchSize int, capability metadata.Capability) error {
-	agentConfig, err := a.setupAgentConfig(auth, capability, batchSize)
+func (a *GocbcoreAgent) setupAgent(auth interface{}, batchSize int, capability metadata.Capability, reference *metadata.RemoteClusterReference) error {
+	agentConfig, err := a.setupAgentConfig(auth, capability, batchSize, reference)
 	if err != nil {
 		return err
 	}
@@ -34,34 +34,39 @@ func (a *GocbcoreAgent) setupAgent(auth interface{}, batchSize int, capability m
 	return a.setupGocbcoreAgent(agentConfig)
 }
 
-func (a *GocbcoreAgent) setupAgentConfig(authIn interface{}, capability metadata.Capability, batchSize int) (*gocbcore.AgentConfig, error) {
+func (a *GocbcoreAgent) setupAgentConfig(authIn interface{}, capability metadata.Capability, batchSize int, reference *metadata.RemoteClusterReference) (*gocbcore.AgentConfig, error) {
 	var auth gocbcore.AuthProvider
 	var useTLS bool
+	certPool := x509.NewCertPool()
 
-	x509Provider := func() *x509.CertPool {
-		return nil
+	if authIn == nil {
+		panic("authIn is nil")
 	}
 
-	if authIn != nil {
-		if pwAuth, ok := authIn.(*base.PasswordAuth); ok {
-			auth = gocbcore.PasswordAuthProvider{
-				Username: pwAuth.Username,
-				Password: pwAuth.Password,
-			}
-		} else if certAuth, ok := authIn.(*base.CertificateAuth); ok {
-			useTLS = true
-			auth = certAuth
-			certPool := x509.NewCertPool()
-			ok := certPool.AppendCertsFromPEM(certAuth.CertificateBytes)
-			if !ok {
-				return nil, xdcrBase.InvalidCerfiticateError
-			}
-			x509Provider = func() *x509.CertPool {
-				return certPool
-			}
-		} else {
-			panic(fmt.Sprintf("Unknown type: %v\n", reflect.TypeOf(authIn)))
+	if reference.HttpAuthMech() == xdcrBase.HttpAuthMechHttps {
+		useTLS = true
+		ok := certPool.AppendCertsFromPEM(reference.Certificates())
+		if !ok {
+			return nil, fmt.Errorf("Invalid rootCA from gocbcoreagent")
 		}
+	}
+	x509Provider := func() *x509.CertPool {
+		return certPool
+	}
+
+	if pwAuth, ok := authIn.(*base.PasswordAuth); ok {
+		auth = gocbcore.PasswordAuthProvider{
+			Username: pwAuth.Username,
+			Password: pwAuth.Password,
+		}
+	} else if certAuth, ok := authIn.(*base.CertificateAuth); ok {
+		auth = certAuth
+		ok = certPool.AppendCertsFromPEM(certAuth.CertificateBytes)
+		if !ok {
+			return nil, fmt.Errorf("setupAgent invalid clientCert %s", certAuth.CertificateBytes)
+		}
+	} else {
+		panic(fmt.Sprintf("Unknown type: %v\n", reflect.TypeOf(authIn)))
 	}
 
 	return &gocbcore.AgentConfig{
@@ -150,6 +155,12 @@ func (a *GocbcoreAgent) GetHlv(key string, callbackFunc func(result *gocbcore.Lo
 				Path:  xdcrBase.XATTR_IMPORTCAS,
 				Value: nil,
 			},
+			{
+				Op:    memd.SubDocOpType(memd.CmdSubDocGet),
+				Flags: memd.SubdocFlag(xdcrBase.SUBDOC_FLAG_XATTR),
+				Path:  xdcrBase.XATTR_PREVIOUSREV,
+				Value: nil,
+			},
 		},
 		RetryStrategy: nil,
 		CollectionID:  colId,
@@ -158,7 +169,7 @@ func (a *GocbcoreAgent) GetHlv(key string, callbackFunc func(result *gocbcore.Lo
 	return err
 }
 
-func NewGocbcoreAgent(id string, servers []string, bucketName string, auth interface{}, batchSize int, capability metadata.Capability) (*GocbcoreAgent, error) {
+func NewGocbcoreAgent(id string, servers []string, bucketName string, auth interface{}, batchSize int, capability metadata.Capability, reference *metadata.RemoteClusterReference) (*GocbcoreAgent, error) {
 	gocbcoreAgent := &GocbcoreAgent{
 		GocbcoreAgentCommon: base.GocbcoreAgentCommon{
 			Name:         id,
@@ -169,6 +180,6 @@ func NewGocbcoreAgent(id string, servers []string, bucketName string, auth inter
 		agent: nil,
 	}
 
-	err := gocbcoreAgent.setupAgent(auth, batchSize, capability)
+	err := gocbcoreAgent.setupAgent(auth, batchSize, capability, reference)
 	return gocbcoreAgent, err
 }

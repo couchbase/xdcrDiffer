@@ -26,6 +26,7 @@ import (
 	mcc "github.com/couchbase/gomemcached/client"
 	xdcrBase "github.com/couchbase/goxdcr/base"
 	xdcrParts "github.com/couchbase/goxdcr/base/filter"
+	"github.com/couchbase/goxdcr/crMeta"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/couchbase/goxdcr/metadata"
 	xdcrUtils "github.com/couchbase/goxdcr/utils"
@@ -541,7 +542,8 @@ func (mut *Mutation) Serialize() ([]byte, error) {
 	var bodyHash [64]byte
 	var xattrSize uint32
 	var xattr []byte
-	var bodyWithoutXattr, trimmedXattrPlusBody, hlv, importCas []byte
+	var bodyWithoutXattr, trimmedXattrPlusBody, hlv []byte
+	var importCas, pRev uint64
 	var err error
 	if mut.Datatype&xdcrBase.XattrDataType > 0 {
 		var KVsToBeExcluded map[string][]byte
@@ -556,17 +558,21 @@ func (mut *Mutation) Serialize() ([]byte, error) {
 			return nil, err
 		}
 		hlv = KVsToBeExcluded[xdcrBase.XATTR_HLV]
-		importCas = KVsToBeExcluded[xdcrBase.XATTR_IMPORTCAS]
+		mou, ok := KVsToBeExcluded[xdcrBase.XATTR_MOU]
+		if ok {
+			_, _, importCas, pRev, err = crMeta.GetImportCasAndPrevFromMou(mou)
+			if err != nil {
+				return nil, err
+			}
+		}
 		bodyHash = sha512.Sum512(trimmedXattrPlusBody)
 	} else {
 		bodyHash = sha512.Sum512(mut.Value)
 	}
 
-	hlvLen := uint32(len(hlv))
-	importCasLen := uint32(len(importCas))
-	hlvPlusImportSize := hlvLen + importCasLen
+	hlvLen := uint64(len(hlv))
 	keyLen := len(mut.Key)
-	ret := make([]byte, base.GetFixedSizeMutationLen(keyLen, hlvPlusImportSize, mut.ColFiltersMatched))
+	ret := make([]byte, base.GetFixedSizeMutationLen(keyLen, hlvLen, mut.ColFiltersMatched))
 
 	pos := 0
 	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(keyLen))
@@ -587,14 +593,14 @@ func (mut *Mutation) Serialize() ([]byte, error) {
 	pos += 2
 	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(mut.Datatype))
 	pos += 2
-	binary.BigEndian.PutUint32(ret[pos:pos+4], hlvLen)
-	pos += 4
+	binary.BigEndian.PutUint64(ret[pos:pos+8], importCas)
+	pos += 8
+	binary.BigEndian.PutUint64(ret[pos:pos+8], pRev)
+	pos += 8
+	binary.BigEndian.PutUint64(ret[pos:pos+8], hlvLen)
+	pos += 8
 	copy(ret[pos:pos+int(hlvLen)], hlv)
 	pos += int(hlvLen)
-	binary.BigEndian.PutUint32(ret[pos:pos+4], importCasLen)
-	pos += 4
-	copy(ret[pos:pos+int(importCasLen)], importCas)
-	pos += int(importCasLen)
 	copy(ret[pos:], bodyHash[:])
 	pos += 64
 	binary.BigEndian.PutUint32(ret[pos:pos+4], mut.ColId)
@@ -651,6 +657,6 @@ func removeKVSubsetFromXattr(xattr []byte, size int, xattrSize uint32, xattrIter
 			return nil, nil, err
 		}
 	}
-	trimmedXattrPlusBody, _ = xattrComposer.FinishAndAppendDocValue(bodyWithoutXattr)
+	trimmedXattrPlusBody, _ = xattrComposer.FinishAndAppendDocValue(bodyWithoutXattr, nil, nil)
 	return trimmedXattrPlusBody, KVsToBeExcluded, nil
 }
