@@ -22,6 +22,7 @@ import (
 	fdp "xdcrDiffer/fileDescriptorPool"
 	"xdcrDiffer/utils"
 
+	"github.com/couchbase/goxdcr/hlv"
 	xdcrLog "github.com/couchbase/goxdcr/log"
 	"github.com/couchbase/goxdcr/metadata"
 	"github.com/couchbase/goxdcr/service_def"
@@ -214,6 +215,8 @@ func (m MutationDiffFetchListIdx) AddEntry(entry *MutationDifferFetchEntry) {
 type DifferDriver struct {
 	sourceFileDir     string
 	targetFileDir     string
+	sourceClusterUUID string
+	targetClusterUUID string
 	sourceBucketUUID  string
 	targetBucketUUID  string
 	diffFileDir       string
@@ -243,7 +246,7 @@ type DifferDriver struct {
 	logger            *xdcrLog.CommonLogger
 }
 
-func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32, sourceBucketUUID, targetBucketUUID string, bucketTopologySvc service_def.BucketTopologySvc, specifiedSpec *metadata.ReplicationSpecification, logger *xdcrLog.CommonLogger) *DifferDriver {
+func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32, sourceClusterUUID, targetClusterUUID, sourceBucketUUID, targetBucketUUID string, bucketTopologySvc service_def.BucketTopologySvc, specifiedSpec *metadata.ReplicationSpecification, logger *xdcrLog.CommonLogger) *DifferDriver {
 	var fdPool *fdp.FdPool
 	if numberOfFds > 0 {
 		fdPool = fdp.NewFileDescriptorPool(numberOfFds)
@@ -270,6 +273,8 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName
 		TgtVbItemCntMap:   make(map[uint16]int),
 		MapLock:           &sync.RWMutex{},
 		DuplicatedHint:    DuplicatedHintMap{},
+		sourceClusterUUID: sourceClusterUUID,
+		targetClusterUUID: targetClusterUUID,
 		sourceBucketUUID:  sourceBucketUUID,
 		targetBucketUUID:  targetBucketUUID,
 		bucketTopologySvc: bucketTopologySvc,
@@ -483,8 +488,17 @@ func (dh *DifferHandler) run() error {
 			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex)
 
 			filesDiffer, err := NewFilesDifferWithFDPool(sourceFileName, targetFileName, dh.fileDescPool, dh.collectionMapping, dh.colFilterStrings, dh.colFilterTgtIds, dh.driver.logger)
-			filesDiffer.file1.bucketUUID = dh.driver.sourceBucketUUID
-			filesDiffer.file2.bucketUUID = dh.driver.targetBucketUUID
+			filesDiffer.file1.actorId, err = hlv.UUIDstoDocumentSource(dh.driver.sourceBucketUUID, dh.driver.sourceClusterUUID)
+			if err != nil {
+				dh.driver.logger.Errorf("error occured while constructing the actorID from bucketUUID %v and clusterUUID %v. err %v", dh.driver.sourceBucketUUID, dh.driver.sourceClusterUUID, err)
+				return err
+			}
+			filesDiffer.file2.actorId, err = hlv.UUIDstoDocumentSource(dh.driver.targetBucketUUID, dh.driver.targetClusterUUID)
+			// fmt.Printf("Darshan sc %v tc %v sb %v tb %v sf %v tf %v\n", dh.driver.sourceClusterUUID, dh.driver.targetClusterUUID, dh.driver.sourceBucketUUID, dh.driver.targetBucketUUID, filesDiffer.file1.actorId, filesDiffer.file2.actorId)
+			if err != nil {
+				dh.driver.logger.Errorf("error occured while constructing the actorID from bucketUUID %v and clusterUUID %v. err %v", dh.driver.targetBucketUUID, dh.driver.targetClusterUUID, err)
+				return err
+			}
 			if err != nil {
 				// Most likely FD overrun, program should exit. Print a msg just in case
 				dh.driver.logger.Errorf("Creating file differ for files %v and %v resulted in error: %v\n",
