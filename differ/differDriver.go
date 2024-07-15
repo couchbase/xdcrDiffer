@@ -494,7 +494,6 @@ func (dh *DifferHandler) run() error {
 				return err
 			}
 			filesDiffer.file2.actorId, err = hlv.UUIDstoDocumentSource(dh.driver.targetBucketUUID, dh.driver.targetClusterUUID)
-			// fmt.Printf("Darshan sc %v tc %v sb %v tb %v sf %v tf %v\n", dh.driver.sourceClusterUUID, dh.driver.targetClusterUUID, dh.driver.sourceBucketUUID, dh.driver.targetBucketUUID, filesDiffer.file1.actorId, filesDiffer.file2.actorId)
 			if err != nil {
 				dh.driver.logger.Errorf("error occured while constructing the actorID from bucketUUID %v and clusterUUID %v. err %v", dh.driver.targetBucketUUID, dh.driver.targetClusterUUID, err)
 				return err
