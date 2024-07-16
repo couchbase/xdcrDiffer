@@ -370,6 +370,7 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 	if err != nil || statusCode != 200 {
 		return nil, fmt.Errorf("Failed on calling %v, err=%v, statusCode=%v\n", xdcrBase.PoolsPath, err, statusCode)
 	}
+	// note that xdcrBase.RemoteClusterUuid is purely "uuid" and can be used for local cluster UUID as well
 	uuidObj, ok := poolsInfo[xdcrBase.RemoteClusterUuid]
 	if !ok {
 		return nil, fmt.Errorf("Could not get uuid of local cluster.\n")
