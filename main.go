@@ -329,6 +329,10 @@ type xdcrDiffTool struct {
 	xattrKeysForNoCompare map[string]bool
 }
 
+func staticHostAddr() string {
+	return "http://" + options.sourceUrl
+}
+
 func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 	var err error
 	difftool := &xdcrDiffTool{
@@ -360,8 +364,19 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 		logCtx.SetLogLevel(xdcrLog.LogLevelDebug)
 		gocb.SetLogger(gocb.VerboseStdioLogger())
 	}
-
-	difftool.selfRef, _ = metadata.NewRemoteClusterReference("", base.SelfReferenceName, options.sourceUrl, options.sourceUsername, options.sourcePassword,
+	var poolsInfo map[string]interface{}
+	var sourceClusterUUID string
+	err, statusCode := difftool.utils.QueryRestApi(staticHostAddr(), xdcrBase.PoolsPath, false, xdcrBase.MethodGet, "", nil, 0, &poolsInfo, difftool.logger)
+	if err != nil || statusCode != 200 {
+		return nil, fmt.Errorf("Failed on calling %v, err=%v, statusCode=%v\n", xdcrBase.PoolsPath, err, statusCode)
+	}
+	// note that xdcrBase.RemoteClusterUuid is purely "uuid" and can be used for local cluster UUID as well
+	uuidObj, ok := poolsInfo[xdcrBase.RemoteClusterUuid]
+	if !ok {
+		return nil, fmt.Errorf("Could not get uuid of local cluster.\n")
+	}
+	sourceClusterUUID = uuidObj.(string)
+	difftool.selfRef, _ = metadata.NewRemoteClusterReference(sourceClusterUUID, base.SelfReferenceName, options.sourceUrl, options.sourceUsername, options.sourcePassword,
 		"", false, "", nil, nil, nil, nil)
 
 	if !legacyMode {
@@ -789,7 +804,7 @@ func (difftool *xdcrDiffTool) diffDataFiles() error {
 
 	difftoolDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.fileDifferDir,
 		base.DiffKeysFileName, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBins),
-		int(options.numberOfFileDesc), difftool.srcToTgtColIdsMap, difftool.colFilterOrderedKeys, difftool.colFilterOrderedTargetColId, difftool.specifiedSpec.SourceBucketUUID, difftool.specifiedSpec.TargetBucketUUID, difftool.bucketTopologySvc, difftool.specifiedSpec, difftool.logger)
+		int(options.numberOfFileDesc), difftool.srcToTgtColIdsMap, difftool.colFilterOrderedKeys, difftool.colFilterOrderedTargetColId, difftool.selfRef.Uuid_, difftool.specifiedRef.Uuid_, difftool.specifiedSpec.SourceBucketUUID, difftool.specifiedSpec.TargetBucketUUID, difftool.bucketTopologySvc, difftool.specifiedSpec, difftool.logger)
 	err = difftoolDriver.Run()
 	if err != nil {
 		difftool.logger.Errorf("Error from diffDataFiles = %v\n", err)
@@ -833,8 +848,8 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 		return
 	}
 
-	mutationDiffer := differ.NewMutationDiffer(difftool.specifiedSpec.SourceBucketName, difftool.specifiedSpec.SourceBucketUUID,
-		difftool.selfRef, difftool.specifiedSpec.TargetBucketName, difftool.specifiedSpec.TargetBucketUUID, difftool.specifiedRef,
+	mutationDiffer := differ.NewMutationDiffer(difftool.selfRef.Uuid_, difftool.specifiedSpec.SourceBucketName, difftool.specifiedSpec.SourceBucketUUID,
+		difftool.selfRef, difftool.specifiedRef.Uuid_, difftool.specifiedSpec.TargetBucketName, difftool.specifiedSpec.TargetBucketUUID, difftool.specifiedRef,
 		options.fileDifferDir, options.mutationDifferDir, int(options.numberOfWorkersForMutationDiffer),
 		int(options.mutationDifferBatchSize), int(options.mutationDifferTimeout), int(options.maxNumOfSendBatchRetry),
 		time.Duration(options.sendBatchRetryInterval)*time.Millisecond,

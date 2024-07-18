@@ -95,7 +95,7 @@ func (d DuplicatedHintMap) ToIntMap() map[string][]int {
 
 type FileAttributes struct {
 	name          string
-	bucketUUID    string
+	actorId       hlv.DocumentSourceId
 	entries       map[uint32]map[string]*oneEntry
 	sortedEntries map[uint32][]*oneEntry
 	readOp        fdp.FileOp
@@ -114,7 +114,7 @@ func NewFileAttribute(fileName string) *FileAttributes {
 type oneEntry struct {
 	Key               string
 	CrMeta            *crMeta.CRMetadata
-	BucketUUID        hlv.DocumentSourceId
+	ActorID           hlv.DocumentSourceId
 	Seqno             uint64
 	Xattr             []byte
 	XattrSize         uint32
@@ -168,7 +168,7 @@ func (entry oneEntry) Diff(other oneEntry) (int, bool) {
 		}
 	}
 
-	err = SetHlv(entry.CrMeta, other.CrMeta, entry.BucketUUID, other.BucketUUID)
+	err = SetHlv(entry.CrMeta, other.CrMeta, entry.ActorID, other.ActorID)
 	if err != nil {
 		// An err is populated only if implict construction of HLVs are not possible --> this implies that there is a diff
 		return 0, false
@@ -272,20 +272,20 @@ func NewFilesDifferWithFDPool(file1, file2 string, fdPool *fdp.FdPool, collectio
 	return differ, nil
 }
 
-func UpdateCrMeta(crMetadata *crMeta.CRMetadata, bucketUUID hlv.DocumentSourceId, hlvbytes []byte, pRev uint64) error {
+func UpdateCrMeta(crMetadata *crMeta.CRMetadata, actorID hlv.DocumentSourceId, hlvbytes []byte, pRev uint64) error {
 	cvCas, cvSrc, cvVer, pvMap, mvMap, err := crMeta.ParseHlvFields(crMetadata.GetDocumentMetadata().Cas, hlvbytes)
 	if err != nil {
 		return err
 	}
-	err = crMetadata.UpdateHLVIfNeeded(bucketUUID, crMetadata.GetDocumentMetadata().Cas, cvCas, cvSrc, cvVer, pvMap, mvMap, crMetadata.GetImportCas(), pRev)
+	err = crMetadata.UpdateHLVIfNeeded(actorID, crMetadata.GetDocumentMetadata().Cas, cvCas, cvSrc, cvVer, pvMap, mvMap, crMetadata.GetImportCas(), pRev)
 	return err
 }
 
-func getOneEntry(readOp fdp.FileOp, bucketUUID hlv.DocumentSourceId) (*oneEntry, error) {
+func getOneEntry(readOp fdp.FileOp, actorId hlv.DocumentSourceId) (*oneEntry, error) {
 	entry := &oneEntry{}
 	docMeta := &xdcrBase.DocumentMetadata{}
 	entry.CrMeta = &crMeta.CRMetadata{}
-	entry.BucketUUID = bucketUUID
+	entry.ActorID = actorId
 	keyLenBytes := make([]byte, 2)
 	bytesRead, err := readOp(keyLenBytes)
 	if err != nil {
@@ -379,7 +379,7 @@ func getOneEntry(readOp fdp.FileOp, bucketUUID hlv.DocumentSourceId) (*oneEntry,
 	}
 	if len(HlvBytes) != 0 {
 		// UpdateCrMeta sets the appropriate doc version incase the mutation is an import Mutation
-		err = UpdateCrMeta(entry.CrMeta, entry.BucketUUID, HlvBytes, pRev) // creates the HLV and sets it to crMeta ; updates the version if ImportCas is present
+		err = UpdateCrMeta(entry.CrMeta, entry.ActorID, HlvBytes, pRev) // creates the HLV and sets it to crMeta ; updates the version if ImportCas is present
 		if err != nil {
 			return nil, fmt.Errorf("Error in constructing HLV, err: %v", err)
 		}
@@ -428,12 +428,8 @@ func (a ByKeyName) Less(i, j int) bool { return a[i].Key < a[j].Key }
 func (attr *FileAttributes) fillAndDedupEntries() error {
 	var err error
 	var entry *oneEntry
-	bucketUUID, er := hlv.UUIDtoDocumentSource(attr.bucketUUID)
-	if er != nil {
-		return er
-	}
 	for {
-		entry, err = getOneEntry(attr.readOp, bucketUUID)
+		entry, err = getOneEntry(attr.readOp, attr.actorId)
 		if err != nil {
 			break
 		}
