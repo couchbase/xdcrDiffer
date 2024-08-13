@@ -12,7 +12,7 @@ replace github.com/couchbase/go_json => ../go_json
 
 replace github.com/couchbase/query => ../query
 
-replace github.com/couchbase/gocb/v2 => ../../../../../godeps/src/github.com/couchbase/gocb/v2
+replace github.com/couchbase/gocb/v2 => github.com/couchbase/gocb/v2 v2.2.5
 
 require (
     github.com/couchbase/gocb/v2 v2.9.1
