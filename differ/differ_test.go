@@ -12,16 +12,17 @@ package differ
 import (
 	"crypto/sha512"
 	"fmt"
-	"github.com/couchbase/gomemcached"
-	"github.com/stretchr/testify/assert"
 	"io/ioutil"
 	"math/rand"
 	"os"
 	"sync"
 	"testing"
 	"time"
-	"xdcrDiffer/dcp"
-	fdp "xdcrDiffer/fileDescriptorPool"
+
+	"github.com/couchbase/gomemcached"
+	"github.com/couchbase/xdcrDiffer/dcp"
+	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
+	"github.com/stretchr/testify/assert"
 )
 
 const MaxUint64 = ^uint64(0)
@@ -43,15 +44,16 @@ func randInt(min int, max int) int {
 
 // serialize mutation into []byte
 // format:
-//  keyLen  - 2 bytes
-//  key  - length specified by keyLen
-//  seqno   - 8 bytes
-//  revId   - 8 bytes
-//  cas     - 8 bytes
-//  flags   - 4 bytes
-//  expiry  - 4 bytes
-//  opCode - 1 bytes
-//  hash    - 64 bytes
+//
+//	keyLen  - 2 bytes
+//	key  - length specified by keyLen
+//	seqno   - 8 bytes
+//	revId   - 8 bytes
+//	cas     - 8 bytes
+//	flags   - 4 bytes
+//	expiry  - 4 bytes
+//	opCode - 1 bytes
+//	hash    - 64 bytes
 func genTestData(regularMutation, colFilters bool) (key string, seqno, revId, cas uint64, flags, expiry uint32, opCode gomemcached.CommandCode, hash [64]byte, ret []byte, colId uint32, filterIds []uint8) {
 	randomOnce.Do(func() {
 		rand.Seed(time.Now().UTC().UnixNano())

@@ -18,14 +18,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"xdcrDiffer/base"
-	fdp "xdcrDiffer/fileDescriptorPool"
-	"xdcrDiffer/utils"
 
-	"github.com/couchbase/goxdcr/hlv"
-	xdcrLog "github.com/couchbase/goxdcr/log"
-	"github.com/couchbase/goxdcr/metadata"
-	"github.com/couchbase/goxdcr/service_def"
+	"github.com/couchbase/goxdcr/v8/hlv"
+	xdcrLog "github.com/couchbase/goxdcr/v8/log"
+	"github.com/couchbase/goxdcr/v8/metadata"
+	"github.com/couchbase/goxdcr/v8/service_def"
+	"github.com/couchbase/xdcrDiffer/base"
+	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
+	"github.com/couchbase/xdcrDiffer/utils"
 )
 
 // For each ColID, the keys that have diffs

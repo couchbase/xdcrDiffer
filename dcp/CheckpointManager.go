@@ -9,13 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"xdcrDiffer/base"
-	"xdcrDiffer/utils"
-
 	"github.com/couchbase/gocb/v2"
 	"github.com/couchbase/gocbcore/v10"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	xdcrLog "github.com/couchbase/goxdcr/log"
+	xdcrBase "github.com/couchbase/goxdcr/v8/base"
+	xdcrLog "github.com/couchbase/goxdcr/v8/log"
+	"github.com/couchbase/xdcrDiffer/base"
+	"github.com/couchbase/xdcrDiffer/utils"
 	"github.com/rcrowley/go-metrics"
 )
 

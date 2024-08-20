@@ -10,11 +10,10 @@
 # Go parameters
 GOCMD=go
 GOBUILD=$(GOCMD) build
-GOCLEAN=$(GOCMD) clean
 BINARY_NAME=xdcrDiffer
 
 all: build
 build:
-	$(GOBUILD) -modfile go-public.mod -o $(BINARY_NAME) -v
+	$(GOBUILD) -o $(BINARY_NAME) -v
 clean:
 	rm $(BINARY_NAME)

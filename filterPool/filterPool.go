@@ -11,9 +11,9 @@ package filterPool
 
 import (
 	"fmt"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	xdcrParts "github.com/couchbase/goxdcr/base/filter"
-	xdcrUtils "github.com/couchbase/goxdcr/utils"
+	xdcrBase "github.com/couchbase/goxdcr/v8/base"
+	xdcrParts "github.com/couchbase/goxdcr/v8/base/filter"
+	xdcrUtils "github.com/couchbase/goxdcr/v8/utils"
 )
 
 // Implements xdcrParts/filter

@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"reflect"
 	"time"
-	"xdcrDiffer/base"
 
 	"github.com/couchbase/gocbcore/v10"
 	"github.com/couchbase/gocbcore/v10/memd"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	"github.com/couchbase/goxdcr/metadata"
+	xdcrBase "github.com/couchbase/goxdcr/v8/base"
+	"github.com/couchbase/goxdcr/v8/metadata"
+	"github.com/couchbase/xdcrDiffer/base"
 )
 
 type GocbcoreAgent struct {

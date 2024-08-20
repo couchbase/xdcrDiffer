@@ -23,24 +23,23 @@ import (
 	"sync/atomic"
 	"time"
 
-	"xdcrDiffer/base"
-	"xdcrDiffer/dcp"
-	"xdcrDiffer/differ"
-	fdp "xdcrDiffer/fileDescriptorPool"
-	"xdcrDiffer/filterPool"
-	"xdcrDiffer/utils"
-
 	"github.com/couchbase/gocb/v2"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	xdcrParts "github.com/couchbase/goxdcr/base/filter"
-	xdcrLog "github.com/couchbase/goxdcr/log"
-	"github.com/couchbase/goxdcr/metadata"
-	"github.com/couchbase/goxdcr/metadata_svc"
-	"github.com/couchbase/goxdcr/service_def"
-	service_def_mock "github.com/couchbase/goxdcr/service_def/mocks"
-	"github.com/couchbase/goxdcr/service_impl"
-	"github.com/couchbase/goxdcr/streamApiWatcher"
-	xdcrUtils "github.com/couchbase/goxdcr/utils"
+	xdcrBase "github.com/couchbase/goxdcr/v8/base"
+	xdcrParts "github.com/couchbase/goxdcr/v8/base/filter"
+	xdcrLog "github.com/couchbase/goxdcr/v8/log"
+	"github.com/couchbase/goxdcr/v8/metadata"
+	"github.com/couchbase/goxdcr/v8/metadata_svc"
+	"github.com/couchbase/goxdcr/v8/service_def"
+	service_def_mock "github.com/couchbase/goxdcr/v8/service_def/mocks"
+	"github.com/couchbase/goxdcr/v8/service_impl"
+	"github.com/couchbase/goxdcr/v8/streamApiWatcher"
+	xdcrUtils "github.com/couchbase/goxdcr/v8/utils"
+	"github.com/couchbase/xdcrDiffer/base"
+	"github.com/couchbase/xdcrDiffer/dcp"
+	"github.com/couchbase/xdcrDiffer/differ"
+	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
+	"github.com/couchbase/xdcrDiffer/filterPool"
+	"github.com/couchbase/xdcrDiffer/utils"
 	"github.com/stretchr/testify/mock"
 )
 
@@ -430,7 +429,7 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 
 		difftool.bucketTopologySvc, err = service_impl.NewBucketTopologyService(xdcrTopologyMock, difftool.remoteClusterSvc,
 			difftool.utils, xdcrBase.TopologyChangeCheckInterval, difftool.logger.LoggerContext(),
-			difftool.replicationSpecSvc, xdcrBase.HealthCheckInterval, securitySvc, streamApiWatcher.GetStreamApiWatcher)
+			difftool.replicationSpecSvc, securitySvc, streamApiWatcher.GetStreamApiWatcher)
 		if err != nil {
 			return nil, err
 		}

@@ -20,14 +20,14 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	fdp "xdcrDiffer/fileDescriptorPool"
-	"xdcrDiffer/utils"
 
 	"github.com/couchbase/gomemcached"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	crMeta "github.com/couchbase/goxdcr/crMeta"
-	hlv "github.com/couchbase/goxdcr/hlv"
-	xdcrLog "github.com/couchbase/goxdcr/log"
+	xdcrBase "github.com/couchbase/goxdcr/v8/base"
+	crMeta "github.com/couchbase/goxdcr/v8/crMeta"
+	hlv "github.com/couchbase/goxdcr/v8/hlv"
+	xdcrLog "github.com/couchbase/goxdcr/v8/log"
+	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
+	"github.com/couchbase/xdcrDiffer/utils"
 )
 
 // Given two DCP Dump files, perform necessary diffing task

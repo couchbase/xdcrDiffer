@@ -21,17 +21,17 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"xdcrDiffer/base"
-	"xdcrDiffer/utils"
 
 	"github.com/couchbase/gocbcore/v10"
 	"github.com/couchbase/gomemcached"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	xdcrCrMeta "github.com/couchbase/goxdcr/crMeta"
-	hlv "github.com/couchbase/goxdcr/hlv"
-	xdcrLog "github.com/couchbase/goxdcr/log"
-	"github.com/couchbase/goxdcr/metadata"
-	xdcrUtils "github.com/couchbase/goxdcr/utils"
+	xdcrBase "github.com/couchbase/goxdcr/v8/base"
+	xdcrCrMeta "github.com/couchbase/goxdcr/v8/crMeta"
+	hlv "github.com/couchbase/goxdcr/v8/hlv"
+	xdcrLog "github.com/couchbase/goxdcr/v8/log"
+	"github.com/couchbase/goxdcr/v8/metadata"
+	xdcrUtils "github.com/couchbase/goxdcr/v8/utils"
+	"github.com/couchbase/xdcrDiffer/base"
+	"github.com/couchbase/xdcrDiffer/utils"
 )
 
 type MutationDiffer struct {

@@ -12,8 +12,6 @@ package utils
 import (
 	"bytes"
 	"fmt"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	xdcrUtils "github.com/couchbase/goxdcr/utils"
 	"hash/crc32"
 	"io/ioutil"
 	"math"
@@ -23,7 +21,10 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"xdcrDiffer/base"
+
+	xdcrBase "github.com/couchbase/goxdcr/v8/base"
+	xdcrUtils "github.com/couchbase/goxdcr/v8/utils"
+	"github.com/couchbase/xdcrDiffer/base"
 )
 
 func GetFileName(fileDir string, vbno uint16, bucketIndex int) string {

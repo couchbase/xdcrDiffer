@@ -40,7 +40,7 @@ The build system will be using go modules, so it does not require special GOPATH
 
 ### Compiling
 
-It can be compiled using the accompanied make file.
+It can be compiled using the accompanying make file.
 
 ```
 ~/xdcrDiffer$ make

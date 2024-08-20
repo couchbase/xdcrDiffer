@@ -17,15 +17,15 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"xdcrDiffer/base"
-	"xdcrDiffer/utils"
 
 	gocb "github.com/couchbase/gocb/v2"
 	gocbcore "github.com/couchbase/gocbcore/v10"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	xdcrLog "github.com/couchbase/goxdcr/log"
-	"github.com/couchbase/goxdcr/metadata"
-	xdcrUtils "github.com/couchbase/goxdcr/utils"
+	xdcrBase "github.com/couchbase/goxdcr/v8/base"
+	xdcrLog "github.com/couchbase/goxdcr/v8/log"
+	"github.com/couchbase/goxdcr/v8/metadata"
+	xdcrUtils "github.com/couchbase/goxdcr/v8/utils"
+	"github.com/couchbase/xdcrDiffer/base"
+	"github.com/couchbase/xdcrDiffer/utils"
 )
 
 type DcpClient struct {
