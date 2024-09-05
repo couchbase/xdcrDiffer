@@ -23,6 +23,7 @@ import (
 	xdcrUtils "github.com/couchbase/goxdcr/v8/utils"
 	"github.com/couchbase/xdcrDiffer/base"
 	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
+	fh "github.com/couchbase/xdcrDiffer/fileHandler"
 	"github.com/couchbase/xdcrDiffer/utils"
 )
 
@@ -32,7 +33,6 @@ type DcpDriver struct {
 	bucketName         string
 	ref                *metadata.RemoteClusterReference
 	bucketPassword     string
-	fileDir            string
 	errChan            chan error
 	waitGroup          *sync.WaitGroup
 	childWaitGroup     *sync.WaitGroup
@@ -43,32 +43,32 @@ type DcpDriver struct {
 	completeBySeqno    bool
 	checkpointManager  *CheckpointManager
 	startVbtsDoneChan  chan bool
-	fdPool             fdp.FdPoolIface
 	clients            []*DcpClient
 	// Value = true if processing on the vb has been completed
 	vbStateMap map[uint16]*VBStateWithLock
 	// 0 - not started
 	// 1 - started
 	// 2 - stopped
-	state               DriverState
-	stateLock           sync.RWMutex
-	finChan             chan bool
-	logger              *xdcrLog.CommonLogger
-	filter              xdcrParts.Filter
-	capabilities        metadata.Capability
-	collectionIDs       []uint32
-	colMigrationFilters []string
-	dataPool            xdcrBase.DataPool
-	utils               xdcrUtils.UtilsIface
-	bufferCapacity      int
-	migrationMapping    metadata.CollectionNamespaceMapping
-	mobileCompatible    int
-	expDelMode          xdcrBase.FilterExpDelType
+	state                 DriverState
+	stateLock             sync.RWMutex
+	finChan               chan bool
+	logger                *xdcrLog.CommonLogger
+	filter                xdcrParts.Filter
+	capabilities          metadata.Capability
+	collectionIDs         []uint32
+	colMigrationFilters   []string
+	dataPool              xdcrBase.DataPool
+	utils                 xdcrUtils.UtilsIface
+	migrationMapping      metadata.CollectionNamespaceMapping
+	mobileCompatible      int
+	expDelMode            xdcrBase.FilterExpDelType
+	xattrKeysForNoCompare map[string]bool
+	numberOfVbuckets      uint16
+	fileHandler           *fh.FileHandler
 
 	// various counters
 	totalNumReceivedFromDCP                uint64
 	totalSysOrUnsubbedEventReceivedFromDCP uint64
-	xattrKeysForNoCompare                  map[string]bool
 }
 
 type VBStateWithLock struct {
@@ -92,13 +92,12 @@ const (
 	DriverStateStopped DriverState = iota
 )
 
-func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration, checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIds []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping, mobileCompat int, expDelMode xdcrBase.FilterExpDelType, xattrKeysForNoCompare map[string]bool) *DcpDriver {
+func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration, checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIds []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping, mobileCompat int, expDelMode xdcrBase.FilterExpDelType, xattrKeysForNoCompare map[string]bool, numberOfVbuckets uint16, isVariableVB bool) *DcpDriver {
 	dcpDriver := &DcpDriver{
 		Name:                  name,
 		url:                   url,
 		bucketName:            bucketName,
 		ref:                   ref,
-		fileDir:               fileDir,
 		numberOfClients:       numberOfClients,
 		numberOfWorkers:       numberOfWorkers,
 		numberOfBins:          numberOfBins,
@@ -109,7 +108,6 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, re
 		clients:               make([]*DcpClient, numberOfClients),
 		childWaitGroup:        &sync.WaitGroup{},
 		vbStateMap:            make(map[uint16]*VBStateWithLock),
-		fdPool:                fdPool,
 		state:                 DriverStateNew,
 		finChan:               make(chan bool),
 		startVbtsDoneChan:     make(chan bool),
@@ -119,15 +117,16 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, re
 		collectionIDs:         collectionIds,
 		colMigrationFilters:   colMigrationFilters,
 		utils:                 utils,
-		bufferCapacity:        bufferCap,
 		migrationMapping:      migrationMapping,
 		mobileCompatible:      mobileCompat,
 		expDelMode:            expDelMode,
 		xattrKeysForNoCompare: xattrKeysForNoCompare,
+		numberOfVbuckets:      numberOfVbuckets,
 	}
-
+	requiresVBRemapping := isVariableVB && numberOfVbuckets != base.TraditionalNumberOfVbuckets
+	dcpDriver.fileHandler = fh.NewFileHandler(fileDir, fdPool, numberOfVbuckets, numberOfBins, bufferCap, requiresVBRemapping, logger)
 	var vbno uint16
-	for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
+	for vbno = 0; vbno < dcpDriver.numberOfVbuckets; vbno++ {
 		dcpDriver.vbStateMap[vbno] = &VBStateWithLock{
 			vbState: VBStateNormal,
 		}
@@ -136,7 +135,7 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, re
 	dcpDriver.checkpointManager = NewCheckpointManager(dcpDriver, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, name, bucketOpTimeout, maxNumOfGetStatsRetry,
 		getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval, dcpDriver.startVbtsDoneChan, logger,
-		completeBySeqno)
+		completeBySeqno, dcpDriver.numberOfVbuckets)
 
 	base.TagHttpPrefix(&dcpDriver.url)
 
@@ -149,6 +148,11 @@ func (d *DcpDriver) Start() error {
 	err := d.populateCredentials()
 	if err != nil {
 		d.logger.Errorf("%v error populating credentials. err=%v\n", d.Name, err)
+		return err
+	}
+	err = d.fileHandler.Initialize()
+	if err != nil {
+		d.logger.Errorf("%v error in initializing file handler. err=%v", d.Name, err)
 		return err
 	}
 
@@ -182,15 +186,15 @@ func (d *DcpDriver) checkForCompletion() {
 	for {
 		select {
 		case <-ticker.C:
-			var numOfCompletedVb int
+			var numOfCompletedVb uint16
 			var vbno uint16
-			for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
+			for vbno = 0; vbno < d.numberOfVbuckets; vbno++ {
 				vbState := d.getVbState(vbno)
 				if vbState != VBStateNormal {
 					numOfCompletedVb++
 				}
 			}
-			if numOfCompletedVb == base.NumberOfVbuckets {
+			if numOfCompletedVb == d.numberOfVbuckets {
 				d.logger.Infof("%v all vbuckets have completed for dcp driver\n", d.Name)
 				d.Stop()
 				return
@@ -234,6 +238,9 @@ func (d *DcpDriver) Stop() error {
 
 	d.childWaitGroup.Wait()
 
+	// close all the open files
+	d.fileHandler.Close()
+
 	err := d.checkpointManager.Stop()
 	if err != nil {
 		d.logger.Errorf("%v error stopping checkpoint manager. err=%v\n", d.Name, err)
@@ -247,7 +254,7 @@ func (d *DcpDriver) Stop() error {
 func (d *DcpDriver) FilteredCount() int64 {
 	var vbno uint16
 	var filtered int64
-	for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
+	for vbno = 0; vbno < d.numberOfVbuckets; vbno++ {
 		filtered += d.checkpointManager.filteredCnt[vbno].Count()
 	}
 	return filtered
@@ -257,7 +264,7 @@ func (d *DcpDriver) initializeDcpClients() {
 	d.stateLock.Lock()
 	defer d.stateLock.Unlock()
 
-	loadDistribution := utils.BalanceLoad(d.numberOfClients, base.NumberOfVbuckets)
+	loadDistribution := utils.BalanceLoad(d.numberOfClients, int(d.numberOfVbuckets))
 	for i := 0; i < d.numberOfClients; i++ {
 		lowIndex := loadDistribution[i][0]
 		highIndex := loadDistribution[i][1]
@@ -268,7 +275,7 @@ func (d *DcpDriver) initializeDcpClients() {
 
 		d.childWaitGroup.Add(1)
 		dcpClient := NewDcpClient(d, i, vbList, d.childWaitGroup, d.startVbtsDoneChan, d.capabilities, d.collectionIDs,
-			d.colMigrationFilters, d.utils, d.bufferCapacity, d.migrationMapping)
+			d.colMigrationFilters, d.utils, d.migrationMapping, d.fileHandler)
 		d.clients[i] = dcpClient
 	}
 }

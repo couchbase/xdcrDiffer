@@ -58,7 +58,7 @@ The script also sets up the shell environment to allow the tool binary to be abl
 
 For example:
 ```
-~/xdcrDiffer$ ./runDiffer.sh -u Administrator -p password -h 127.0.0.1:9000 -r backupCluster -s beer-sample -t backupDumpster
+~/xdcrDiffer$ ./runDiffer.sh -u Administrator -p password -h 127.0.0.1:9000 -r backupCluster -s beer-sample -t backupDumpster -c
 ```
 
 #### Preparing xdcrDiffer host for running differ

@@ -244,9 +244,10 @@ type DifferDriver struct {
 	bucketTopologySvc service_def.BucketTopologySvc
 	specifiedSpec     *metadata.ReplicationSpecification
 	logger            *xdcrLog.CommonLogger
+	numOfVbuckets     uint16
 }
 
-func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32, sourceClusterUUID, targetClusterUUID, sourceBucketUUID, targetBucketUUID string, bucketTopologySvc service_def.BucketTopologySvc, specifiedSpec *metadata.ReplicationSpecification, logger *xdcrLog.CommonLogger) *DifferDriver {
+func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32, sourceClusterUUID, targetClusterUUID, sourceBucketUUID, targetBucketUUID string, bucketTopologySvc service_def.BucketTopologySvc, specifiedSpec *metadata.ReplicationSpecification, logger *xdcrLog.CommonLogger, numOfVbuckets uint16) *DifferDriver {
 	var fdPool *fdp.FdPool
 	if numberOfFds > 0 {
 		fdPool = fdp.NewFileDescriptorPool(numberOfFds)
@@ -280,11 +281,12 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName
 		bucketTopologySvc: bucketTopologySvc,
 		specifiedSpec:     specifiedSpec,
 		logger:            logger,
+		numOfVbuckets:     numOfVbuckets,
 	}
 }
 
 func (dr *DifferDriver) Run() error {
-	loadDistribution := utils.BalanceLoad(dr.numberOfWorkers, base.NumberOfVbuckets)
+	loadDistribution := utils.BalanceLoad(dr.numberOfWorkers, int(dr.numOfVbuckets))
 	err := sourcePruningWindow.set(dr.bucketTopologySvc, dr.specifiedSpec)
 	if err != nil {
 		return err
@@ -345,7 +347,7 @@ func (dr *DifferDriver) reportStatus() {
 		case <-ticker.C:
 			vbCompleted := atomic.LoadUint32(&dr.vbCompleted)
 			fmt.Printf("%v File differ processed %v vbuckets\n", time.Now(), vbCompleted)
-			if vbCompleted == base.NumberOfVbuckets {
+			if vbCompleted == uint32(dr.numOfVbuckets) {
 				return
 			}
 		case <-dr.finChan:
@@ -488,6 +490,12 @@ func (dh *DifferHandler) run() error {
 			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex)
 
 			filesDiffer, err := NewFilesDifferWithFDPool(sourceFileName, targetFileName, dh.fileDescPool, dh.collectionMapping, dh.colFilterStrings, dh.colFilterTgtIds, dh.driver.logger)
+			if err != nil {
+				// Most likely FD overrun, program should exit. Print a msg just in case
+				dh.driver.logger.Errorf("Creating file differ for files %v and %v resulted in error: %v\n",
+					sourceFileName, targetFileName, err)
+				return err
+			}
 			filesDiffer.file1.actorId, err = hlv.UUIDstoDocumentSource(dh.driver.sourceBucketUUID, dh.driver.sourceClusterUUID)
 			if err != nil {
 				dh.driver.logger.Errorf("error occured while constructing the actorID from bucketUUID %v and clusterUUID %v. err %v", dh.driver.sourceBucketUUID, dh.driver.sourceClusterUUID, err)
@@ -496,12 +504,6 @@ func (dh *DifferHandler) run() error {
 			filesDiffer.file2.actorId, err = hlv.UUIDstoDocumentSource(dh.driver.targetBucketUUID, dh.driver.targetClusterUUID)
 			if err != nil {
 				dh.driver.logger.Errorf("error occured while constructing the actorID from bucketUUID %v and clusterUUID %v. err %v", dh.driver.targetBucketUUID, dh.driver.targetClusterUUID, err)
-				return err
-			}
-			if err != nil {
-				// Most likely FD overrun, program should exit. Print a msg just in case
-				dh.driver.logger.Errorf("Creating file differ for files %v and %v resulted in error: %v\n",
-					sourceFileName, targetFileName, err)
 				return err
 			}
 			srcDiffMap, tgtDiffMap, migrationHints, diffBytes, err := filesDiffer.Diff()

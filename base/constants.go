@@ -9,7 +9,7 @@
 
 package base
 
-const NumberOfVbuckets = 1024
+const TraditionalNumberOfVbuckets uint16 = 1024 // denotes the traditional number of Vbuckets
 const DcpHandlerChanSize = 100000
 const FileNamePrefix = "diffTool"
 const FileNameDelimiter = "_"
@@ -42,6 +42,7 @@ const NodesKey = "nodes"
 const PoolsDefaultBucketPath = "/pools/default/buckets/"
 const SASLPasswordKey = "saslPassword"
 const HttpGet = "GET"
+const NumVBucketsKey = "numVBuckets" // key to obtain the number of Vbuckets stat from bucketInfo
 
 // default values for configurable parameters if not specified by user
 const BucketOpTimeout uint64 = 20

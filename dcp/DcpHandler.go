@@ -13,7 +13,6 @@ import (
 	"crypto/sha512"
 	"encoding/binary"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -28,22 +27,18 @@ import (
 	"github.com/couchbase/goxdcr/v8/metadata"
 	xdcrUtils "github.com/couchbase/goxdcr/v8/utils"
 	"github.com/couchbase/xdcrDiffer/base"
-	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
-	"github.com/couchbase/xdcrDiffer/utils"
+	fh "github.com/couchbase/xdcrDiffer/fileHandler"
 )
 
 // implements StreamObserver
 type DcpHandler struct {
 	dcpClient                     *DcpClient
-	fileDir                       string
 	index                         int
 	vbList                        []uint16
 	numberOfBins                  int
 	dataChan                      chan *Mutation
 	waitGrp                       sync.WaitGroup
 	finChan                       chan bool
-	bucketMap                     map[uint16]map[int]*Bucket
-	fdPool                        fdp.FdPoolIface
 	logger                        *xdcrLog.CommonLogger
 	filter                        xdcrParts.Filter
 	incrementCounter              func()
@@ -53,27 +48,24 @@ type DcpHandler struct {
 	colMigrationFiltersImpl       []xdcrParts.Filter
 	isSource                      bool
 	utils                         xdcrUtils.UtilsIface
-	bufferCap                     int
 	migrationMapping              metadata.CollectionNamespaceMapping
 	mobileCompatible              int
 	expDelMode                    xdcrBase.FilterExpDelType
 	xattrIterator                 *xdcrBase.XattrIterator
+	fileHandler                   *fh.FileHandler
 }
 
-func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface, incReceivedCounter, incSysOrUnsubbedEvtReceived func(), colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping) (*DcpHandler, error) {
+func NewDcpHandler(dcpClient *DcpClient, index int, vbList []uint16, numberOfBins, dataChanSize int, incReceivedCounter, incSysOrUnsubbedEvtReceived func(), colMigrationFilters []string, utils xdcrUtils.UtilsIface, migrationMapping metadata.CollectionNamespaceMapping, fileHandler *fh.FileHandler) (*DcpHandler, error) {
 	if len(vbList) == 0 {
 		return nil, fmt.Errorf("vbList is empty for handler %v", index)
 	}
 	return &DcpHandler{
 		dcpClient:                     dcpClient,
-		fileDir:                       fileDir,
 		index:                         index,
 		vbList:                        vbList,
 		numberOfBins:                  numberOfBins,
 		dataChan:                      make(chan *Mutation, dataChanSize),
 		finChan:                       make(chan bool),
-		bucketMap:                     make(map[uint16]map[int]*Bucket),
-		fdPool:                        fdPool,
 		logger:                        dcpClient.logger,
 		filter:                        dcpClient.dcpDriver.filter,
 		incrementCounter:              incReceivedCounter,
@@ -82,11 +74,11 @@ func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uin
 		colMigrationFiltersOn:         len(colMigrationFilters) > 0,
 		utils:                         utils,
 		isSource:                      strings.Contains(dcpClient.Name, base.SourceClusterName),
-		bufferCap:                     bufferCap,
 		migrationMapping:              migrationMapping,
 		mobileCompatible:              dcpClient.dcpDriver.mobileCompatible,
 		expDelMode:                    dcpClient.dcpDriver.expDelMode,
 		xattrIterator:                 &xdcrBase.XattrIterator{},
+		fileHandler:                   fileHandler,
 	}, nil
 }
 
@@ -104,10 +96,7 @@ func (dh *DcpHandler) Start() error {
 
 func (dh *DcpHandler) Stop() {
 	close(dh.finChan)
-	// this sometimes does not return after a long time
-	//dh.waitGrp.Wait()
-
-	dh.cleanup()
+	dh.waitGrp.Wait()
 }
 
 func (d *DcpHandler) compileMigrCollectionFiltersIfNeeded() error {
@@ -126,41 +115,10 @@ func (d *DcpHandler) compileMigrCollectionFiltersIfNeeded() error {
 }
 
 func (dh *DcpHandler) initialize() error {
-	for _, vbno := range dh.vbList {
-		innerMap := make(map[int]*Bucket)
-		dh.bucketMap[vbno] = innerMap
-		for i := 0; i < dh.numberOfBins; i++ {
-			bucket, err := NewBucket(dh.fileDir, vbno, i, dh.fdPool, dh.logger, dh.bufferCap)
-			if err != nil {
-				return err
-			}
-			innerMap[i] = bucket
-		}
-	}
-
 	if err := dh.compileMigrCollectionFiltersIfNeeded(); err != nil {
 		return err
 	}
 	return nil
-}
-
-func (dh *DcpHandler) cleanup() {
-	for _, vbno := range dh.vbList {
-		innerMap := dh.bucketMap[vbno]
-		if innerMap == nil {
-			dh.logger.Warnf("Cannot find innerMap for Vbno %v at cleanup\n", vbno)
-			continue
-		}
-		for i := 0; i < dh.numberOfBins; i++ {
-			bucket := innerMap[i]
-			if bucket == nil {
-				dh.logger.Warnf("Cannot find bucket for Vbno %v and index %v at cleanup\n", vbno, i)
-				continue
-			}
-			//fmt.Printf("%v DcpHandler closing bucket %v\n", dh.dcpClient.Name, i)
-			bucket.close()
-		}
-	}
 }
 
 func (dh *DcpHandler) processData() {
@@ -210,25 +168,21 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 		}
 	}
 
-	vbno := mut.Vbno
-	index := utils.GetBucketIndexFromKey(mut.Key, dh.numberOfBins)
-	innerMap := dh.bucketMap[vbno]
-	if innerMap == nil {
-		panic(fmt.Sprintf("cannot find bucketMap for Vbno %v", vbno))
-	}
-	bucket := innerMap[index]
-	if bucket == nil {
-		panic(fmt.Sprintf("cannot find bucket for index %v", index))
-	}
-
 	if dh.colMigrationFiltersOn && len(filterIdsMatched) > 0 {
 		mut.ColFiltersMatched = filterIdsMatched
 	}
+
+	bucket, err := dh.fileHandler.GetBucket(mut.Key, mut.Vbno)
+	if err != nil {
+		dh.logger.Errorf("failed to write mutation for document %s with cas %v revID %v. err=%v", mut.Key, mut.Cas, mut.RevId, err)
+		return
+	}
+
 	ret, err := mut.Serialize()
 	if err != nil {
-		dh.logger.Errorf("Error in Serializing the mutation pertaining to the document with the key:%v ,err:%v\n", mut.Key, err)
+		dh.logger.Errorf("error in Serializing the mutation pertaining to the document with the key:%v ,err:%v\n", mut.Key, err)
 	} else {
-		bucket.write(ret)
+		bucket.Write(ret)
 	}
 }
 
@@ -344,104 +298,6 @@ func (dh *DcpHandler) checkColMigrationDataCloned(mut *Mutation) {
 	if len(matchedNamespaces) > 1 {
 		dh.logger.Debugf("Document %s (%x) with length %v opCode %v matched more than once: %v, errMap %v, errMCReqMap %v",
 			uprEvent.UprEvent.Key, uprEvent.UprEvent.Key, len(uprEvent.UprEvent.Key), uprEvent.UprEvent.Opcode, matchedNamespaces.String(), errMap, errMCReqMap)
-	}
-}
-
-type Bucket struct {
-	data []byte
-	// current index in data for next write
-	index    int
-	file     *os.File
-	fileName string
-
-	fdPoolCb fdp.FileOp
-	closeOp  func() error
-
-	logger *xdcrLog.CommonLogger
-
-	bufferCap int
-}
-
-func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool fdp.FdPoolIface, logger *xdcrLog.CommonLogger, bufferCap int) (*Bucket, error) {
-	fileName := utils.GetFileName(fileDir, vbno, bucketIndex)
-	var cb fdp.FileOp
-	var closeOp func() error
-	var err error
-	var file *os.File
-
-	if fdPool == nil {
-		file, err = os.OpenFile(fileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, base.FileModeReadWrite)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		_, cb, err = fdPool.RegisterFileHandle(fileName)
-		if err != nil {
-			return nil, err
-		}
-		closeOp = func() error {
-			return fdPool.DeRegisterFileHandle(fileName)
-		}
-	}
-	return &Bucket{
-		data:      make([]byte, bufferCap),
-		index:     0,
-		file:      file,
-		fileName:  fileName,
-		fdPoolCb:  cb,
-		closeOp:   closeOp,
-		logger:    logger,
-		bufferCap: bufferCap,
-	}, nil
-}
-
-func (b *Bucket) write(item []byte) error {
-	if b.index+len(item) > b.bufferCap {
-		err := b.flushToFile()
-		if err != nil {
-			return err
-		}
-	}
-
-	copy(b.data[b.index:], item)
-	b.index += len(item)
-	return nil
-}
-
-func (b *Bucket) flushToFile() error {
-	var numOfBytes int
-	var err error
-
-	if b.fdPoolCb != nil {
-		numOfBytes, err = b.fdPoolCb(b.data[:b.index])
-	} else {
-		numOfBytes, err = b.file.Write(b.data[:b.index])
-	}
-	if err != nil {
-		return err
-	}
-	if numOfBytes != b.index {
-		return fmt.Errorf("Incomplete write. expected=%v, actual=%v", b.index, numOfBytes)
-	}
-	b.index = 0
-	return nil
-}
-
-func (b *Bucket) close() {
-	err := b.flushToFile()
-	if err != nil {
-		b.logger.Errorf("Error flushing to file %v at bucket close err=%v\n", b.fileName, err)
-	}
-	if b.fdPoolCb != nil {
-		err = b.closeOp()
-		if err != nil {
-			b.logger.Errorf("Error closing file %v.  err=%v\n", b.fileName, err)
-		}
-	} else {
-		err = b.file.Close()
-		if err != nil {
-			b.logger.Errorf("Error closing file %v.  err=%v\n", b.fileName, err)
-		}
 	}
 }
 
