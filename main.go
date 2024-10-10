@@ -483,6 +483,7 @@ func setupXdcrToplogyMock(xdcrTopologyMock *service_def_mock.XDCRCompTopologySvc
 	xdcrTopologyMock.On("IsKVNode").Return(true, nil)
 	xdcrTopologyMock.On("IsMyClusterEncryptionLevelStrict").Return(false)
 	xdcrTopologyMock.On("MyClusterCompatibility").Return(diffTool.srcClusterCompat, nil)
+	xdcrTopologyMock.On("IsOrchestratorNode").Return(false, nil)
 	setupTopologyMockCredentials(xdcrTopologyMock, diffTool)
 	setupTopologyMockConnectionString(xdcrTopologyMock, diffTool)
 }
