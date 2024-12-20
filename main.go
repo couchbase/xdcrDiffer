@@ -45,7 +45,7 @@ import (
 
 var done = make(chan bool)
 
-var options struct {
+type inputOptions struct {
 	sourceUrl                         string
 	sourceUsername                    string
 	sourcePassword                    string
@@ -135,6 +135,13 @@ var options struct {
 	setupTimeout int
 	//string denoting the xattrs that shouldn't be compared
 	fileContaingXattrKeysForNoComapre string
+}
+
+var options inputOptions = inputOptions{}
+
+func (o inputOptions) String() string {
+	return fmt.Sprintf("Options{sourceUrl: %s, sourceUsername: %s, sourcePassword: REDACTED, sourceBucketName: %s, remoteClusterName: %s, sourceFileDir: %s, targetUrl: %s, targetUsername: %s, targetPassword: REDACTED, targetBucketName: %s, targetFileDir: %s, numberOfSourceDcpClients: %d, numberOfWorkersPerSourceDcpClient: %d, numberOfTargetDcpClients: %d, numberOfWorkersPerTargetDcpClient: %d, numberOfWorkersForFileDiffer: %d, numberOfWorkersForMutationDiffer: %d, numberOfBins: %d, numberOfFileDesc: %d, completeByDuration: %d, completeBySeqno: %t, checkpointFileDir: %s, oldSourceCheckpointFileName: %s, oldTargetCheckpointFileName: %s, newCheckpointFileName: %s, fileDifferDir: %s, mutationDifferDir: %s, mutationDifferBatchSize: %d, mutationDifferTimeout: %d, sourceDcpHandlerChanSize: %d, targetDcpHandlerChanSize: %d, bucketOpTimeout: %d, maxNumOfGetStatsRetry: %d, maxNumOfSendBatchRetry: %d, getStatsRetryInterval: %d, sendBatchRetryInterval: %d, getStatsMaxBackoff: %d, sendBatchMaxBackoff: %d, delayBetweenSourceAndTarget: %d, checkpointInterval: %d, runDataGeneration: %t, runFileDiffer: %t, runMutationDiffer: %t, enforceTLS: %t, bucketBufferCapacity: %d, compareType: %s, mutationDifferRetries: %d, mutationDifferRetriesWaitSecs: %d, numOfFiltersInFilterPool: %d, debugMode: %t, setupTimeout: %d, fileContaingXattrKeysForNoComapre: %s}",
+		o.sourceUrl, o.sourceUsername, o.sourceBucketName, o.remoteClusterName, o.sourceFileDir, o.targetUrl, o.targetUsername, o.targetBucketName, o.targetFileDir, o.numberOfSourceDcpClients, o.numberOfWorkersPerSourceDcpClient, o.numberOfTargetDcpClients, o.numberOfWorkersPerTargetDcpClient, o.numberOfWorkersForFileDiffer, o.numberOfWorkersForMutationDiffer, o.numberOfBins, o.numberOfFileDesc, o.completeByDuration, o.completeBySeqno, o.checkpointFileDir, o.oldSourceCheckpointFileName, o.oldTargetCheckpointFileName, o.newCheckpointFileName, o.fileDifferDir, o.mutationDifferDir, o.mutationDifferBatchSize, o.mutationDifferTimeout, o.sourceDcpHandlerChanSize, o.targetDcpHandlerChanSize, o.bucketOpTimeout, o.maxNumOfGetStatsRetry, o.maxNumOfSendBatchRetry, o.getStatsRetryInterval, o.sendBatchRetryInterval, o.getStatsMaxBackoff, o.sendBatchMaxBackoff, o.delayBetweenSourceAndTarget, o.checkpointInterval, o.runDataGeneration, o.runFileDiffer, o.runMutationDiffer, o.enforceTLS, o.bucketBufferCapacity, o.compareType, o.mutationDifferRetries, o.mutationDifferRetriesWaitSecs, o.numOfFiltersInFilterPool, o.debugMode, o.setupTimeout, o.fileContaingXattrKeysForNoComapre)
 }
 
 func argParse() {
@@ -1379,9 +1386,15 @@ func (difftool *xdcrDiffTool) getVbucketNo(isSource bool) (uint16, error) {
 	var connStr string
 	var err error
 	if isSource {
+		if !difftool.srcCapabilities.HasHeartbeatSupport() { // both variableVB and heartbeat support was added in 8.0
+			return base.TraditionalNumberOfVbuckets, nil // below 8.0 clusters always have 1024 vbuckets
+		}
 		ref = difftool.selfRef
 		bucketName = options.sourceBucketName
 	} else {
+		if !difftool.tgtCapabilities.HasHeartbeatSupport() {
+			return base.TraditionalNumberOfVbuckets, nil // below 8.0 clusters always have 1024 vbuckets
+		}
 		ref = difftool.specifiedRef
 		bucketName = options.targetBucketName
 	}
@@ -1397,7 +1410,7 @@ func (difftool *xdcrDiffTool) getVbucketNo(isSource bool) (uint16, error) {
 
 	numVbs, ok := bucketInfo[base.NumVBucketsKey].(float64)
 	if !ok {
-		return 0, fmt.Errorf("invalid type %T for numVBuckets.Expected float64", numVbs)
+		return 0, fmt.Errorf("invalid type %T for numVBuckets.Expected float64", bucketInfo[base.NumVBucketsKey])
 	}
 	return uint16(numVbs), nil
 }
