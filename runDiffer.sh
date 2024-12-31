@@ -72,7 +72,7 @@ function killBgTail {
 	fi
 }
 
-while getopts ":h:p:u:r:s:t:cm:ew:d:o:-:" opt; do
+while getopts ":h:p:u:r:s:t:cm:e:w:d:o:-:" opt; do
 	case ${opt} in
 	u)
 		username=$OPTARG
