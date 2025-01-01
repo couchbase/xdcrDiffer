@@ -977,31 +977,31 @@ func (b *batch) get(key string, isSource bool, compareType string, colId uint32)
 		b.waitGroup.Add(1)
 		err = gocbAgent.Get(key, getCallbackFunc, colId)
 		if err != nil {
-			b.dw.logger.Errorf("GetError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err)
+			b.dw.logger.Debugf("GetError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err)
 		}
 	} else if compareType == base.MutationCompareTypeMetadata {
 		b.waitGroup.Add(2)
 		err = gocbAgent.GetMeta(key, getMetaCallbackFunc, colId)
 		if err != nil {
-			b.dw.logger.Errorf("GetMetaError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err)
+			b.dw.logger.Debugf("GetMetaError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err)
 		}
 		err1 = gocbAgent.GetHlv(key, getHlvCallbackFunc, colId)
 		if err1 != nil {
-			b.dw.logger.Errorf("GetHlvError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err1)
+			b.dw.logger.Debugf("GetHlvError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err1)
 		}
 	} else if compareType == base.MutationCompareTypeBodyAndMeta {
 		b.waitGroup.Add(3)
 		err = gocbAgent.Get(key, getCallbackFunc, colId)
 		if err != nil {
-			b.dw.logger.Errorf("GetError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err)
+			b.dw.logger.Debugf("GetError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err)
 		}
 		err1 = gocbAgent.GetMeta(key, getMetaCallbackFunc, colId)
 		if err1 != nil {
-			b.dw.logger.Errorf("GetMetaError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err1)
+			b.dw.logger.Debugf("GetMetaError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err1)
 		}
 		err2 = gocbAgent.GetHlv(key, getHlvCallbackFunc, colId)
 		if err2 != nil {
-			b.dw.logger.Errorf("GetHlvError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err2)
+			b.dw.logger.Debugf("GetHlvError for bucket %v on key %v. err: %v\n", gocbAgent.GocbcoreAgentCommon.BucketName, key, err2)
 		}
 	}
 }

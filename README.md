@@ -51,14 +51,18 @@ It can be compiled using the accompanying make file.
 Before running the differ to examine consistencies between two clusters, it is *highly recommended* to first set the Metadata Purge Interval to a low value, and then once that period has elapsed, run compaction on both clusters to ensure that tombstones are removed. Compaction will also ensure that the differ will only receive the minimum amount of data necessary, which will help minimize the storage requirement for the diff tool.
 
 #### runDiffer
-
-The `runDiffer.sh` shell script will ask for the minimum required information to run the difftool, and can be edited to add or modify detailed settings that are to be passed to the difftool itself. This is the *preferred* method.
+The `runDiffer.sh` shell script will ask for the minimum required information to run the difftool. This information can either be passed through the command line or the script can also read from a YAML file. This is the *preferred* method.
+Refer to `sampleConfig.yaml` for example.
 
 The script also sets up the shell environment to allow the tool binary to be able to contact the source cluster's metakv given the user specified credentials to retrieve the `remote cluster reference` and `replication specification` in order to simulate the existing replication scenario (i.e. filtering). Note that credentials are sent unencrypted for now.
 
 For example:
 ```
 ~/xdcrDiffer$ ./runDiffer.sh -u Administrator -p password -h 127.0.0.1:9000 -r backupCluster -s beer-sample -t backupDumpster -c
+```
+OR
+```
+~/xdcrDiffer$ ./runDiffer.sh -y ./sampleConfig.yaml
 ```
 
 #### Preparing xdcrDiffer host for running differ
@@ -130,6 +134,10 @@ Usage of ./xdcrDiffer:
       Common setup timeout duration in seconds. Default is 10 (seconds)
   -debugMode
       Set xdcrDiffer to DEBUG log level and also enable SDK (gocb) verbose logging.
+  -fileContaingXattrKeysForNoComapre
+      Path to the file containing xattrs that should be excluded from comparison
+  -yamlConfigFilePath
+      Path to yaml config file
 ```
 
 A few options worth noting:
@@ -171,12 +179,12 @@ The difftool performs the following in order:
 4. Verify differences from above using async Get (verifyDiffKeys) to rule out transitional mutations
 
 ## Output
-Results can be viewed as JSON summary files under `mutationDiff`:
+Results can be viewed as JSON summary files under `outputs/mutationDiff`:
 ```
-~/xdcrDiffer/mutationDiff$ ls
+~/xdcrDiffer/outputs/mutationDiff$ ls
 diffKeysWithError       mutationDiffColIdMapping    mutationDiffDetails
 
-~/xdcrDiffer/mutationDiff$ jsonpp mutationDiffDetails  | head
+~/xdcrDiffer/outputs/mutationDiff$ jsonpp mutationDiffDetails  | head
 {
   "Mismatch": {},
   "MissingFromSource": {},
@@ -197,8 +205,8 @@ For `Mismatch` column, the collection ID would represent collection ID for the s
 Difftool will retrieve the manifests from both source and target buckets and store them under the corresponding source and target directories:
 ```
 ~/xdcrDiffer$ find . -name diffTool_manifest
-./target/diffTool_manifest
-./source/diffTool_manifest
+./outputs/target/diffTool_manifest
+./outputs/source/diffTool_manifest
 ```
 
 ### Collection Mapping
@@ -222,7 +230,7 @@ The xdcrDiffer can detect when these happen and showcase the information. The fo
 ```
 2. There is a file called `mutationMigrationDetails`. The file contains a map of `docKey` -> `indexes that match`. For example:
 ```
-$ jsonpp mutationDiff/mutationMigrationDetails | head -n 30
+$ jsonpp outputs/mutationDiff/mutationMigrationDetails | head -n 30
 {
   "21st_amendment_brewery_cafe": [
     0,
