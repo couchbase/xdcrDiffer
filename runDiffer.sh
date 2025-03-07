@@ -339,6 +339,13 @@ function setupFromCmdLine {
 	execString="${execString} $mutationDiffDir"
 	execString="${execString} -checkpointFileDir"
 	execString="${execString} $checkpointDir"
+
+	if [[ @PRODUCT_VERSION@ != @* ]]; then
+		if [[ "${outputDirectory}" == /opt/couchbase* ]]; then
+			echo "outputDir should be specified and should not be under /opt/couchbase"
+			exit 2
+		fi
+	fi
 }
 
 function setupFromYaml {

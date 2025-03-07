@@ -5,5 +5,5 @@ GoModBuild(TARGET xdcrDiffer PACKAGE github.com/couchbase/xdcrDiffer
   GOVERSION SUPPORTED_NEWER)
 
 IF(NOT WIN32)
-    INSTALL (PROGRAMS runDiffer.sh TYPE BIN)
+  CONFIGURE_FILE(runDiffer.sh "${CMAKE_INSTALL_PREFIX}/bin/runDiffer.sh" @ONLY)
 ENDIF()
