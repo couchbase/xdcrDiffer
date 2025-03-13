@@ -7,10 +7,11 @@ If an XDCR is ongoing, it is quite possible that the tool will show documents as
 # Table Of Contents
 - [Getting Started](#getting-started)
     * [Prerequisites](#prerequisites)
-    * [Compiling](#compiling)
-    * [Running](#running)
+    * [Compiling and Running](#compiling-and-running)
+        + [Compiling Natively](#compiling-natively)
         + [Preparing Couchbase Clusters](#preparing-couchbase-clusters)
         + [runDiffer](#rundiffer)
+        + [Compiling and Running with Docker](#compiling-and-running-with-docker)
         + [Preparing xdcrDiffer host for running differ](#preparing-xdcrdiffer-host-for-running-differ)
         + [Tool binary](#tool-binary)
         + [Running with TLS encrypted traffic](#running-with-tls-encrypted-traffic)
@@ -20,16 +21,15 @@ If an XDCR is ongoing, it is quite possible that the tool will show documents as
     * [Collection Mapping](#collection-mapping)
     * [Collection Migration Debugging](#collection-migration-debugging)
         + [How to interpret multi-target migration differ result](#how-to-interpret-multi-target-migration-differ-result)
-- [Detailed Q&A's](#detailed-q-a-s)
+- [Detailed Q&A's](#detailed-qas)
 - [Known Limitations](#known-limitations)
 - [License](#license)
-
 ## Getting Started
 
 
 ### Prerequisites
 
-Golang version 1.21.0 or above.
+Golang version 1.23.0 or above.
 
 First, clone the repository to any preferred destination.
 The build system will be using go modules, so it does not require special GOPATH configurations.
@@ -38,15 +38,15 @@ The build system will be using go modules, so it does not require special GOPATH
 ~$ git clone https://github.com/couchbase/xdcrDiffer
 ```
 
-### Compiling
+### Compiling and Running
 
+#### Compiling Natively
 It can be compiled using the accompanying make file.
 
 ```
 ~/xdcrDiffer$ make
 ```
 
-### Running
 #### Preparing Couchbase Clusters
 Before running the differ to examine consistencies between two clusters, it is *highly recommended* to first set the Metadata Purge Interval to a low value, and then once that period has elapsed, run compaction on both clusters to ensure that tombstones are removed. Compaction will also ensure that the differ will only receive the minimum amount of data necessary, which will help minimize the storage requirement for the diff tool.
 
@@ -65,11 +65,43 @@ OR
 ~/xdcrDiffer$ ./runDiffer.sh -y ./sampleConfig.yaml
 ```
 
+#### Compiling and Running with Docker
+
+The tool can also be compiled and run using Docker. The following command will build the Docker image and run the tool with the specified parameters.
+Note that this section will be outdated in the future as the `xdcrDiffer` should ultimately be run specifically on a Couchbase Server node.
+
+```
+docker build -t xdcr-differ:1.0.0 .
+```
+
+Create an output directory on the host machine to store the output files.
+
+```
+mkdir -p ./dockerOutput
+```
+
+(Optional) Docker buildx build and image push:
+```
+docker buildx build  --builder mycontext --platform "linux/amd64,linux/arm64" --push -t <myregistry>/xdcr-differ:1.0.0 .
+```
+
+Run the Docker container with the following command:
+```
+docker run -v `pwd`/dockerOutput:/outputs -t --network host xdcr-differ:1.0.0 -u <username> -p <password> -h <nodeIP>:8091 -s <srcBucket> -t <tgtBucket> -r <remClusterRefName> -o /outputs
+```
+
+In the above command, the container will be launched where the created `dockerOutput` directory is mounted to the container.
+The host network will be used by the container to connect to the Couchbase cluster node.
+The `nodeIP` should be an IP that is displayed by the Couchbase Server UI console (under the `Servers` tab)
+
 #### Preparing xdcrDiffer host for running differ
 While the differ can run on any machine that compiles the binary, one method of running the differ tool is to run on a non-KV couchbase node.
 It is also possible to create a small Couchbase node that has only a simple non-impacting service enabled (i.e. Backup), and rebalance in to the cluster for running the differ, which will not trigger vb movement.
 The node can then be removed once the differ has finished running.
 The runDiffer script above will then allow the differ to access metadata information to enable various features, including using secure connections, or collections.
+
+While currently it could be run on a non-Couchbase node as an independent binary, this functionality will be deprecated in the future.
+When that time comes, the binary must be run on a Couchbase Server node.
 
 #### Tool binary
 The legacy method is to run the tool binary natively by using the options provided that can be found using "-h".
