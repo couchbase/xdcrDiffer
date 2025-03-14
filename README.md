@@ -8,6 +8,8 @@ If an XDCR is ongoing, it is quite possible that the tool will show documents as
 - [Getting Started](#getting-started)
     * [Prerequisites](#prerequisites)
     * [Compiling](#compiling)
+    * [Building with Docker](#building-with-docker)
+        + [Multiple platform using docker buildx](#multiple-platform-using-docker-buildx)
     * [Running](#running)
         + [Preparing Couchbase Clusters](#preparing-couchbase-clusters)
         + [runDiffer](#rundiffer)
@@ -45,6 +47,33 @@ It can be compiled using the accompanying make file.
 ```
 ~/xdcrDiffer$ make
 ```
+
+### Building with Docker
+
+Docker build:
+```
+docker build -t xdcr-differ:1.0.0 .
+```
+
+#### Multiple platform using docker buildx
+
+Creating the builder: 
+(for additional configuration -> https://docs.docker.com/build/buildkit/configure/)
+
+CTX=mycontext
+docker buildx ls | grep -w ${CTX}  || docker buildx create --name ${CTX}
+
+Docker buildx build for local/developer machine only: 
+```
+docker buildx build  --builder mycontext --platform "linux/arm64" --load -t xdcr-differ:1.0.0 .
+```
+
+Docker buildx build and image push: 
+```
+docker buildx build  --builder mycontext --platform "linux/amd64,linux/arm64" --push -t <myregistry>/xdcr-differ:1.0.0 .
+```
+
+
 
 ### Running
 #### Preparing Couchbase Clusters
