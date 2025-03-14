@@ -61,13 +61,16 @@ EOF
 }
 
 function waitForBgJobs {
-	local mainPid=$1
-	local mainPidCnt=$(ps -ef | grep -v grep | grep -c $mainPid)
-	local jobsCnt=$(jobs -l | grep -c "Running")
-	while (((($jobsCnt > 0)) && (($mainPidCnt > 0)))); do
-		sleep 1
-		jobsCnt=$(jobs -l | grep -c "Running")
-		mainPidCnt=$(ps -ef | grep -v grep | grep -c $mainPid)
+	local pid=$1
+	# Check if the PID is provided
+	if [[ -z "$pid" ]]; then
+		echo "Usage: wait_for_pid <pid>"
+		return 1
+	fi
+	# Loop until the process no longer exists
+	while kill -0 "$pid" 2>/dev/null; do
+		echo "Waiting for PID $pid to terminate..."
+		sleep 20
 	done
 }
 

@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: xdcr-differ-pod
+  labels:
+    app: xdcr-differ
+spec:
+  containers:
+  - name: xdcr-differ
+    imagePullPolicy: IfNotPresent
+    image: ilcepoc0950.corp.amdocs.com/xdcr-differ:1.0.1
+    command: ["/bin/sleep", "infinity"]
