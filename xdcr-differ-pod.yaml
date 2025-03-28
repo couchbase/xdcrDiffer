@@ -8,5 +8,14 @@ spec:
   containers:
   - name: xdcr-differ
     imagePullPolicy: IfNotPresent
-    image: myRepo/xdcr-differ:1.0.1
+    image: my-repo/xdcr-differ:1.0.3
     command: ["/bin/sleep", "infinity"]
+    volumeMounts:
+    - name: xdcr-differ-secret
+      #mountPath: /etc/ssl/certs/ca.crt # for ubuntu
+      mountPath: /etc/pki/ca-trust/source/anchors/ca.crt # for redhat
+      subPath: ca.crt
+  volumes:
+  - name: xdcr-differ-secret
+    secret:
+      secretName: platform-couchbase-cluster-plt-cbc-cluster-tls

@@ -24,7 +24,7 @@ function findExec() {
 function printHelp() {
 	findExec
 
-	cat <<EOF
+	cat <<GG
 This script will set up the necessary environment variable to allow the XDCR diff tool to connect to the metakv service in the
 specified source cluster (NOTE: over http://) and retrieve the specified replication spec and run the difftool on it.
 
@@ -57,7 +57,7 @@ Example usage:
 	${BASH_SOURCE[0]} -h 127.0.0.1:8091 -u admin -p password -s sourceBucket -t targetBucket -r remoteCluster -c
 	${BASH_SOURCE[0]} --hostname=127.0.0.1:8091 --username=admin --password=password --sourceBucket=sourceBucketName --targetBucket=targetBucketName --remoteClusterName=RemoteRefName --clear
 	${BASH_SOURCE[0]} -y ./sampleConfig.yaml
-EOF
+GG
 }
 
 function waitForBgJobs {
@@ -133,6 +133,9 @@ while getopts ":h:p:u:r:s:t:cm:e:w:d:o:y:-:" opt; do
 			;;
 		debugMode)
 			debugMode=1
+			;;
+		enforceTLS)
+			enforceTLS=1
 			;;
 		username=*)
 			username=${OPTARG#*=}
@@ -294,6 +297,10 @@ function setupFromCmdLine {
 	elif [[ ! -z "$targetUrl" ]]; then
 		execString="${execString} -targetUrl"
 		execString="${execString} $targetUrl"
+	fi
+	if [[ ! -z "$enforceTLS" ]]; then
+		execString="${execString} -enforceTLS"
+		execString="${execString} $enforceTLS"
 	fi
 	if [[ ! -z "$maxFileDescs" ]]; then
 		execString="${execString} -numberOfFileDesc"
