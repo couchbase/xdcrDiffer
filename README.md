@@ -7,10 +7,11 @@ If an XDCR is ongoing, it is quite possible that the tool will show documents as
 # Table Of Contents
 - [Getting Started](#getting-started)
     * [Prerequisites](#prerequisites)
-    * [Compiling](#compiling)
-    * [Running](#running)
+    * [Compiling and Running](#compiling-and-running)
+        + [Compiling Natively](#compiling-natively)
         + [Preparing Couchbase Clusters](#preparing-couchbase-clusters)
         + [runDiffer](#rundiffer)
+        + [Compiling and Running with Docker](#compiling-and-running-with-docker)
         + [Preparing xdcrDiffer host for running differ](#preparing-xdcrdiffer-host-for-running-differ)
         + [Tool binary](#tool-binary)
         + [Running with TLS encrypted traffic](#running-with-tls-encrypted-traffic)
@@ -20,84 +21,87 @@ If an XDCR is ongoing, it is quite possible that the tool will show documents as
     * [Collection Mapping](#collection-mapping)
     * [Collection Migration Debugging](#collection-migration-debugging)
         + [How to interpret multi-target migration differ result](#how-to-interpret-multi-target-migration-differ-result)
-- [Detailed Q&A's](#detailed-q-a-s)
+- [Detailed Q&A's](#detailed-qas)
 - [Known Limitations](#known-limitations)
 - [License](#license)
-
 ## Getting Started
 
 
 ### Prerequisites
 
-Golang version 1.13 or above.
+Golang version 1.23.0 or above.
 
 First, clone the repository to any preferred destination.
 The build system will be using go modules, so it does not require special GOPATH configurations.
 
 ```
-neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs$ git clone git@github.com:couchbaselabs/xdcrDiffer.git
+~$ git clone https://github.com/couchbase/xdcrDiffer
 ```
 
-### Compiling
+### Compiling and Running
 
-It can be compiled using the accompanied make file. If necessary, the `make deps` can accomplish that. It uses go modules and gathers the necessary dependencies.
-
-```
-neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer$ make deps
-```
-
-Then simply run make once the dependencies are satisfied:
+#### Compiling Natively
+It can be compiled using the accompanying make file.
 
 ```
-neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer$ make
+~/xdcrDiffer$ make
 ```
 
-### Building with Docker
-
-Docker build:
-```
-docker build -t xdcr-differ:1.0.0 .
-```
-
-#### Multiple platform using docker buildx
-
-Creating the builder: 
-(for additional configuration -> https://docs.docker.com/build/buildkit/configure/)
-
-CTX=mycontext
-docker buildx ls | grep -w ${CTX}  || docker buildx create --name ${CTX}
-
-Docker buildx build for local/developer machine only: 
-```
-docker buildx build  --builder mycontext --platform "linux/arm64" --load -t xdcr-differ:1.0.0 .
-```
-
-Docker buildx build and image push: 
-```
-docker buildx build  --builder mycontext --platform "linux/amd64,linux/arm64" --push -t <myregistry>/xdcr-differ:1.0.0 .
-```
-
-
-### Running
 #### Preparing Couchbase Clusters
 Before running the differ to examine consistencies between two clusters, it is *highly recommended* to first set the Metadata Purge Interval to a low value, and then once that period has elapsed, run compaction on both clusters to ensure that tombstones are removed. Compaction will also ensure that the differ will only receive the minimum amount of data necessary, which will help minimize the storage requirement for the diff tool.
 
 #### runDiffer
-
-The `runDiffer.sh` shell script will ask for the minimum required information to run the difftool, and can be edited to add or modify detailed settings that are to be passed to the difftool itself. This is the *preferred* method.
+The `runDiffer.sh` shell script will ask for the minimum required information to run the difftool. This information can either be passed through the command line or the script can also read from a YAML file. This is the *preferred* method.
+Refer to `sampleConfig.yaml` for example.
 
 The script also sets up the shell environment to allow the tool binary to be able to contact the source cluster's metakv given the user specified credentials to retrieve the `remote cluster reference` and `replication specification` in order to simulate the existing replication scenario (i.e. filtering). Note that credentials are sent unencrypted for now.
 
 For example:
 ```
-neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer$ ./runDiffer.sh -u Administrator -p password -h 127.0.0.1:9000 -r backupCluster -s beer-sample -t backupDumpster
+~/xdcrDiffer$ ./runDiffer.sh -u Administrator -p password -h 127.0.0.1:9000 -r backupCluster -s beer-sample -t backupDumpster -c
 ```
+OR
+```
+~/xdcrDiffer$ ./runDiffer.sh -y ./sampleConfig.yaml
+```
+
+#### Compiling and Running with Docker
+
+The tool can also be compiled and run using Docker. The following command will build the Docker image and run the tool with the specified parameters.
+Note that this section will be outdated in the future as the `xdcrDiffer` should ultimately be run specifically on a Couchbase Server node.
+
+```
+docker build -t xdcr-differ:1.0.0 .
+```
+
+Create an output directory on the host machine to store the output files.
+
+```
+mkdir -p ./dockerOutput
+```
+
+(Optional) Docker buildx build and image push:
+```
+docker buildx build  --builder mycontext --platform "linux/amd64,linux/arm64" --push -t <myregistry>/xdcr-differ:1.0.0 .
+```
+
+Run the Docker container with the following command:
+```
+docker run -v `pwd`/dockerOutput:/outputs -t --network host xdcr-differ:1.0.0 -u <username> -p <password> -h <nodeIP>:8091 -s <srcBucket> -t <tgtBucket> -r <remClusterRefName> -o /outputs
+```
+
+In the above command, the container will be launched where the created `dockerOutput` directory is mounted to the container.
+The host network will be used by the container to connect to the Couchbase cluster node.
+The `nodeIP` should be an IP that is displayed by the Couchbase Server UI console (under the `Servers` tab)
 
 #### Preparing xdcrDiffer host for running differ
 While the differ can run on any machine that compiles the binary, one method of running the differ tool is to run on a non-KV couchbase node.
 It is also possible to create a small Couchbase node that has only a simple non-impacting service enabled (i.e. Backup), and rebalance in to the cluster for running the differ, which will not trigger vb movement.
 The node can then be removed once the differ has finished running.
 The runDiffer script above will then allow the differ to access metadata information to enable various features, including using secure connections, or collections.
+
+While currently it could be run on a non-Couchbase node as an independent binary, this functionality will be deprecated in the future.
+When that time comes, the binary must be run on a Couchbase Server node.
 
 #### Tool binary
 The legacy method is to run the tool binary natively by using the options provided that can be found using "-h".
@@ -107,51 +111,51 @@ And that this legacy method does not support features that are introduced _after
 ```
 Usage of ./xdcrDiffer:
   -checkpointFileDir string
-    	directory for checkpoint files (default "checkpoint")
+        directory for checkpoint files (default "checkpoint")
   -completeByDuration uint
-    	duration that the tool should run (default 1)
+        duration that the tool should run (default 1)
   -completeBySeqno
-    	whether tool should automatically complete (after processing all mutations at start time) (default true)
+        whether tool should automatically complete (after processing all mutations at start time) (default true)
   -diffFileDir string
-    	 directory for storing diffs (default "diff")
+         directory for storing diffs (default "diff")
   -enforceTLS
-    	 stops executing if pre-requisites are not in place to ensure TLS communications
+         stops executing if pre-requisites are not in place to ensure TLS communications
   -newCheckpointFileName string
-    	new checkpoint file to write to when tool shuts down
+        new checkpoint file to write to when tool shuts down
   -numberOfBins uint
-    	number of buckets per vbucket (default 10)
+        number of buckets per vbucket (default 10)
   -numberOfFileDesc uint
-    	number of file descriptors
+        number of file descriptors
   -numberOfWorkersForDcp uint
-    	number of worker threads for dcp (default 10)
+        number of worker threads for dcp (default 10)
   -numberOfWorkersForFileDiffer uint
-    	number of worker threads for file differ  (default 10)
+        number of worker threads for file differ  (default 10)
   -numberOfWorkersForMutationDiffer uint
-    	number of worker threads for mutation differ  (default 10)
+        number of worker threads for mutation differ  (default 10)
   -oldCheckpointFileName string
-    	old checkpoint file to load from when tool starts
+        old checkpoint file to load from when tool starts
   -sourceBucketName string
-    	bucket name for source cluster (default "default")
+        bucket name for source cluster (default "default")
   -sourceFileDir string
-    	directory to store mutations in source cluster (default "source")
+        directory to store mutations in source cluster (default "source")
   -sourcePassword string
-    	password for source cluster (default "welcome")
+        password for source cluster (default "welcome")
   -sourceUrl string
-    	url for source cluster (default "http://localhost:9000")
+        url for source cluster (default "http://localhost:9000")
   -sourceUsername string
-    	username for source cluster (default "Administrator")
+        username for source cluster (default "Administrator")
   -targetBucketName string
-    	bucket name for target cluster (default "target")
+        bucket name for target cluster (default "target")
   -targetFileDir string
-    	directory to store mutations in target cluster (default "target")
+        directory to store mutations in target cluster (default "target")
   -targetPassword string
-    	password for target cluster (default "welcome")
+        password for target cluster (default "welcome")
   -targetUrl string
-    	url for target cluster (default "http://localhost:9000")
+        url for target cluster (default "http://localhost:9000")
   -targetUsername string
-    	username for target cluster (default "Administrator")
+        username for target cluster (default "Administrator")
   -verifyDiffKeys
-    	whether to verify diff keys through aysnc Get on clusters (default true)
+        whether to verify diff keys through aysnc Get on clusters (default true)
   -mutationRetries int
       Additional number of times to retry to resolve the mutation differences
   -mutationRetriesWaitSecs int
@@ -162,6 +166,10 @@ Usage of ./xdcrDiffer:
       Common setup timeout duration in seconds. Default is 10 (seconds)
   -debugMode
       Set xdcrDiffer to DEBUG log level and also enable SDK (gocb) verbose logging.
+  -fileContaingXattrKeysForNoComapre
+      Path to the file containing xattrs that should be excluded from comparison
+  -yamlConfigFilePath
+      Path to yaml config file
 ```
 
 A few options worth noting:
@@ -203,12 +211,12 @@ The difftool performs the following in order:
 4. Verify differences from above using async Get (verifyDiffKeys) to rule out transitional mutations
 
 ## Output
-Results can be viewed as JSON summary files under `mutationDiff`:
+Results can be viewed as JSON summary files under `outputs/mutationDiff`:
 ```
-neil.huang@NeilsMacbookPro:~/go/src/github.com/couchbaselabs/xdcrDiffer/mutationDiff$ ls
-diffKeysWithError		mutationDiffColIdMapping	mutationDiffDetails
+~/xdcrDiffer/outputs/mutationDiff$ ls
+diffKeysWithError       mutationDiffColIdMapping    mutationDiffDetails
 
-neil.huang@NeilsMacbookPro:~/go/src/github.com/nelio2k/xdcrDiffer/mutationDiff$ jsonpp mutationDiffDetails  | head
+~/xdcrDiffer/outputs/mutationDiff$ jsonpp mutationDiffDetails  | head
 {
   "Mismatch": {},
   "MissingFromSource": {},
@@ -228,9 +236,9 @@ For `Mismatch` column, the collection ID would represent collection ID for the s
 ### Manifests
 Difftool will retrieve the manifests from both source and target buckets and store them under the corresponding source and target directories:
 ```
-neil.huang@NeilsMacbookPro:~/go/src/github.com/nelio2k/xdcrDiffer$ find . -name diffTool_manifest
-./target/diffTool_manifest
-./source/diffTool_manifest
+~/xdcrDiffer$ find . -name diffTool_manifest
+./outputs/target/diffTool_manifest
+./outputs/source/diffTool_manifest
 ```
 
 ### Collection Mapping
@@ -254,7 +262,7 @@ The xdcrDiffer can detect when these happen and showcase the information. The fo
 ```
 2. There is a file called `mutationMigrationDetails`. The file contains a map of `docKey` -> `indexes that match`. For example:
 ```
-$ jsonpp mutationDiff/mutationMigrationDetails | head -n 30
+$ jsonpp outputs/mutationDiff/mutationMigrationDetails | head -n 30
 {
   "21st_amendment_brewery_cafe": [
     0,
@@ -289,7 +297,7 @@ Once all the data are captured from source and target, then it compares between 
 
 The limiting space factor here is the actual machine that is running the diff tool, since the diff tool receives data from the source and target clusters and then capture them for comparison. Each mutation the diff tool stores currently would be 102 bytes + key size. So, depending on how the customer’s docIDs are set up, the space could vary, but is calculable per situation.
 
-> Does the tool always begin from sequence number 0? 
+> Does the tool always begin from sequence number 0?
 
 The diff tool has checkpointing mechanism built in in case of interruptions. The checkpointing mechanism is pretty much the same concept as XDCR checkpoints - that it knows where in the DCP stream it was last stopped and will try to resume from that point in time.
 

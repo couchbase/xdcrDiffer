@@ -13,36 +13,32 @@ import (
 	"crypto/sha512"
 	"encoding/binary"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"sync"
-	"xdcrDiffer/base"
-	fdp "xdcrDiffer/fileDescriptorPool"
-	"xdcrDiffer/utils"
 
 	"github.com/couchbase/gocbcore/v10"
 	"github.com/couchbase/gomemcached"
 	mcc "github.com/couchbase/gomemcached/client"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	xdcrParts "github.com/couchbase/goxdcr/base/filter"
-	xdcrLog "github.com/couchbase/goxdcr/log"
-	"github.com/couchbase/goxdcr/metadata"
-	xdcrUtils "github.com/couchbase/goxdcr/utils"
+	xdcrBase "github.com/couchbase/goxdcr/v8/base"
+	xdcrParts "github.com/couchbase/goxdcr/v8/base/filter"
+	"github.com/couchbase/goxdcr/v8/crMeta"
+	xdcrLog "github.com/couchbase/goxdcr/v8/log"
+	"github.com/couchbase/goxdcr/v8/metadata"
+	xdcrUtils "github.com/couchbase/goxdcr/v8/utils"
+	"github.com/couchbase/xdcrDiffer/base"
+	fh "github.com/couchbase/xdcrDiffer/fileHandler"
 )
 
 // implements StreamObserver
 type DcpHandler struct {
 	dcpClient                     *DcpClient
-	fileDir                       string
 	index                         int
 	vbList                        []uint16
 	numberOfBins                  int
 	dataChan                      chan *Mutation
 	waitGrp                       sync.WaitGroup
 	finChan                       chan bool
-	bucketMap                     map[uint16]map[int]*Bucket
-	fdPool                        fdp.FdPoolIface
 	logger                        *xdcrLog.CommonLogger
 	filter                        xdcrParts.Filter
 	incrementCounter              func()
@@ -52,27 +48,24 @@ type DcpHandler struct {
 	colMigrationFiltersImpl       []xdcrParts.Filter
 	isSource                      bool
 	utils                         xdcrUtils.UtilsIface
-	bufferCap                     int
 	migrationMapping              metadata.CollectionNamespaceMapping
 	mobileCompatible              int
 	expDelMode                    xdcrBase.FilterExpDelType
 	xattrIterator                 *xdcrBase.XattrIterator
+	fileHandler                   *fh.FileHandler
 }
 
-func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uint16, numberOfBins, dataChanSize int, fdPool fdp.FdPoolIface, incReceivedCounter, incSysOrUnsubbedEvtReceived func(), colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping) (*DcpHandler, error) {
+func NewDcpHandler(dcpClient *DcpClient, index int, vbList []uint16, numberOfBins, dataChanSize int, incReceivedCounter, incSysOrUnsubbedEvtReceived func(), colMigrationFilters []string, utils xdcrUtils.UtilsIface, migrationMapping metadata.CollectionNamespaceMapping, fileHandler *fh.FileHandler) (*DcpHandler, error) {
 	if len(vbList) == 0 {
 		return nil, fmt.Errorf("vbList is empty for handler %v", index)
 	}
 	return &DcpHandler{
 		dcpClient:                     dcpClient,
-		fileDir:                       fileDir,
 		index:                         index,
 		vbList:                        vbList,
 		numberOfBins:                  numberOfBins,
 		dataChan:                      make(chan *Mutation, dataChanSize),
 		finChan:                       make(chan bool),
-		bucketMap:                     make(map[uint16]map[int]*Bucket),
-		fdPool:                        fdPool,
 		logger:                        dcpClient.logger,
 		filter:                        dcpClient.dcpDriver.filter,
 		incrementCounter:              incReceivedCounter,
@@ -81,11 +74,11 @@ func NewDcpHandler(dcpClient *DcpClient, fileDir string, index int, vbList []uin
 		colMigrationFiltersOn:         len(colMigrationFilters) > 0,
 		utils:                         utils,
 		isSource:                      strings.Contains(dcpClient.Name, base.SourceClusterName),
-		bufferCap:                     bufferCap,
 		migrationMapping:              migrationMapping,
 		mobileCompatible:              dcpClient.dcpDriver.mobileCompatible,
 		expDelMode:                    dcpClient.dcpDriver.expDelMode,
 		xattrIterator:                 &xdcrBase.XattrIterator{},
+		fileHandler:                   fileHandler,
 	}, nil
 }
 
@@ -103,10 +96,7 @@ func (dh *DcpHandler) Start() error {
 
 func (dh *DcpHandler) Stop() {
 	close(dh.finChan)
-	// this sometimes does not return after a long time
-	//dh.waitGrp.Wait()
-
-	dh.cleanup()
+	dh.waitGrp.Wait()
 }
 
 func (d *DcpHandler) compileMigrCollectionFiltersIfNeeded() error {
@@ -125,41 +115,10 @@ func (d *DcpHandler) compileMigrCollectionFiltersIfNeeded() error {
 }
 
 func (dh *DcpHandler) initialize() error {
-	for _, vbno := range dh.vbList {
-		innerMap := make(map[int]*Bucket)
-		dh.bucketMap[vbno] = innerMap
-		for i := 0; i < dh.numberOfBins; i++ {
-			bucket, err := NewBucket(dh.fileDir, vbno, i, dh.fdPool, dh.logger, dh.bufferCap)
-			if err != nil {
-				return err
-			}
-			innerMap[i] = bucket
-		}
-	}
-
 	if err := dh.compileMigrCollectionFiltersIfNeeded(); err != nil {
 		return err
 	}
 	return nil
-}
-
-func (dh *DcpHandler) cleanup() {
-	for _, vbno := range dh.vbList {
-		innerMap := dh.bucketMap[vbno]
-		if innerMap == nil {
-			dh.logger.Warnf("Cannot find innerMap for Vbno %v at cleanup\n", vbno)
-			continue
-		}
-		for i := 0; i < dh.numberOfBins; i++ {
-			bucket := innerMap[i]
-			if bucket == nil {
-				dh.logger.Warnf("Cannot find bucket for Vbno %v and index %v at cleanup\n", vbno, i)
-				continue
-			}
-			//fmt.Printf("%v DcpHandler closing bucket %v\n", dh.dcpClient.Name, i)
-			bucket.close()
-		}
-	}
 }
 
 func (dh *DcpHandler) processData() {
@@ -209,25 +168,21 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 		}
 	}
 
-	vbno := mut.Vbno
-	index := utils.GetBucketIndexFromKey(mut.Key, dh.numberOfBins)
-	innerMap := dh.bucketMap[vbno]
-	if innerMap == nil {
-		panic(fmt.Sprintf("cannot find bucketMap for Vbno %v", vbno))
-	}
-	bucket := innerMap[index]
-	if bucket == nil {
-		panic(fmt.Sprintf("cannot find bucket for index %v", index))
-	}
-
 	if dh.colMigrationFiltersOn && len(filterIdsMatched) > 0 {
 		mut.ColFiltersMatched = filterIdsMatched
 	}
+
+	bucket, err := dh.fileHandler.GetBucket(mut.Key, mut.Vbno)
+	if err != nil {
+		dh.logger.Errorf("failed to write mutation for document %s with cas %v revID %v. err=%v", mut.Key, mut.Cas, mut.RevId, err)
+		return
+	}
+
 	ret, err := mut.Serialize()
 	if err != nil {
-		dh.logger.Errorf("Error in Serializing the mutation pertaining to the document with the key:%v ,err:%v\n", mut.Key, err)
+		dh.logger.Errorf("error in Serializing the mutation pertaining to the document with the key:%v ,err:%v\n", mut.Key, err)
 	} else {
-		bucket.write(ret)
+		bucket.Write(ret)
 	}
 }
 
@@ -346,104 +301,6 @@ func (dh *DcpHandler) checkColMigrationDataCloned(mut *Mutation) {
 	}
 }
 
-type Bucket struct {
-	data []byte
-	// current index in data for next write
-	index    int
-	file     *os.File
-	fileName string
-
-	fdPoolCb fdp.FileOp
-	closeOp  func() error
-
-	logger *xdcrLog.CommonLogger
-
-	bufferCap int
-}
-
-func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool fdp.FdPoolIface, logger *xdcrLog.CommonLogger, bufferCap int) (*Bucket, error) {
-	fileName := utils.GetFileName(fileDir, vbno, bucketIndex)
-	var cb fdp.FileOp
-	var closeOp func() error
-	var err error
-	var file *os.File
-
-	if fdPool == nil {
-		file, err = os.OpenFile(fileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, base.FileModeReadWrite)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		_, cb, err = fdPool.RegisterFileHandle(fileName)
-		if err != nil {
-			return nil, err
-		}
-		closeOp = func() error {
-			return fdPool.DeRegisterFileHandle(fileName)
-		}
-	}
-	return &Bucket{
-		data:      make([]byte, bufferCap),
-		index:     0,
-		file:      file,
-		fileName:  fileName,
-		fdPoolCb:  cb,
-		closeOp:   closeOp,
-		logger:    logger,
-		bufferCap: bufferCap,
-	}, nil
-}
-
-func (b *Bucket) write(item []byte) error {
-	if b.index+len(item) > b.bufferCap {
-		err := b.flushToFile()
-		if err != nil {
-			return err
-		}
-	}
-
-	copy(b.data[b.index:], item)
-	b.index += len(item)
-	return nil
-}
-
-func (b *Bucket) flushToFile() error {
-	var numOfBytes int
-	var err error
-
-	if b.fdPoolCb != nil {
-		numOfBytes, err = b.fdPoolCb(b.data[:b.index])
-	} else {
-		numOfBytes, err = b.file.Write(b.data[:b.index])
-	}
-	if err != nil {
-		return err
-	}
-	if numOfBytes != b.index {
-		return fmt.Errorf("Incomplete write. expected=%v, actual=%v", b.index, numOfBytes)
-	}
-	b.index = 0
-	return nil
-}
-
-func (b *Bucket) close() {
-	err := b.flushToFile()
-	if err != nil {
-		b.logger.Errorf("Error flushing to file %v at bucket close err=%v\n", b.fileName, err)
-	}
-	if b.fdPoolCb != nil {
-		err = b.closeOp()
-		if err != nil {
-			b.logger.Errorf("Error closing file %v.  err=%v\n", b.fileName, err)
-		}
-	} else {
-		err = b.file.Close()
-		if err != nil {
-			b.logger.Errorf("Error closing file %v.  err=%v\n", b.fileName, err)
-		}
-	}
-}
-
 type Mutation struct {
 	Vbno                  uint16
 	Key                   []byte
@@ -541,7 +398,8 @@ func (mut *Mutation) Serialize() ([]byte, error) {
 	var bodyHash [64]byte
 	var xattrSize uint32
 	var xattr []byte
-	var bodyWithoutXattr, trimmedXattrPlusBody, hlv, importCas []byte
+	var bodyWithoutXattr, trimmedXattrPlusBody, hlv []byte
+	var importCas, pRev uint64
 	var err error
 	if mut.Datatype&xdcrBase.XattrDataType > 0 {
 		var KVsToBeExcluded map[string][]byte
@@ -556,17 +414,21 @@ func (mut *Mutation) Serialize() ([]byte, error) {
 			return nil, err
 		}
 		hlv = KVsToBeExcluded[xdcrBase.XATTR_HLV]
-		importCas = KVsToBeExcluded[xdcrBase.XATTR_IMPORTCAS]
+		mou, ok := KVsToBeExcluded[xdcrBase.XATTR_MOU]
+		if ok {
+			_, _, importCas, pRev, err = crMeta.GetImportCasAndPrevFromMou(mou)
+			if err != nil {
+				return nil, err
+			}
+		}
 		bodyHash = sha512.Sum512(trimmedXattrPlusBody)
 	} else {
 		bodyHash = sha512.Sum512(mut.Value)
 	}
 
-	hlvLen := uint32(len(hlv))
-	importCasLen := uint32(len(importCas))
-	hlvPlusImportSize := hlvLen + importCasLen
+	hlvLen := uint64(len(hlv))
 	keyLen := len(mut.Key)
-	ret := make([]byte, base.GetFixedSizeMutationLen(keyLen, hlvPlusImportSize, mut.ColFiltersMatched))
+	ret := make([]byte, base.GetFixedSizeMutationLen(keyLen, hlvLen, mut.ColFiltersMatched))
 
 	pos := 0
 	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(keyLen))
@@ -587,14 +449,14 @@ func (mut *Mutation) Serialize() ([]byte, error) {
 	pos += 2
 	binary.BigEndian.PutUint16(ret[pos:pos+2], uint16(mut.Datatype))
 	pos += 2
-	binary.BigEndian.PutUint32(ret[pos:pos+4], hlvLen)
-	pos += 4
+	binary.BigEndian.PutUint64(ret[pos:pos+8], importCas)
+	pos += 8
+	binary.BigEndian.PutUint64(ret[pos:pos+8], pRev)
+	pos += 8
+	binary.BigEndian.PutUint64(ret[pos:pos+8], hlvLen)
+	pos += 8
 	copy(ret[pos:pos+int(hlvLen)], hlv)
 	pos += int(hlvLen)
-	binary.BigEndian.PutUint32(ret[pos:pos+4], importCasLen)
-	pos += 4
-	copy(ret[pos:pos+int(importCasLen)], importCas)
-	pos += int(importCasLen)
 	copy(ret[pos:], bodyHash[:])
 	pos += 64
 	binary.BigEndian.PutUint32(ret[pos:pos+4], mut.ColId)
@@ -651,6 +513,6 @@ func removeKVSubsetFromXattr(xattr []byte, size int, xattrSize uint32, xattrIter
 			return nil, nil, err
 		}
 	}
-	trimmedXattrPlusBody, _ = xattrComposer.FinishAndAppendDocValue(bodyWithoutXattr)
+	trimmedXattrPlusBody, _ = xattrComposer.FinishAndAppendDocValue(bodyWithoutXattr, nil, nil)
 	return trimmedXattrPlusBody, KVsToBeExcluded, nil
 }

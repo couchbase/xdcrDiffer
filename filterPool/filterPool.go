@@ -11,9 +11,10 @@ package filterPool
 
 import (
 	"fmt"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	xdcrParts "github.com/couchbase/goxdcr/base/filter"
-	xdcrUtils "github.com/couchbase/goxdcr/utils"
+
+	xdcrBase "github.com/couchbase/goxdcr/v8/base"
+	xdcrParts "github.com/couchbase/goxdcr/v8/base/filter"
+	xdcrUtils "github.com/couchbase/goxdcr/v8/utils"
 )
 
 // Implements xdcrParts/filter
@@ -35,7 +36,7 @@ func (f *FilterPool) SetShouldSkipBinaryDocs(val bool) {
 	}
 }
 
-func (f *FilterPool) SetMobileCompatibility(val uint32) {
+func (f *FilterPool) SetMobileCompatibility(val int) {
 	for i := 0; i < len(f.filtersList); i++ {
 		f.filtersList[i].filter.SetMobileCompatibility(val)
 	}

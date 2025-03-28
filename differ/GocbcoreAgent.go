@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"reflect"
 	"time"
-	"xdcrDiffer/base"
 
 	"github.com/couchbase/gocbcore/v10"
 	"github.com/couchbase/gocbcore/v10/memd"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	"github.com/couchbase/goxdcr/metadata"
+	xdcrBase "github.com/couchbase/goxdcr/v8/base"
+	"github.com/couchbase/goxdcr/v8/metadata"
+	"github.com/couchbase/xdcrDiffer/base"
 )
 
 type GocbcoreAgent struct {
@@ -153,6 +153,12 @@ func (a *GocbcoreAgent) GetHlv(key string, callbackFunc func(result *gocbcore.Lo
 				Op:    memd.SubDocOpType(memd.CmdSubDocGet),
 				Flags: memd.SubdocFlag(xdcrBase.SUBDOC_FLAG_XATTR),
 				Path:  xdcrBase.XATTR_IMPORTCAS,
+				Value: nil,
+			},
+			{
+				Op:    memd.SubDocOpType(memd.CmdSubDocGet),
+				Flags: memd.SubdocFlag(xdcrBase.SUBDOC_FLAG_XATTR),
+				Path:  xdcrBase.XATTR_PREVIOUSREV,
 				Value: nil,
 			},
 		},

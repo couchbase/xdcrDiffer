@@ -1,4 +1,5 @@
-ARG BUILDER_IMAGE=docker.io/golang:1.22
+
+ARG BUILDER_IMAGE=docker.io/golang:1.23
 ARG FINAL_IMAGE=docker.io/redhat/ubi9:9.4
 ARG http_proxy
 ARG https_proxy
@@ -17,8 +18,6 @@ ENV GOARCH=$TARGETARCH
 ENV CGO_ENABLED=0
 
 COPY . .
-
-RUN make deps
 
 RUN echo "myuser:x:1001:1001::/:/xdcrDiffer" > /passwd
 

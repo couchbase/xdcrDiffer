@@ -9,13 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"xdcrDiffer/base"
-	"xdcrDiffer/utils"
-
 	"github.com/couchbase/gocb/v2"
 	"github.com/couchbase/gocbcore/v10"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	xdcrLog "github.com/couchbase/goxdcr/log"
+	xdcrBase "github.com/couchbase/goxdcr/v8/base"
+	xdcrLog "github.com/couchbase/goxdcr/v8/log"
+	"github.com/couchbase/xdcrDiffer/base"
+	"github.com/couchbase/xdcrDiffer/utils"
 	"github.com/rcrowley/go-metrics"
 )
 
@@ -47,15 +46,16 @@ type CheckpointManager struct {
 	logOnceCount          uint64
 	lastRemainingMap      map[uint16]uint64
 
-	kvSSLPortMap    xdcrBase.SSLPortMap
-	kvVbMap         map[string][]uint16
-	gocbcoreDcpFeed *GocbcoreDCPFeed
-	agent           *gocbcore.Agent
+	kvSSLPortMap     xdcrBase.SSLPortMap
+	kvVbMap          map[string][]uint16
+	gocbcoreDcpFeed  *GocbcoreDCPFeed
+	agent            *gocbcore.Agent
+	numberOfVbuckets uint16
 }
 
 func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName, clusterName string,
 	bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration,
-	checkpointInterval int, startVbtsDoneChan chan bool, logger *xdcrLog.CommonLogger, completeBySeqno bool) *CheckpointManager {
+	checkpointInterval int, startVbtsDoneChan chan bool, logger *xdcrLog.CommonLogger, completeBySeqno bool, numberOfVbuckets uint16) *CheckpointManager {
 	cm := &CheckpointManager{
 		dcpDriver:             dcpDriver,
 		clusterName:           clusterName,
@@ -74,6 +74,7 @@ func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpoint
 		startVbtsDoneChan:     startVbtsDoneChan,
 		logger:                logger,
 		completeBySeqno:       completeBySeqno,
+		numberOfVbuckets:      numberOfVbuckets,
 	}
 
 	if checkpointFileDir != "" {
@@ -87,7 +88,7 @@ func NewCheckpointManager(dcpDriver *DcpDriver, checkpointFileDir, oldCheckpoint
 	}
 
 	var vbno uint16
-	for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
+	for vbno = 0; vbno < cm.numberOfVbuckets; vbno++ {
 		cm.seqnoMap[vbno] = &SeqnoWithLock{}
 		cm.snapshots[vbno] = &Snapshot{}
 		cm.filteredCnt[vbno] = metrics.NewCounter()
@@ -221,7 +222,7 @@ func (cm *CheckpointManager) reportStatusOnce(prevSum uint64) uint64 {
 	var filtered int64
 	var failedFilter int64
 	cm.logOnceCount++
-	for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
+	for vbno = 0; vbno < cm.numberOfVbuckets; vbno++ {
 		sum += cm.seqnoMap[vbno].getSeqno()
 		filtered += cm.filteredCnt[vbno].Count()
 		failedFilter += cm.failedFilterCnt[vbno].Count()
@@ -305,7 +306,7 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() error {
 
 	vbuuidMap := make(map[uint16]uint64)
 	endSeqnoMap := make(map[uint16]uint64)
-	err = utils.ParseHighSeqnoStat(statsMap, endSeqnoMap, vbuuidMap, true)
+	err = utils.ParseHighSeqnoStat(statsMap, endSeqnoMap, vbuuidMap, true, int(cm.numberOfVbuckets))
 	if err != nil {
 		return err
 	}
@@ -330,7 +331,7 @@ func (cm *CheckpointManager) getVbuuidsAndHighSeqnos() error {
 		cm.endSeqnoMap = make(map[uint16]uint64)
 		// set endSeqno to maxInt
 		var vbno uint16
-		for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
+		for vbno = 0; vbno < cm.numberOfVbuckets; vbno++ {
 			cm.endSeqnoMap[vbno] = math.MaxUint64
 		}
 	}
@@ -374,7 +375,7 @@ func (cm *CheckpointManager) getStatsWithRetry() (map[string]map[string]string, 
 				// Make sure we get all the vbuuid and seqno
 				vbuuidMap := make(map[uint16]uint64)
 				endSeqnoMap := make(map[uint16]uint64)
-				err = utils.ParseHighSeqnoStat(statsMap, endSeqnoMap, vbuuidMap, true)
+				err = utils.ParseHighSeqnoStat(statsMap, endSeqnoMap, vbuuidMap, true, int(cm.numberOfVbuckets))
 				if err != nil {
 					for server, singleServerStats := range result.Servers {
 						cm.logger.Warnf("server %v received stats %v", server, singleServerStats.Stats)
@@ -442,7 +443,7 @@ func (cm *CheckpointManager) setStartVBTS() error {
 		}
 	} else {
 		var vbno uint16
-		for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
+		for vbno = 0; vbno < cm.numberOfVbuckets; vbno++ {
 			// if we are not loading checkpoints, it is ok to leave all fields in Checkpoint with default values, 0
 			cm.startVBTS[vbno] = &VBTS{
 				Checkpoint: &Checkpoint{},
@@ -476,8 +477,8 @@ func (cm *CheckpointManager) loadCheckpoints() (*CheckpointDoc, error) {
 		return nil, err
 	}
 
-	if len(checkpointDoc.Checkpoints) < base.NumberOfVbuckets {
-		return nil, fmt.Errorf("checkpoint file %v has less than 1024 vbuckets.", cm.oldCheckpointFileName)
+	if len(checkpointDoc.Checkpoints) < int(cm.numberOfVbuckets) {
+		return nil, fmt.Errorf("checkpoint file %v has less than %v vbuckets", cm.oldCheckpointFileName, cm.numberOfVbuckets)
 	}
 
 	return checkpointDoc, nil
@@ -507,7 +508,7 @@ func (cm *CheckpointManager) saveCheckpoint(checkpointFileName string) error {
 	var total uint64
 	var totalFiltered uint64
 	var totalFailedFilter uint64
-	for vbno = 0; vbno < base.NumberOfVbuckets; vbno++ {
+	for vbno = 0; vbno < cm.numberOfVbuckets; vbno++ {
 		vbuuid := cm.vbuuidMap[vbno]
 		seqno := cm.seqnoMap[vbno].getSeqno()
 		total += seqno
@@ -629,7 +630,7 @@ func (cm *CheckpointManager) initializeBucket() (err error) {
 	agentConfig := &gocbcore.AgentConfig{
 		SeedConfig: gocbcore.SeedConfig{MemdAddrs: []string{bucketConnStr}},
 		BucketName: cm.dcpDriver.bucketName,
-		UserAgent:  fmt.Sprintf("xdcrDifferCheckpointMgr"),
+		UserAgent:  "xdcrDifferCheckpointMgr",
 		SecurityConfig: gocbcore.SecurityConfig{
 			UseTLS:            useTLS,
 			TLSRootCAProvider: x509Provider,
@@ -663,7 +664,7 @@ func (cm *CheckpointManager) initializeBucket() (err error) {
 
 	if err != nil {
 		errClosing := cm.agent.Close()
-		err = fmt.Errorf("Closing CheckpointManager.agent because of err=%v, error while closing=%v", err, errClosing)
+		err = fmt.Errorf("closing CheckpointManager.agent because of err=%v, error while closing=%v", err, errClosing)
 		return
 	}
 

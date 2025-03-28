@@ -19,34 +19,36 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"xdcrDiffer/base"
-	"xdcrDiffer/dcp"
-	"xdcrDiffer/differ"
-	fdp "xdcrDiffer/fileDescriptorPool"
-	"xdcrDiffer/filterPool"
-	"xdcrDiffer/utils"
+	"unsafe"
 
 	"github.com/couchbase/gocb/v2"
-	xdcrBase "github.com/couchbase/goxdcr/base"
-	xdcrParts "github.com/couchbase/goxdcr/base/filter"
-	xdcrLog "github.com/couchbase/goxdcr/log"
-	"github.com/couchbase/goxdcr/metadata"
-	"github.com/couchbase/goxdcr/metadata_svc"
-	"github.com/couchbase/goxdcr/service_def"
-	service_def_mock "github.com/couchbase/goxdcr/service_def/mocks"
-	"github.com/couchbase/goxdcr/service_impl"
-	"github.com/couchbase/goxdcr/streamApiWatcher"
-	xdcrUtils "github.com/couchbase/goxdcr/utils"
+	xdcrBase "github.com/couchbase/goxdcr/v8/base"
+	xdcrParts "github.com/couchbase/goxdcr/v8/base/filter"
+	xdcrLog "github.com/couchbase/goxdcr/v8/log"
+	"github.com/couchbase/goxdcr/v8/metadata"
+	"github.com/couchbase/goxdcr/v8/metadata_svc"
+	"github.com/couchbase/goxdcr/v8/service_def"
+	service_def_mock "github.com/couchbase/goxdcr/v8/service_def/mocks"
+	"github.com/couchbase/goxdcr/v8/service_impl"
+	"github.com/couchbase/goxdcr/v8/streamApiWatcher"
+	xdcrUtils "github.com/couchbase/goxdcr/v8/utils"
+	"github.com/couchbase/xdcrDiffer/base"
+	"github.com/couchbase/xdcrDiffer/dcp"
+	"github.com/couchbase/xdcrDiffer/differ"
+	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
+	"github.com/couchbase/xdcrDiffer/filterPool"
+	"github.com/couchbase/xdcrDiffer/utils"
 	"github.com/stretchr/testify/mock"
+	"gopkg.in/yaml.v3"
 )
 
 var done = make(chan bool)
 
-var options struct {
+type inputOptions struct {
 	sourceUrl                         string
 	sourceUsername                    string
 	sourcePassword                    string
@@ -74,10 +76,7 @@ var options struct {
 	checkpointFileDir string
 	// name of source cluster checkpoint file to load from when tool starts
 	// if not specified, source cluster will start from 0
-	oldSourceCheckpointFileName string
-	// name of target cluster checkpoint file to load from when tool starts
-	// if not specified, target cluster will start from 0
-	oldTargetCheckpointFileName string
+	oldCheckpointFileName string
 	// name of new checkpoint file to write to when tool shuts down
 	// if not specified, tool will not save checkpoint files
 	newCheckpointFileName string
@@ -136,6 +135,15 @@ var options struct {
 	setupTimeout int
 	//string denoting the xattrs that shouldn't be compared
 	fileContaingXattrKeysForNoComapre string
+	//path to yaml config file
+	yamlConfigFilePath string
+}
+
+var options inputOptions = inputOptions{}
+
+func (o inputOptions) String() string {
+	return fmt.Sprintf("Options{sourceUrl: %s, sourceUsername: %s, sourcePassword: REDACTED, sourceBucketName: %s, remoteClusterName: %s, sourceFileDir: %s, targetUrl: %s, targetUsername: %s, targetPassword: REDACTED, targetBucketName: %s, targetFileDir: %s, numberOfSourceDcpClients: %d, numberOfWorkersPerSourceDcpClient: %d, numberOfTargetDcpClients: %d, numberOfWorkersPerTargetDcpClient: %d, numberOfWorkersForFileDiffer: %d, numberOfWorkersForMutationDiffer: %d, numberOfBins: %d, numberOfFileDesc: %d, completeByDuration: %d, completeBySeqno: %t, checkpointFileDir: %s, oldCheckpointFileName: %s, newCheckpointFileName: %s, fileDifferDir: %s, mutationDifferDir: %s, mutationDifferBatchSize: %d, mutationDifferTimeout: %d, sourceDcpHandlerChanSize: %d, targetDcpHandlerChanSize: %d, bucketOpTimeout: %d, maxNumOfGetStatsRetry: %d, maxNumOfSendBatchRetry: %d, getStatsRetryInterval: %d, sendBatchRetryInterval: %d, getStatsMaxBackoff: %d, sendBatchMaxBackoff: %d, delayBetweenSourceAndTarget: %d, checkpointInterval: %d, runDataGeneration: %t, runFileDiffer: %t, runMutationDiffer: %t, enforceTLS: %t, bucketBufferCapacity: %d, compareType: %s, mutationDifferRetries: %d, mutationDifferRetriesWaitSecs: %d, numOfFiltersInFilterPool: %d, debugMode: %t, setupTimeout: %d, fileContaingXattrKeysForNoComapre: %s}",
+		o.sourceUrl, o.sourceUsername, o.sourceBucketName, o.remoteClusterName, o.sourceFileDir, o.targetUrl, o.targetUsername, o.targetBucketName, o.targetFileDir, o.numberOfSourceDcpClients, o.numberOfWorkersPerSourceDcpClient, o.numberOfTargetDcpClients, o.numberOfWorkersPerTargetDcpClient, o.numberOfWorkersForFileDiffer, o.numberOfWorkersForMutationDiffer, o.numberOfBins, o.numberOfFileDesc, o.completeByDuration, o.completeBySeqno, o.checkpointFileDir, o.oldCheckpointFileName, o.newCheckpointFileName, o.fileDifferDir, o.mutationDifferDir, o.mutationDifferBatchSize, o.mutationDifferTimeout, o.sourceDcpHandlerChanSize, o.targetDcpHandlerChanSize, o.bucketOpTimeout, o.maxNumOfGetStatsRetry, o.maxNumOfSendBatchRetry, o.getStatsRetryInterval, o.sendBatchRetryInterval, o.getStatsMaxBackoff, o.sendBatchMaxBackoff, o.delayBetweenSourceAndTarget, o.checkpointInterval, o.runDataGeneration, o.runFileDiffer, o.runMutationDiffer, o.enforceTLS, o.bucketBufferCapacity, o.compareType, o.mutationDifferRetries, o.mutationDifferRetriesWaitSecs, o.numOfFiltersInFilterPool, o.debugMode, o.setupTimeout, o.fileContaingXattrKeysForNoComapre)
 }
 
 func argParse() {
@@ -183,10 +191,8 @@ func argParse() {
 		"whether tool should automatically complete (after processing all mutations at start time)")
 	flag.StringVar(&options.checkpointFileDir, "checkpointFileDir", base.CheckpointFileDir,
 		"directory for checkpoint files")
-	flag.StringVar(&options.oldSourceCheckpointFileName, "oldSourceCheckpointFileName", "",
-		"old source checkpoint file to load from when tool starts")
-	flag.StringVar(&options.oldTargetCheckpointFileName, "oldTargetCheckpointFileName", "",
-		"old target checkpoint file to load from when tool starts")
+	flag.StringVar(&options.oldCheckpointFileName, "oldCheckpointFileName", "",
+		"old checkpoint file to load from when tool starts")
 	flag.StringVar(&options.newCheckpointFileName, "newCheckpointFileName", "",
 		"new checkpoint file to write to when tool shuts down")
 	flag.StringVar(&options.fileDifferDir, "fileDifferDir", base.FileDifferDir,
@@ -243,6 +249,8 @@ func argParse() {
 		"Common setup timeout duration in seconds")
 	flag.StringVar(&options.fileContaingXattrKeysForNoComapre, "fileContaingXattrKeysForNoComapre", "",
 		"Path to the file containing the Xattr keys for NoCompare ")
+	flag.StringVar(&options.yamlConfigFilePath, "yamlConfigFilePath", "",
+		"Path to the file containing configuration for the difftool")
 	flag.Parse()
 }
 
@@ -272,6 +280,12 @@ const (
 type difftoolState struct {
 	state diffToolStateType
 	mtx   sync.Mutex
+}
+
+type vbInfo struct {
+	sourceNoOfVbuckets uint16
+	targetNoOfVbuckets uint16
+	isVariableVB       bool
 }
 
 type xdcrDiffTool struct {
@@ -325,8 +339,14 @@ type xdcrDiffTool struct {
 	curState difftoolState
 
 	legacyMode bool
-	//Xattr Keys to be excluded for comparison
+	// Xattr Keys to be excluded for comparison
 	xattrKeysForNoCompare map[string]bool
+	// Includes vBucket details for both the source and target buckets.
+	vbInfo *vbInfo
+}
+
+func staticHostAddr() string {
+	return "http://" + options.sourceUrl
 }
 
 func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
@@ -352,15 +372,27 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 	}
 	// HLV and ImportCas needs to be stripped from the Xattrs
 	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_HLV] = true
-	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_IMPORTCAS] = true
+	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_MOU] = true
+	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_MOBILE] = true
 	logCtx := xdcrLog.DefaultLoggerContext
 	difftool.logger = xdcrLog.NewLogger("xdcrDiffTool", xdcrLog.DefaultLoggerContext)
 	if options.debugMode {
 		logCtx.SetLogLevel(xdcrLog.LogLevelDebug)
 		gocb.SetLogger(gocb.VerboseStdioLogger())
 	}
-
-	difftool.selfRef, _ = metadata.NewRemoteClusterReference("", base.SelfReferenceName, options.sourceUrl, options.sourceUsername, options.sourcePassword,
+	var poolsInfo map[string]interface{}
+	var sourceClusterUUID string
+	err, statusCode := difftool.utils.QueryRestApi(staticHostAddr(), xdcrBase.PoolsPath, false, xdcrBase.MethodGet, "", nil, 0, &poolsInfo, difftool.logger)
+	if err != nil || statusCode != 200 {
+		return nil, fmt.Errorf("Failed on calling %v, err=%v, statusCode=%v\n", xdcrBase.PoolsPath, err, statusCode)
+	}
+	// note that xdcrBase.RemoteClusterUuid is purely "uuid" and can be used for local cluster UUID as well
+	uuidObj, ok := poolsInfo[xdcrBase.RemoteClusterUuid]
+	if !ok {
+		return nil, fmt.Errorf("Could not get uuid of local cluster.\n")
+	}
+	sourceClusterUUID = uuidObj.(string)
+	difftool.selfRef, _ = metadata.NewRemoteClusterReference(sourceClusterUUID, base.SelfReferenceName, options.sourceUrl, options.sourceUsername, options.sourcePassword,
 		"", false, "", nil, nil, nil, nil)
 
 	if !legacyMode {
@@ -414,7 +446,7 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 
 		difftool.bucketTopologySvc, err = service_impl.NewBucketTopologyService(xdcrTopologyMock, difftool.remoteClusterSvc,
 			difftool.utils, xdcrBase.TopologyChangeCheckInterval, difftool.logger.LoggerContext(),
-			difftool.replicationSpecSvc, xdcrBase.HealthCheckInterval, securitySvc, streamApiWatcher.GetStreamApiWatcher)
+			difftool.replicationSpecSvc, securitySvc, streamApiWatcher.GetStreamApiWatcher)
 		if err != nil {
 			return nil, err
 		}
@@ -440,7 +472,10 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 			return nil, err
 		}
 	}
-
+	difftool.vbInfo, err = difftool.getVbInfo()
+	if err != nil {
+		return nil, err
+	}
 	// Capture any Ctrl-C for continuing to next steps or cleanup
 	go difftool.monitorInterruptSignal()
 
@@ -457,6 +492,7 @@ func setupXdcrToplogyMock(xdcrTopologyMock *service_def_mock.XDCRCompTopologySvc
 	xdcrTopologyMock.On("IsKVNode").Return(true, nil)
 	xdcrTopologyMock.On("IsMyClusterEncryptionLevelStrict").Return(false)
 	xdcrTopologyMock.On("MyClusterCompatibility").Return(diffTool.srcClusterCompat, nil)
+	xdcrTopologyMock.On("IsOrchestratorNode").Return(false, nil)
 	setupTopologyMockCredentials(xdcrTopologyMock, diffTool)
 	setupTopologyMockConnectionString(xdcrTopologyMock, diffTool)
 }
@@ -586,21 +622,93 @@ func setupTopologyMockCredentials(xdcrTopologyMock *service_def_mock.XDCRCompTop
 		if atomic.LoadUint32(&diffTool.selfRefPopulated) == 1 {
 			return nil
 		} else {
-			return fmt.Errorf("Not initialized yet")
+			return fmt.Errorf("not initialized yet")
 		}
 	}
 	xdcrTopologyMock.On("MyCredentials").Return(getUserName, getPw, getAuthMech, getCert, getSanCert, getClientCert, getClientKey, getErr)
 }
 
-func maybeSetEnv(key, value string) {
-	if os.Getenv(key) != "" {
-		return
+// Replaces placeholders in directory paths with the actual output directory
+// The golang yaml parser does not replce placeholders by deafult.
+func replaceOutputDirPlaceholder(outputFileDir string) {
+	options.sourceFileDir = strings.ReplaceAll(options.sourceFileDir, "${outputFileDir}", outputFileDir)
+	options.targetFileDir = strings.ReplaceAll(options.targetFileDir, "${outputFileDir}", outputFileDir)
+	options.fileDifferDir = strings.ReplaceAll(options.fileDifferDir, "${outputFileDir}", outputFileDir)
+	options.mutationDifferDir = strings.ReplaceAll(options.mutationDifferDir, "${outputFileDir}", outputFileDir)
+	options.checkpointFileDir = strings.ReplaceAll(options.checkpointFileDir, "${outputFileDir}", outputFileDir)
+}
+func UnmarshalYaml(path string) error {
+	yamlData, err := os.ReadFile(path)
+	if err != nil {
+		return err
 	}
-	os.Setenv(key, value)
+
+	data := make(map[string]interface{})
+	err = yaml.Unmarshal(yamlData, &data)
+	if err != nil {
+		return err
+	}
+
+	v := reflect.ValueOf(&options)
+	if v.Kind() != reflect.Ptr || v.Elem().Kind() != reflect.Struct {
+		return fmt.Errorf("v must be a pointer to a struct")
+	}
+
+	v = v.Elem() // Get the underlying struct
+	t := v.Type()
+
+	for key, value := range data {
+		_, ok := t.FieldByName(key)
+		if !ok {
+			// Skip if the field does not exist in the struct
+			continue
+		}
+
+		// Get the actual field
+		fieldValue := v.FieldByName(key)
+		if !fieldValue.IsValid() {
+			return fmt.Errorf("invalid field: %s", key)
+		}
+
+		// If the field is private, access it using unsafe
+		if !fieldValue.CanSet() {
+			fieldValue = reflect.NewAt(fieldValue.Type(), unsafe.Pointer(fieldValue.UnsafeAddr())).Elem()
+		}
+
+		switch fieldValue.Kind() {
+		case reflect.Uint64:
+			fieldValue.SetUint(uint64(value.(int))) // yaml unmarshals whole numbers as int
+		case reflect.String:
+			fieldValue.SetString(value.(string))
+		case reflect.Bool:
+			fieldValue.SetBool(value.(bool))
+		default:
+			mapValue := reflect.ValueOf(value)
+			if fieldValue.Type() == mapValue.Type() {
+				fieldValue.Set(mapValue)
+			} else {
+				return fmt.Errorf("type mismatch for field %s: expected %s but got %s", key, fieldValue.Type(), mapValue.Type())
+			}
+		}
+	}
+
+	if outDir, ok := data["outputFileDir"].(string); ok {
+		replaceOutputDirPlaceholder(outDir)
+		return nil
+	} else {
+		return fmt.Errorf("outputFileDir not found in yaml")
+	}
 }
 
 func main() {
 	argParse()
+	if options.yamlConfigFilePath != "" {
+		err := UnmarshalYaml(options.yamlConfigFilePath)
+		if err != nil {
+			fmt.Printf("Error while parsing yaml: %v\n", err)
+			os.Exit(1)
+		}
+	}
 
 	base.SetupTimeoutSeconds = options.setupTimeout
 
@@ -640,6 +748,7 @@ func main() {
 			os.Exit(1)
 		}
 	}
+
 	if options.runDataGeneration {
 		err := difftool.generateDataFiles()
 		if err != nil {
@@ -738,12 +847,12 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 
 	difftool.sourceDcpDriver = startDcpDriver(difftool.logger, base.SourceClusterName, options.sourceUrl, difftool.specifiedSpec.SourceBucketName,
 		difftool.selfRef, options.sourceFileDir, options.checkpointFileDir,
-		options.oldSourceCheckpointFileName, options.newCheckpointFileName, options.numberOfSourceDcpClients,
+		options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfSourceDcpClients,
 		options.numberOfWorkersPerSourceDcpClient, options.numberOfBins, options.sourceDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
 		difftool.srcCapabilities, difftool.srcCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity,
-		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode(), difftool.xattrKeysForNoCompare)
+		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode(), difftool.xattrKeysForNoCompare, difftool.vbInfo.sourceNoOfVbuckets, difftool.vbInfo.isVariableVB)
 
 	delayDurationBetweenSourceAndTarget := time.Duration(options.delayBetweenSourceAndTarget) * time.Second
 	difftool.logger.Infof("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
@@ -752,12 +861,12 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 	difftool.logger.Infof("Starting target dcp clients\n")
 	difftool.targetDcpDriver = startDcpDriver(difftool.logger, base.TargetClusterName, difftool.specifiedRef.HostName_,
 		difftool.specifiedSpec.TargetBucketName, difftool.specifiedRef,
-		options.targetFileDir, options.checkpointFileDir, options.oldTargetCheckpointFileName, options.newCheckpointFileName,
+		options.targetFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName,
 		options.numberOfTargetDcpClients, options.numberOfWorkersPerTargetDcpClient, options.numberOfBins, options.targetDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval, options.getStatsMaxBackoff,
 		options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
 		difftool.tgtCapabilities, difftool.tgtCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity,
-		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode(), difftool.xattrKeysForNoCompare)
+		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode(), difftool.xattrKeysForNoCompare, difftool.vbInfo.targetNoOfVbuckets, difftool.vbInfo.isVariableVB)
 
 	difftool.curState.mtx.Lock()
 	difftool.curState.state = StateDcpStarted
@@ -785,10 +894,13 @@ func (difftool *xdcrDiffTool) diffDataFiles() error {
 	if err != nil {
 		return fmt.Errorf("Error mkdir fileDifferDir: %v\n", err)
 	}
-
+	var numberOfVbuckets uint16 = difftool.vbInfo.sourceNoOfVbuckets
+	if difftool.vbInfo.isVariableVB { // numOfVbs at source != numOfVbs at target
+		numberOfVbuckets = base.TraditionalNumberOfVbuckets
+	}
 	difftoolDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.fileDifferDir,
 		base.DiffKeysFileName, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBins),
-		int(options.numberOfFileDesc), difftool.srcToTgtColIdsMap, difftool.colFilterOrderedKeys, difftool.colFilterOrderedTargetColId, difftool.specifiedSpec.SourceBucketUUID, difftool.specifiedSpec.TargetBucketUUID, difftool.bucketTopologySvc, difftool.specifiedSpec, difftool.logger)
+		int(options.numberOfFileDesc), difftool.srcToTgtColIdsMap, difftool.colFilterOrderedKeys, difftool.colFilterOrderedTargetColId, difftool.selfRef.Uuid_, difftool.specifiedRef.Uuid_, difftool.specifiedSpec.SourceBucketUUID, difftool.specifiedSpec.TargetBucketUUID, difftool.bucketTopologySvc, difftool.specifiedSpec, difftool.logger, numberOfVbuckets)
 	err = difftoolDriver.Run()
 	if err != nil {
 		difftool.logger.Errorf("Error from diffDataFiles = %v\n", err)
@@ -806,12 +918,16 @@ func (difftool *xdcrDiffTool) diffDataFiles() error {
 	}
 	difftool.logger.Infof("Target bucket item count including tombstones is %v (excluding %v filtered mutations)", difftoolDriver.TargetItemCount, difftool.targetDcpDriver.FilteredCount())
 	if difftool.colFilterOrderedKeys == nil && difftoolDriver.SourceItemCount != difftoolDriver.TargetItemCount {
-		difftool.logger.Infof("Here are the vbuckets with different item counts:")
-		for vb, c1 := range difftoolDriver.SrcVbItemCntMap {
-			c2 := difftoolDriver.TgtVbItemCntMap[vb]
-			if c1 != c2 {
-				difftool.logger.Infof("vb:%v source count %v, target count %v", vb, c1, c2)
+		if !difftool.vbInfo.isVariableVB {
+			difftool.logger.Infof("Here are the vbuckets with different item counts:")
+			for vb, c1 := range difftoolDriver.SrcVbItemCntMap {
+				c2 := difftoolDriver.TgtVbItemCntMap[vb]
+				if c1 != c2 {
+					difftool.logger.Infof("vb:%v source count %v, target count %v", vb, c1, c2)
+				}
 			}
+		} else {
+			difftool.logger.Infof("Source bucket item count is not equal to target bucket item count")
 		}
 	}
 	difftool.duplicatedMapping = difftoolDriver.DuplicatedHint
@@ -832,8 +948,8 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 		return
 	}
 
-	mutationDiffer := differ.NewMutationDiffer(difftool.specifiedSpec.SourceBucketName, difftool.specifiedSpec.SourceBucketUUID,
-		difftool.selfRef, difftool.specifiedSpec.TargetBucketName, difftool.specifiedSpec.TargetBucketUUID, difftool.specifiedRef,
+	mutationDiffer := differ.NewMutationDiffer(difftool.selfRef.Uuid_, difftool.specifiedSpec.SourceBucketName, difftool.specifiedSpec.SourceBucketUUID,
+		difftool.selfRef, difftool.specifiedRef.Uuid_, difftool.specifiedSpec.TargetBucketName, difftool.specifiedSpec.TargetBucketUUID, difftool.specifiedRef,
 		options.fileDifferDir, options.mutationDifferDir, int(options.numberOfWorkersForMutationDiffer),
 		int(options.mutationDifferBatchSize), int(options.mutationDifferTimeout), int(options.maxNumOfSendBatchRetry),
 		time.Duration(options.sendBatchRetryInterval)*time.Millisecond,
@@ -846,14 +962,14 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 	}
 }
 
-func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bucketBufferCap int, migrationMapping metadata.CollectionNamespaceMapping, mobileCompat int, expDelMode xdcrBase.FilterExpDelType, xattrKeysForNoCompare map[string]bool) *dcp.DcpDriver {
+func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bucketBufferCap int, migrationMapping metadata.CollectionNamespaceMapping, mobileCompat int, expDelMode xdcrBase.FilterExpDelType, xattrKeysForNoCompare map[string]bool, numberOfVbuckets uint16, isVariableVB bool) *dcp.DcpDriver {
 	waitGroup.Add(1)
 	dcpDriver := dcp.NewDcpDriver(logger, name, url, bucketName, ref, fileDir, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBins),
 		int(dcpHandlerChanSize), time.Duration(bucketOpTimeout)*time.Second, int(maxNumOfGetStatsRetry),
 		time.Duration(getStatsRetryInterval)*time.Second, time.Duration(getStatsMaxBackoff)*time.Second,
 		int(checkpointInterval), errChan, waitGroup, completeBySeqno, fdPool, filter, capabilities, collectionIDs, colMigrationFilters,
-		utils, bucketBufferCap, migrationMapping, mobileCompat, expDelMode, xattrKeysForNoCompare)
+		utils, bucketBufferCap, migrationMapping, mobileCompat, expDelMode, xattrKeysForNoCompare, numberOfVbuckets, isVariableVB)
 	// dcp driver startup may take some time. Do it asynchronously
 	go startDcpDriverAysnc(dcpDriver, errChan, logger)
 	return dcpDriver
@@ -887,8 +1003,6 @@ func (difftool *xdcrDiffTool) waitForCompletion(sourceDcpDriver, targetDcpDriver
 		difftool.logger.Infof("Source cluster and target cluster have completed\n")
 		return nil
 	}
-
-	return nil
 }
 
 func (difftool *xdcrDiffTool) waitForDuration(sourceDcpDriver, targetDcpDriver *dcp.DcpDriver, errChan chan error, duration uint64, delayDurationBetweenSourceAndTarget time.Duration) (err error) {
@@ -1341,4 +1455,65 @@ func (difftool *xdcrDiffTool) populateMigrationMapping(namespaceMappings metadat
 		srcNamespacePtr.ReplaceFilter(pool)
 	}
 	return nil
+}
+
+func (difftool *xdcrDiffTool) getVbucketNo(isSource bool) (uint16, error) {
+	var ref *metadata.RemoteClusterReference
+	var bucketName string
+	var bucketInfo map[string]interface{}
+	var connStr string
+	var err error
+	if isSource {
+		if !difftool.srcCapabilities.HasHeartbeatSupport() { // both variableVB and heartbeat support was added in 8.0
+			return base.TraditionalNumberOfVbuckets, nil // below 8.0 clusters always have 1024 vbuckets
+		}
+		ref = difftool.selfRef
+		bucketName = options.sourceBucketName
+	} else {
+		if !difftool.tgtCapabilities.HasHeartbeatSupport() {
+			return base.TraditionalNumberOfVbuckets, nil // below 8.0 clusters always have 1024 vbuckets
+		}
+		ref = difftool.specifiedRef
+		bucketName = options.targetBucketName
+	}
+
+	connStr, err = ref.MyConnectionStr()
+	if err != nil {
+		return 0, err
+	}
+	bucketInfo, err = difftool.utils.GetBucketInfo(connStr, bucketName, ref.UserName_, ref.Password_, ref.HttpAuthMech(), ref.Certificate_, ref.SANInCertificate_, ref.ClientCertificate_, ref.ClientKey_, difftool.logger)
+	if err != nil {
+		return 0, err
+	}
+
+	numVbs, ok := bucketInfo[base.NumVBucketsKey].(float64)
+	if !ok {
+		return 0, fmt.Errorf("invalid type %T for numVBuckets.Expected float64", bucketInfo[base.NumVBucketsKey])
+	}
+	return uint16(numVbs), nil
+}
+
+func (difftool *xdcrDiffTool) getVbInfo() (*vbInfo, error) {
+	var noOfSourceVbs, noOfTargetVbs uint16
+	var srcErr, tgtErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		noOfSourceVbs, srcErr = difftool.getVbucketNo(true)
+	}()
+	go func() {
+		defer wg.Done()
+		noOfTargetVbs, tgtErr = difftool.getVbucketNo(false)
+	}()
+	wg.Wait()
+	if srcErr != nil || tgtErr != nil {
+		return nil, fmt.Errorf("failed to get vbinfo. srcErr=%v tgtErr=%v", srcErr, tgtErr)
+	}
+
+	return &vbInfo{
+		sourceNoOfVbuckets: noOfSourceVbs,
+		targetNoOfVbuckets: noOfTargetVbs,
+		isVariableVB:       noOfSourceVbs != noOfTargetVbs,
+	}, nil
 }

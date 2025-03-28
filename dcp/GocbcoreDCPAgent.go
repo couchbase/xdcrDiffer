@@ -3,14 +3,14 @@ package dcp
 import (
 	"crypto/x509"
 	"fmt"
-	"github.com/couchbase/goxdcr/metadata"
 	"reflect"
 	"time"
-	"xdcrDiffer/base"
 
 	gocbcore "github.com/couchbase/gocbcore/v10"
 	memd "github.com/couchbase/gocbcore/v10/memd"
-	xdcrBase "github.com/couchbase/goxdcr/base"
+	xdcrBase "github.com/couchbase/goxdcr/v8/base"
+	"github.com/couchbase/goxdcr/v8/metadata"
+	"github.com/couchbase/xdcrDiffer/base"
 )
 
 type GocbcoreDCPFeed struct {

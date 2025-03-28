@@ -5,6 +5,6 @@ mutationDiff/
 source/
 target/
 xdcrDiffer
-go.mod
-go.sum
 xdcrDiffer.log
+keys.txt
+outputs/
