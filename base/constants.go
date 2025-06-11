@@ -84,6 +84,8 @@ const (
 	JsonBody     = "Body"
 	JsonMetadata = "Metadata"
 	Updated      = "Updated"
+	PRev         = "pRev"
+	ImportCas    = "importCas"
 )
 
 // This function is used to calculate the length of the byte array for serializing a mutation

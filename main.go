@@ -370,7 +370,7 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 			difftool.xattrKeysForNoCompare[fileScanner.Text()] = true
 		}
 	}
-	// HLV and ImportCas needs to be stripped from the Xattrs
+	// HLV and importCas needs to be stripped from the Xattrs
 	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_HLV] = true
 	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_MOU] = true
 	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_MOBILE] = true

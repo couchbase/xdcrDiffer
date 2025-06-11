@@ -16,7 +16,6 @@ import (
 	"math"
 	"os"
 	"reflect"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -117,6 +116,8 @@ func (r *GetResult) MarshalJSON() ([]byte, error) {
 		dataToBeEncoded[xdcrCrMeta.XATTR_PV_PATH] = r.GetPV()
 		dataToBeEncoded[xdcrCrMeta.XATTR_MV_PATH] = r.GetMV()
 		dataToBeEncoded[base.Updated] = r.Updated
+		dataToBeEncoded[base.PRev] = r.GetPRev()
+		dataToBeEncoded[base.ImportCas] = r.GetImportCas()
 	}
 	return json.Marshal(dataToBeEncoded)
 }
@@ -1106,32 +1107,15 @@ func getHlvImportCas(bucketUUID string, result *gocbcore.LookupInResult) (hlvByt
 	if result == nil {
 		return
 	}
-	var importCasBytes []byte
-	var pRevBytes []byte
+	var mouBytes []byte
 	if result.Ops[0].Err == nil {
 		hlvBytes = result.Ops[0].Value
 	}
 	if result.Ops[1].Err == nil {
-		importCasBytes = result.Ops[1].Value
+		mouBytes = result.Ops[1].Value
 	}
-	if result.Ops[2].Err == nil {
-		pRevBytes = result.Ops[2].Value
-	}
-	importLen := len(importCasBytes)
-	pRevLen := len(pRevBytes)
-	if importCasBytes != nil && importLen != 0 {
-		// Remove the start/end quotes before converting it to uint64
-		importCas, err = xdcrBase.HexLittleEndianToUint64(importCasBytes[1 : importLen-1])
-		if err != nil {
-			return
-		}
-	}
-	if pRevBytes != nil && pRevLen != 0 {
-		// Remove the start/end quotes before converting it to uint64
-		pRev, err = strconv.ParseUint(string(pRevBytes[1:pRevLen-1]), 10, 64)
-		if err != nil {
-			return
-		}
+	if len(mouBytes) > 0 {
+		_, _, importCas, pRev, err = xdcrCrMeta.GetImportCasAndPrevFromMou(mouBytes)
 	}
 	return
 }
@@ -1155,6 +1139,16 @@ type GetResult struct {
 	hlvBytes []byte
 	*hlv.HLV
 	lock sync.RWMutex
+}
+
+// GetImportCas returns the import CAS value.
+func (r *GetResult) GetImportCas() uint64 {
+	return r.importCas
+}
+
+// GetPRev returns the pRev value.
+func (r *GetResult) GetPRev() uint64 {
+	return r.pRev
 }
 
 func (d *MutationDiffer) initialize() error {

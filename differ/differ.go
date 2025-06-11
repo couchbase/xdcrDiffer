@@ -379,7 +379,7 @@ func getOneEntry(readOp fdp.FileOp, actorId hlv.DocumentSourceId) (*oneEntry, er
 	}
 	if len(HlvBytes) != 0 {
 		// UpdateCrMeta sets the appropriate doc version incase the mutation is an import Mutation
-		err = UpdateCrMeta(entry.CrMeta, entry.ActorID, HlvBytes, pRev) // creates the HLV and sets it to crMeta ; updates the version if ImportCas is present
+		err = UpdateCrMeta(entry.CrMeta, entry.ActorID, HlvBytes, pRev) // creates the HLV and sets it to crMeta ; updates the version if importCas is present
 		if err != nil {
 			return nil, fmt.Errorf("Error in constructing HLV, err: %v", err)
 		}
