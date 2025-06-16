@@ -189,7 +189,7 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 func (dh *DcpHandler) replicationFilter(mut *Mutation, matched bool, filterResult base.FilterResultType) base.FilterResultType {
 	var err error
 	var errStr string
-	if dh.filter != nil && mut.IsMutation() {
+	if dh.filter != nil {
 		matched, err, errStr, _, _ = dh.filter.FilterUprEvent(mut.ToUprEvent())
 		if !matched {
 			filterResult = base.Filtered
