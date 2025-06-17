@@ -404,6 +404,7 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 		uiLogSvcMock := &service_def_mock.UILogSvc{}
 		uiLogSvcMock.On("Write", mock.Anything).Run(func(args mock.Arguments) { fmt.Printf("%v", args.Get(0).(string)) }).Return(nil)
 		xdcrTopologyMock := &service_def_mock.XDCRCompTopologySvc{}
+		xdcrTopologyMock.On("MyClusterUUID").Return(sourceClusterUUID, nil)
 		xdcrTopologyMockSetupCb := func() {
 			setupXdcrToplogyMock(xdcrTopologyMock, difftool)
 		}
@@ -484,6 +485,7 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 
 func setupSecuritySvcMock(securitySvc *service_def_mock.SecuritySvc) {
 	securitySvc.On("IsClusterEncryptionLevelStrict").Return(false)
+	securitySvc.On("IsClusterEncryptionStrictOrAll").Return(false)
 }
 
 // This may be re-set up once self-reference is populated
@@ -493,6 +495,7 @@ func setupXdcrToplogyMock(xdcrTopologyMock *service_def_mock.XDCRCompTopologySvc
 	xdcrTopologyMock.On("IsMyClusterEncryptionLevelStrict").Return(false)
 	xdcrTopologyMock.On("MyClusterCompatibility").Return(diffTool.srcClusterCompat, nil)
 	xdcrTopologyMock.On("IsOrchestratorNode").Return(false, nil)
+	xdcrTopologyMock.On("IsMyClusterEncryptionStrictOrAll").Return(false)
 	setupTopologyMockCredentials(xdcrTopologyMock, diffTool)
 	setupTopologyMockConnectionString(xdcrTopologyMock, diffTool)
 }

@@ -276,7 +276,7 @@ func GetCertificate(u xdcrUtils.UtilsIface, hostname string, username, password 
 	if err != nil {
 		return nil, err
 	}
-	client, err := u.GetHttpClient(username, authMech, certificate, false, nil, nil, host, nil)
+	client, err := u.GetHttpClient(username, authMech, certificate, false, nil, nil, host, nil, nil)
 	if err != nil {
 		return nil, err
 	}
