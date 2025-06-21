@@ -714,6 +714,7 @@ func main() {
 	}
 
 	base.SetupTimeoutSeconds = options.setupTimeout
+	xdcrBase.GoxdcrHELOUserAgent = "xdcrDiffer"
 
 	validateCompareType(options.compareType)
 

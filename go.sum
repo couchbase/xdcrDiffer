@@ -31,6 +31,8 @@ github.com/couchbase/goutils v0.1.2 h1:gWr8B6XNWPIhfalHNog3qQKfGiYyh4K4VhO3P2o9B
 github.com/couchbase/goutils v0.1.2/go.mod h1:h89Ek/tiOxxqjz30nPPlwZdQbdB8BwgnuBxeoUe/ViE=
 github.com/couchbase/goxdcr/v8 v8.0.0-3306 h1:APiCxymqKhN7AdXnMzlU8P86/mVzK3fRGNLE1lL8Dmg=
 github.com/couchbase/goxdcr/v8 v8.0.0-3306/go.mod h1:YrtiBCpcyRjgybYRd9/VoQjTkeadH10vMnnC7odNS/Y=
+github.com/couchbase/goxdcr/v8 v8.0.0-3317 h1:1XnD9V8uR/M1mm/tNUy3bHpqqJFeM3HnRdCEUOc5I5A=
+github.com/couchbase/goxdcr/v8 v8.0.0-3317/go.mod h1:YrtiBCpcyRjgybYRd9/VoQjTkeadH10vMnnC7odNS/Y=
 github.com/couchbase/tools-common/errors v1.0.0 h1:lEPRdPrk7iHOiZIJspEH7OnywxRR+SKlrG78KkOWnXA=
 github.com/couchbase/tools-common/errors v1.0.0/go.mod h1:9or/a3TpNd/1aZIUr/a8y0uF03O9hachXFCnu6Y3sjM=
 github.com/couchbase/tools-common/http v1.0.7 h1:Cs73GNlUEr/hUx+w3beJHj2k+PyerFJZMo3MhW9kBj8=
