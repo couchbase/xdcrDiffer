@@ -1,3 +1,4 @@
+
 ARG BUILDER_IMAGE=docker.io/golang:1.23
 ARG FINAL_IMAGE=docker.io/redhat/ubi9:9.4
 ARG http_proxy
