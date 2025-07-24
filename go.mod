@@ -14,7 +14,7 @@ require (
 	github.com/couchbase/gocb/v2 v2.9.4
 	github.com/couchbase/gocbcore/v10 v10.5.4
 	github.com/couchbase/gomemcached v0.3.3
-	github.com/couchbase/goxdcr/v8 v8.0.0-3317
+	github.com/couchbase/goxdcr/v8 v8.0.0-3523
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475
 	github.com/stretchr/testify v1.10.0
 	gopkg.in/yaml.v3 v3.0.1
