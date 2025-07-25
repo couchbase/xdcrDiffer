@@ -12,7 +12,6 @@ package dcp
 import (
 	"crypto/tls"
 	"fmt"
-	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -110,33 +109,6 @@ func (c *DcpClient) reportActiveStreams() {
 		}
 	}
 done:
-}
-
-func (c *DcpClient) closeCompletedStreams() {
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			for _, vbno := range c.vbList {
-				c.closeStreamIfCompleted(vbno)
-			}
-		case <-c.finChan:
-			goto done
-		}
-	}
-done:
-}
-
-func (c *DcpClient) closeStreamIfCompleted(vbno uint16) {
-	vbState := c.dcpDriver.getVbState(vbno)
-	if vbState == VBStateCompleted {
-		err := c.closeStream(vbno)
-		if err == nil {
-			c.dcpDriver.setVbState(vbno, VBStateStreamClosed)
-		}
-	}
 }
 
 func (c *DcpClient) closeStreamIfOpen(vbno uint16) {
@@ -358,10 +330,6 @@ func (c *DcpClient) handleDcpStreams() {
 		return
 	}
 
-	if c.dcpDriver.completeBySeqno {
-		go c.closeCompletedStreams()
-	}
-
 	go c.reportActiveStreams()
 }
 
@@ -384,7 +352,7 @@ func (c *DcpClient) openDcpStreams() error {
 		}
 
 		_, err := c.dcpAgent.OpenStream(vbno, 0, gocbcore.VbUUID(vbts.Checkpoint.Vbuuid), gocbcore.SeqNo(vbts.Checkpoint.Seqno),
-			gocbcore.SeqNo(math.MaxUint64 /*vbts.EndSeqno*/), gocbcore.SeqNo(snapshotStartSeqno), gocbcore.SeqNo(snapshotEndSeqno), c.vbHandlerMap[vbno],
+			gocbcore.SeqNo(vbts.EndSeqno), gocbcore.SeqNo(snapshotStartSeqno), gocbcore.SeqNo(snapshotEndSeqno), c.vbHandlerMap[vbno],
 			c.getOpenStreamOptions(), c.openStreamFunc)
 
 		if err != nil {
