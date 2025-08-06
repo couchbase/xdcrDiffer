@@ -11,6 +11,7 @@ package differ
 
 import (
 	"crypto/sha512"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"math/rand"
@@ -19,7 +20,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/couchbase/gocbcore/v10"
 	"github.com/couchbase/gomemcached"
+	"github.com/couchbase/goxdcr/v8/log"
 	"github.com/couchbase/xdcrDiffer/dcp"
 	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
 	"github.com/stretchr/testify/assert"
@@ -29,6 +32,8 @@ const MaxUint64 = ^uint64(0)
 const MinUint = 0
 
 var randomOnce sync.Once
+
+var testLogger *log.CommonLogger = log.NewLogger("testXdcrDiffTool", log.DefaultLoggerContext)
 
 func randomString(l int) string {
 	bytes := make([]byte, l)
@@ -96,7 +101,7 @@ func genTestData(regularMutation, colFilters bool) (key string, seqno, revId, ca
 		ColId:             0,
 		ColFiltersMatched: filterIds,
 	}
-	dataSlice := mutationToSerialize.Serialize()
+	dataSlice, _ := mutationToSerialize.Serialize()
 
 	return key, seqno, revId, cas, flags, expiry, opCode, hash, dataSlice, colId, filterIds
 }
@@ -171,7 +176,7 @@ func genMismatchedFiles(numOfRecords, mismatchCnt int, fileName1, fileName2 stri
 			ColId:             colId,
 			ColFiltersMatched: nil,
 		}
-		mismatchedData := mismatchedDataMut.Serialize()
+		mismatchedData, _ := mismatchedDataMut.Serialize()
 
 		_, err = f1.Write(oneData)
 		if err != nil {
@@ -215,7 +220,7 @@ func TestLoader(t *testing.T) {
 	err := ioutil.WriteFile(outputFileTemp, data, 0644)
 	assert.Nil(err)
 
-	differ := NewFilesDiffer(outputFileTemp, "", nil, nil, nil)
+	differ := NewFilesDiffer(outputFileTemp, "", nil, nil, nil, testLogger)
 	err = differ.file1.LoadFileIntoBuffer()
 	assert.Nil(err)
 
@@ -236,7 +241,7 @@ func TestLoaderWithColFilters(t *testing.T) {
 	err := ioutil.WriteFile(outputFileTemp, data, 0644)
 	assert.Nil(err)
 
-	differ := NewFilesDiffer(outputFileTemp, "", nil, nil, nil)
+	differ := NewFilesDiffer(outputFileTemp, "", nil, nil, nil, testLogger)
 	err = differ.file1.LoadFileIntoBuffer()
 	assert.Nil(err)
 
@@ -261,7 +266,7 @@ func TestLoadSameFile(t *testing.T) {
 	err := genSameFiles(entries, file1, file2)
 	assert.Equal(nil, err)
 
-	differ := NewFilesDiffer(file1, file2, nil, nil, nil)
+	differ := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger)
 	assert.NotNil(differ)
 
 	srcDiffMap, tgtDiffMap, _, _, _ := differ.Diff()
@@ -289,7 +294,7 @@ func Disabled_TestLoadMismatchedFilesOnly(t *testing.T) {
 	keys, err := genMismatchedFiles(entries, numMismatch, file1, file2)
 	assert.Nil(err)
 
-	differ := NewFilesDiffer(file1, file2, nil, nil, nil)
+	differ := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger)
 	assert.NotNil(differ)
 
 	srcDiffMap, tgtDiffMap, _, _, _ := differ.Diff()
@@ -333,7 +338,7 @@ func Disabled_TestLoadMismatchedFilesAndUneven(t *testing.T) {
 	assert.Nil(err)
 	f.Close()
 
-	differ := NewFilesDiffer(file1, file2, nil, nil, nil)
+	differ := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger)
 	assert.NotNil(differ)
 
 	srcDiffMap, tgtDiffMap, _, _, _ := differ.Diff()
@@ -366,7 +371,7 @@ func TestLoadSameFileWPool(t *testing.T) {
 	err := genSameFiles(entries, file1, file2)
 	assert.Equal(nil, err)
 
-	differ, err := NewFilesDifferWithFDPool(file1, file2, fileDescPool, nil, nil, nil)
+	differ, err := NewFilesDifferWithFDPool(file1, file2, fileDescPool, nil, nil, nil, testLogger)
 	assert.NotNil(differ)
 	assert.Nil(err)
 
@@ -381,8 +386,167 @@ func TestNoFilePool(t *testing.T) {
 	fmt.Println("============== Test case start: TestNoFilePool =================")
 	assert := assert.New(t)
 
-	differDriver := NewDifferDriver("", "", "", "", 2, 2, 0, nil, nil, nil)
+	differDriver := NewDifferDriver("", "", "", "", 2, 2, 0, nil, nil, nil, "", "", "", "", nil, nil, testLogger, 1024)
 	assert.NotNil(differDriver)
 	assert.Nil(differDriver.fileDescPool)
 	fmt.Println("============== Test case end: TestNoFilePool =================")
+}
+
+func setupMutationDiffer(md *MutationDiffer) {
+	md.missingFromSource = make(map[uint32]map[string]*GetResult)
+	md.missingFromTarget = make(map[uint32]map[string]*GetResult)
+	md.srcDiff = make(map[uint32]map[string][]*GetResult)
+	md.tgtDiff = make(map[uint32]map[string][]*GetResult)
+	md.deletedFromSource = make(map[uint32]map[string][]*GetResult)
+	md.deletedFromTarget = make(map[uint32]map[string][]*GetResult)
+	md.stateLock = &sync.RWMutex{}
+}
+
+// This test verifies that the differ only reports a key as missing on one cluster
+// if the corresponding key actually exists (i.e., is not a tombstone) on the other cluster.
+func TestMutationDifferWorkerMissingKeysLogic(t *testing.T) {
+	assert := assert.New(t)
+
+	// Create a mock mutation differ
+	mutationDiffer := &MutationDiffer{
+		sourceBucketUUID:  "source-bucket-uuid",
+		sourceClusterUUID: "source-cluster-uuid",
+		targetBucketUUID:  "target-bucket-uuid",
+		targetClusterUUID: "target-cluster-uuid",
+		compareType:       "meta",
+	}
+	setupMutationDiffer(mutationDiffer)
+
+	// Setup collection mappings
+	colIdsMap := map[uint32][]uint32{0: {0}}
+	reverseColIdsMap := map[uint32][]uint32{0: {0}}
+
+	diffWorker := &DifferWorker{
+		differ:           mutationDiffer,
+		sourceResults:    map[uint32]map[string]*GetResult{0: {}},
+		targetResults:    map[uint32]map[string]*GetResult{0: {}},
+		logger:           testLogger,
+		colIds:           colIdsMap,
+		reverseColIds:    reverseColIdsMap,
+		migrationHintMap: make(MigrationHintMap),
+		compareType:      "meta",
+	}
+
+	type testCase struct {
+		name              string
+		key               string
+		sourceResult      *GetResult
+		targetResult      *GetResult
+		MissingFromSource bool
+		MissingFromTarget bool
+	}
+
+	testCases := []testCase{
+		{
+			name: "Key missing from source, target exists and is not deleted",
+			key:  "key-missing-from-source",
+			sourceResult: &GetResult{
+				key:           "key-missing-from-source",
+				metaErr:       errors.New(gocbcore.ErrDocumentNotFound.Error()),
+				GetMetaResult: nil,
+			},
+			targetResult: &GetResult{
+				key:     "key-missing-from-source",
+				metaErr: nil,
+				GetMetaResult: &gocbcore.GetMetaResult{
+					Cas:      12345,
+					SeqNo:    100,
+					Deleted:  0,
+					Datatype: 1,
+				},
+			},
+			MissingFromSource: true,
+			MissingFromTarget: false,
+		},
+		{
+			name: "Key missing from target, source exists and is not deleted",
+			key:  "key-missing-from-target",
+			sourceResult: &GetResult{
+				key:     "key-missing-from-target",
+				metaErr: nil,
+				GetMetaResult: &gocbcore.GetMetaResult{
+					Cas:      67890,
+					SeqNo:    200,
+					Deleted:  0,
+					Datatype: 1,
+				},
+			},
+			targetResult: &GetResult{
+				key:           "key-missing-from-target",
+				metaErr:       errors.New(gocbcore.ErrDocumentNotFound.Error()),
+				GetMetaResult: nil,
+			},
+			MissingFromSource: false,
+			MissingFromTarget: true,
+		},
+		{
+			name: "Key missing from source, target is tombstone (should not count)",
+			key:  "key-missing-from-source-target-deleted",
+			sourceResult: &GetResult{
+				key:           "key-missing-from-source-target-deleted",
+				metaErr:       errors.New(gocbcore.ErrDocumentNotFound.Error()),
+				GetMetaResult: nil,
+			},
+			targetResult: &GetResult{
+				key:     "key-missing-from-source-target-deleted",
+				metaErr: nil,
+				GetMetaResult: &gocbcore.GetMetaResult{
+					Cas:      11111,
+					SeqNo:    300,
+					Deleted:  1,
+					Datatype: 0,
+				},
+			},
+			MissingFromSource: false,
+			MissingFromTarget: false,
+		},
+		{
+			name: "Key missing from target, source is tombstone (should not count)",
+			key:  "key-missing-from-target-source-deleted",
+			sourceResult: &GetResult{
+				key:     "key-missing-from-target-source-deleted",
+				metaErr: nil,
+				GetMetaResult: &gocbcore.GetMetaResult{
+					Cas:      22222,
+					SeqNo:    400,
+					Deleted:  1,
+					Datatype: 0,
+				},
+			},
+			targetResult: &GetResult{
+				key:           "key-missing-from-target-source-deleted",
+				metaErr:       errors.New(gocbcore.ErrDocumentNotFound.Error()),
+				GetMetaResult: nil,
+			},
+			MissingFromSource: false,
+			MissingFromTarget: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			diffWorker.sourceResults[0][tc.key] = tc.sourceResult
+			diffWorker.targetResults[0][tc.key] = tc.targetResult
+		})
+		diffWorker.diff()
+		if tc.MissingFromSource {
+			assert.Contains(mutationDiffer.missingFromSource[0], tc.key)
+		} else if mutationDiffer.missingFromSource[0] != nil {
+			assert.NotContains(mutationDiffer.missingFromSource[0], tc.key)
+		}
+
+		if tc.MissingFromTarget {
+			assert.Contains(mutationDiffer.missingFromTarget[0], tc.key)
+		} else if mutationDiffer.missingFromTarget[0] != nil {
+			assert.NotContains(mutationDiffer.missingFromTarget[0], tc.key)
+		}
+	}
+
+	assert.Equal(1, len(mutationDiffer.missingFromSource[0]))
+	assert.Equal(1, len(mutationDiffer.missingFromTarget[0]))
 }

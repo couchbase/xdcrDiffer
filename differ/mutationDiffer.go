@@ -749,17 +749,21 @@ func (dw *DifferWorker) diff() {
 					tgterr = targetResult.metaErr
 				}
 				if isKeyNotFoundError(srcerr) && !isKeyNotFoundError(tgterr) {
-					if _, exists := missingFromSource[srcColId]; !exists {
-						missingFromSource[srcColId] = make(map[string]*GetResult)
+					if !isDeleted(targetResult.GetMetaResult) {
+						if _, exists := missingFromSource[srcColId]; !exists {
+							missingFromSource[srcColId] = make(map[string]*GetResult)
+						}
+						missingFromSource[srcColId][key] = targetResult
 					}
-					missingFromSource[srcColId][key] = targetResult
 					continue
 				}
 				if !isKeyNotFoundError(srcerr) && isKeyNotFoundError(tgterr) {
-					if _, exists := missingFromTarget[tgtColId]; !exists {
-						missingFromTarget[tgtColId] = make(map[string]*GetResult)
+					if !isDeleted(sourceResult.GetMetaResult) {
+						if _, exists := missingFromTarget[tgtColId]; !exists {
+							missingFromTarget[tgtColId] = make(map[string]*GetResult)
+						}
+						missingFromTarget[tgtColId][key] = sourceResult
 					}
-					missingFromTarget[tgtColId][key] = sourceResult
 					continue
 				}
 				if bodyOnly {
