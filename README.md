@@ -94,10 +94,12 @@ In the above command, the container will be launched where the created `dockerOu
 The host network will be used by the container to connect to the Couchbase cluster node.
 The `nodeIP` should be an IP that is displayed by the Couchbase Server UI console (under the `Servers` tab)
 
+
 #### Preparing xdcrDiffer host for running differ
-While the differ can run on any machine that compiles the binary, one method of running the differ tool is to run on a non-KV couchbase node.
-It is also possible to create a small Couchbase node that has only a simple non-impacting service enabled (i.e. Backup), and rebalance in to the cluster for running the differ, which will not trigger vb movement.
-The node can then be removed once the differ has finished running.
+While the differ can run on any couchbase node that compiles the binary, it is **strongly recommended** to run the differ tool on a **non-KV Couchbase node**. Running xdcrDiffer can cause noticeable CPU utilization spikes, so using a non-KV node helps avoid impacting cluster performance.
+
+One method is to create a small Couchbase node that has only a simple non-impacting service enabled (ex Backup), and rebalance it into the cluster for running the differ, which will not trigger vBucket movement. The node can then be removed once the differ has finished running.
+
 The runDiffer script above will then allow the differ to access metadata information to enable various features, including using secure connections, or collections.
 
 While currently it could be run on a non-Couchbase node as an independent binary, this functionality will be deprecated in the future.
