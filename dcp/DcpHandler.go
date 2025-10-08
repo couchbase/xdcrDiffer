@@ -141,6 +141,14 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 	var matched bool
 	var replicationFilterResult base.FilterResultType
 
+	// Ignore system events
+	// Ignore unsubscribed events - mutations/events from collections not subscribed during OpenStream
+	// we only care about actual data
+	if mut.IsSystemOrUnsubbedEvent() {
+		dh.incrementSysOrUnsubbedCounter()
+		return
+	}
+
 	replicationFilterResult = dh.replicationFilter(mut, matched, replicationFilterResult)
 	valid := dh.dcpClient.dcpDriver.checkpointManager.HandleMutationEvent(mut, replicationFilterResult)
 	if !valid {
@@ -149,14 +157,6 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 	}
 
 	dh.incrementCounter()
-
-	// Ignore system events
-	// Ignore unsubscribed events - mutations/events from collections not subscribed during OpenStream
-	// we only care about actual data
-	if mut.IsSystemOrUnsubbedEvent() {
-		dh.incrementSysOrUnsubbedCounter()
-		return
-	}
 
 	var filterIdsMatched []uint8
 	if dh.colMigrationFiltersOn && dh.isSource {
