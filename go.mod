@@ -17,6 +17,7 @@ require (
 	github.com/couchbase/goxdcr/v8 v8.0.0-3523
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475
 	github.com/stretchr/testify v1.10.0
+	golang.org/x/term v0.30.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

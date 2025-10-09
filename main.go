@@ -43,6 +43,7 @@ import (
 	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
 	"github.com/couchbase/xdcrDiffer/utils"
 	"github.com/stretchr/testify/mock"
+	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
@@ -137,13 +138,15 @@ type inputOptions struct {
 	fileContaingXattrKeysForNoComapre string
 	//path to yaml config file
 	yamlConfigFilePath string
+	// Prompts the user for an encryption passphrase
+	encryptionPassphrase bool
 }
 
 var options inputOptions = inputOptions{}
 
 func (o inputOptions) String() string {
-	return fmt.Sprintf("Options{sourceUrl: %s, sourceUsername: %s, sourcePassword: REDACTED, sourceBucketName: %s, remoteClusterName: %s, sourceFileDir: %s, targetUrl: %s, targetUsername: %s, targetPassword: REDACTED, targetBucketName: %s, targetFileDir: %s, numberOfSourceDcpClients: %d, numberOfWorkersPerSourceDcpClient: %d, numberOfTargetDcpClients: %d, numberOfWorkersPerTargetDcpClient: %d, numberOfWorkersForFileDiffer: %d, numberOfWorkersForMutationDiffer: %d, numberOfBins: %d, numberOfFileDesc: %d, completeByDuration: %d, completeBySeqno: %t, checkpointFileDir: %s, oldCheckpointFileName: %s, newCheckpointFileName: %s, fileDifferDir: %s, mutationDifferDir: %s, mutationDifferBatchSize: %d, mutationDifferTimeout: %d, sourceDcpHandlerChanSize: %d, targetDcpHandlerChanSize: %d, bucketOpTimeout: %d, maxNumOfGetStatsRetry: %d, maxNumOfSendBatchRetry: %d, getStatsRetryInterval: %d, sendBatchRetryInterval: %d, getStatsMaxBackoff: %d, sendBatchMaxBackoff: %d, delayBetweenSourceAndTarget: %d, checkpointInterval: %d, runDataGeneration: %t, runFileDiffer: %t, runMutationDiffer: %t, enforceTLS: %t, bucketBufferCapacity: %d, compareType: %s, mutationDifferRetries: %d, mutationDifferRetriesWaitSecs: %d, numOfFiltersInFilterPool: %d, debugMode: %t, setupTimeout: %d, fileContaingXattrKeysForNoComapre: %s}",
-		o.sourceUrl, o.sourceUsername, o.sourceBucketName, o.remoteClusterName, o.sourceFileDir, o.targetUrl, o.targetUsername, o.targetBucketName, o.targetFileDir, o.numberOfSourceDcpClients, o.numberOfWorkersPerSourceDcpClient, o.numberOfTargetDcpClients, o.numberOfWorkersPerTargetDcpClient, o.numberOfWorkersForFileDiffer, o.numberOfWorkersForMutationDiffer, o.numberOfBins, o.numberOfFileDesc, o.completeByDuration, o.completeBySeqno, o.checkpointFileDir, o.oldCheckpointFileName, o.newCheckpointFileName, o.fileDifferDir, o.mutationDifferDir, o.mutationDifferBatchSize, o.mutationDifferTimeout, o.sourceDcpHandlerChanSize, o.targetDcpHandlerChanSize, o.bucketOpTimeout, o.maxNumOfGetStatsRetry, o.maxNumOfSendBatchRetry, o.getStatsRetryInterval, o.sendBatchRetryInterval, o.getStatsMaxBackoff, o.sendBatchMaxBackoff, o.delayBetweenSourceAndTarget, o.checkpointInterval, o.runDataGeneration, o.runFileDiffer, o.runMutationDiffer, o.enforceTLS, o.bucketBufferCapacity, o.compareType, o.mutationDifferRetries, o.mutationDifferRetriesWaitSecs, o.numOfFiltersInFilterPool, o.debugMode, o.setupTimeout, o.fileContaingXattrKeysForNoComapre)
+	return fmt.Sprintf("Options{sourceUrl: %s, sourceUsername: %s, sourcePassword: REDACTED, sourceBucketName: %s, remoteClusterName: %s, sourceFileDir: %s, targetUrl: %s, targetUsername: %s, targetPassword: REDACTED, targetBucketName: %s, targetFileDir: %s, numberOfSourceDcpClients: %d, numberOfWorkersPerSourceDcpClient: %d, numberOfTargetDcpClients: %d, numberOfWorkersPerTargetDcpClient: %d, numberOfWorkersForFileDiffer: %d, numberOfWorkersForMutationDiffer: %d, numberOfBins: %d, numberOfFileDesc: %d, completeByDuration: %d, completeBySeqno: %t, checkpointFileDir: %s, oldCheckpointFileName: %s, newCheckpointFileName: %s, fileDifferDir: %s, mutationDifferDir: %s, mutationDifferBatchSize: %d, mutationDifferTimeout: %d, sourceDcpHandlerChanSize: %d, targetDcpHandlerChanSize: %d, bucketOpTimeout: %d, maxNumOfGetStatsRetry: %d, maxNumOfSendBatchRetry: %d, getStatsRetryInterval: %d, sendBatchRetryInterval: %d, getStatsMaxBackoff: %d, sendBatchMaxBackoff: %d, delayBetweenSourceAndTarget: %d, checkpointInterval: %d, runDataGeneration: %t, runFileDiffer: %t, runMutationDiffer: %t, enforceTLS: %t, bucketBufferCapacity: %d, compareType: %s, mutationDifferRetries: %d, mutationDifferRetriesWaitSecs: %d, numOfFiltersInFilterPool: %d, debugMode: %t, setupTimeout: %d, fileContaingXattrKeysForNoComapre: %s, yamlConfigFilePath: %s, encryptionPassphrase: %t}",
+		o.sourceUrl, o.sourceUsername, o.sourceBucketName, o.remoteClusterName, o.sourceFileDir, o.targetUrl, o.targetUsername, o.targetBucketName, o.targetFileDir, o.numberOfSourceDcpClients, o.numberOfWorkersPerSourceDcpClient, o.numberOfTargetDcpClients, o.numberOfWorkersPerTargetDcpClient, o.numberOfWorkersForFileDiffer, o.numberOfWorkersForMutationDiffer, o.numberOfBins, o.numberOfFileDesc, o.completeByDuration, o.completeBySeqno, o.checkpointFileDir, o.oldCheckpointFileName, o.newCheckpointFileName, o.fileDifferDir, o.mutationDifferDir, o.mutationDifferBatchSize, o.mutationDifferTimeout, o.sourceDcpHandlerChanSize, o.targetDcpHandlerChanSize, o.bucketOpTimeout, o.maxNumOfGetStatsRetry, o.maxNumOfSendBatchRetry, o.getStatsRetryInterval, o.sendBatchRetryInterval, o.getStatsMaxBackoff, o.sendBatchMaxBackoff, o.delayBetweenSourceAndTarget, o.checkpointInterval, o.runDataGeneration, o.runFileDiffer, o.runMutationDiffer, o.enforceTLS, o.bucketBufferCapacity, o.compareType, o.mutationDifferRetries, o.mutationDifferRetriesWaitSecs, o.numOfFiltersInFilterPool, o.debugMode, o.setupTimeout, o.fileContaingXattrKeysForNoComapre, o.yamlConfigFilePath, o.encryptionPassphrase)
 }
 
 func argParse() {
@@ -251,6 +254,8 @@ func argParse() {
 		"Path to the file containing the Xattr keys for NoCompare ")
 	flag.StringVar(&options.yamlConfigFilePath, "yamlConfigFilePath", "",
 		"Path to the file containing configuration for the difftool")
+	flag.BoolVar(&options.encryptionPassphrase, "encryptionPassphrase", false,
+		"If present, enables encryption passphrase mode (no argument).")
 	flag.Parse()
 }
 
@@ -370,6 +375,32 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 			difftool.xattrKeysForNoCompare[fileScanner.Text()] = true
 		}
 	}
+
+	if options.encryptionPassphrase {
+		fmt.Print("Enter encryption passphrase: ")
+		passphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Println() // move to next line after input
+		if err != nil {
+			fmt.Printf("Error reading passphrase: %v\n", err)
+			os.Exit(1)
+		}
+		passphrase := string(passphraseBytes)
+		// Use passphrase as needed
+
+		fmt.Print("Enter the same encryption passphrase again: ")
+		confirmPassphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Println()
+		if err != nil {
+			fmt.Printf("Error reading passphrase: %v\n", err)
+			os.Exit(1)
+		}
+		confirmPassphrase := string(confirmPassphraseBytes)
+		if passphrase != confirmPassphrase {
+			fmt.Println("Passphrases do not match. Exiting.")
+			os.Exit(1)
+		}
+	}
+
 	// HLV and importCas needs to be stripped from the Xattrs
 	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_HLV] = true
 	difftool.xattrKeysForNoCompare[xdcrBase.XATTR_MOU] = true

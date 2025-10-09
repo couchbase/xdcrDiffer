@@ -45,6 +45,7 @@ Options:
 	[-o <outputDir>] OR [--outputDir=<directory>]                : Specify directory to store differ runtime outputs. By default they are stored within the outputs directory in the current working directory.
 	[-c] OR [--clear]                                            : Clean before run.
 	[-d] OR [--debugMode]                                        : Enable debug mode.
+	[-x] OR [--encryptionPassphrase]                             : Runs the differ and asks for an encryption passphrase to encrypt data at rest. Cannot be used with yaml config.
 	[-y <path/to/yaml>] OR [--yamlFile=<path/to/yaml>]           : Specify the path to the yaml file containing the configuration.
 	[-w <setupTimeout>]                                          : Specify timeout duration.
 	[--xattrExcludeKeysFile=<path/to/file>]                      : Path to the file containing xattr keys to exclude for comparison.
@@ -82,7 +83,7 @@ function killBgTail {
 	fi
 }
 
-while getopts ":h:p:u:r:s:t:cm:e:w:d:o:y:-:" opt; do
+while getopts ":h:p:u:r:s:t:cm:e:w:d:o:y:x-:" opt; do
 	case ${opt} in
 	u)
 		username=$OPTARG
@@ -114,6 +115,9 @@ while getopts ":h:p:u:r:s:t:cm:e:w:d:o:y:-:" opt; do
 	d)
 		debugMode=1
 		;;
+	x)
+		encryptionPassphrase=1
+		;;
 	w)
 		setupTimeout=$OPTARG
 		;;
@@ -121,6 +125,11 @@ while getopts ":h:p:u:r:s:t:cm:e:w:d:o:y:-:" opt; do
 		outputDirectory=$OPTARG
 		;;
 	y)
+		# Validate yamlFile argument
+		if [[ "$OPTARG" == -* ]]; then
+			echo "Error: Invalid yamlFile argument: $OPTARG"
+			exit 1
+		fi
 		yamlFile=$OPTARG
 		;;
 	-)
@@ -134,6 +143,9 @@ while getopts ":h:p:u:r:s:t:cm:e:w:d:o:y:-:" opt; do
 			;;
 		debugMode)
 			debugMode=1
+			;;
+		encryptionPassphrase)
+			encryptionPassphrase=1
 			;;
 		username=*)
 			username=${OPTARG#*=}
@@ -177,6 +189,10 @@ while getopts ":h:p:u:r:s:t:cm:e:w:d:o:y:-:" opt; do
 			;;
 		yamlFile=*)
 			yamlFile=${OPTARG#*=}
+			if [[ "$yamlFile" == -* ]]; then
+				echo "Error: Invalid yamlFile argument: $OPTARG"
+				exit 1
+			fi
 			;;
 		*)
 			echo "ERRO: Unknown option --${OPTARG}" >&2
@@ -316,6 +332,9 @@ function setupFromCmdLine {
 		execString="${execString} -debugMode"
 		execString="${execString} $debugMode"
 	fi
+	if [[ ! -z "$encryptionPassphrase" ]]; then
+		execString="${execString} -encryptionPassphrase"
+	fi
 	if [[ ! -z "$xattrExcludeKeysFile" ]]; then
 		execString="${execString} -fileContaingXattrKeysForNoComapre"
 		execString="${execString} $xattrExcludeKeysFile"
@@ -353,6 +372,11 @@ function setupFromCmdLine {
 }
 
 function setupFromYaml {
+	if [[ ! -z "$encryptionPassphrase" ]]; then
+		echo "Error: encryptionPassphrase option cannot be used with yaml config"
+		exit 1
+	fi
+
 	# Check if yq is installed
 	if ! command -v yq &>/dev/null; then
 		echo "Error: yq is not installed. Please install it first."
@@ -389,24 +413,6 @@ else
 	setupFromCmdLine
 fi
 
-# Execute the differ in background and watch the pid to be finished
-$execString >$differLogFilePath 2>&1 &
-bgPid=$(jobs -p)
-
-# in the meantime, trap ctrl-c and pass the signal to the program
-trap ctrl_c INT
-
-function ctrl_c() {
-	if [[ -z "$bgPid" ]]; then
-		exit 0
-	else
-		kill -SIGINT $bgPid
-		killBgTail
-	fi
-}
-
-tail -f $differLogFilePath &
-waitForBgJobs $bgPid
-killBgTail
+$execString 2>&1 | tee $differLogFilePath
 
 unset CBAUTH_REVRPC_URL
