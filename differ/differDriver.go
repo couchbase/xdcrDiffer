@@ -24,6 +24,7 @@ import (
 	"github.com/couchbase/goxdcr/v8/metadata"
 	"github.com/couchbase/goxdcr/v8/service_def"
 	"github.com/couchbase/xdcrDiffer/base"
+	"github.com/couchbase/xdcrDiffer/encryption"
 	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
 	"github.com/couchbase/xdcrDiffer/utils"
 )
@@ -245,9 +246,14 @@ type DifferDriver struct {
 	specifiedSpec     *metadata.ReplicationSpecification
 	logger            *xdcrLog.CommonLogger
 	numOfVbuckets     uint16
+	encryptionSvc     encryption.EncryptionSvc
 }
 
-func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string, numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32, sourceClusterUUID, targetClusterUUID, sourceBucketUUID, targetBucketUUID string, bucketTopologySvc service_def.BucketTopologySvc, specifiedSpec *metadata.ReplicationSpecification, logger *xdcrLog.CommonLogger, numOfVbuckets uint16) *DifferDriver {
+func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string,
+	numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32, colFilterStrings []string,
+	colFilterTgtIds []uint32, sourceClusterUUID, targetClusterUUID, sourceBucketUUID, targetBucketUUID string,
+	bucketTopologySvc service_def.BucketTopologySvc, specifiedSpec *metadata.ReplicationSpecification,
+	logger *xdcrLog.CommonLogger, numOfVbuckets uint16, encryptionSvc encryption.EncryptionSvc) *DifferDriver {
 	var fdPool *fdp.FdPool
 	if numberOfFds > 0 {
 		fdPool = fdp.NewFileDescriptorPool(numberOfFds)
@@ -282,6 +288,7 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName
 		specifiedSpec:     specifiedSpec,
 		logger:            logger,
 		numOfVbuckets:     numOfVbuckets,
+		encryptionSvc:     encryptionSvc,
 	}
 }
 
@@ -308,7 +315,9 @@ func (dr *DifferDriver) Run() error {
 		}
 
 		dr.waitGroup.Add(1)
-		differHandler := NewDifferHandler(dr, i, dr.sourceFileDir, dr.targetFileDir, vbList, dr.numberOfBins, dr.waitGroup, dr.fileDescPool, dr.collectionMapping, dr.colFilterStrings, dr.colFilterTgtIds)
+		differHandler := NewDifferHandler(dr, i, dr.sourceFileDir, dr.targetFileDir, vbList, dr.numberOfBins,
+			dr.waitGroup, dr.fileDescPool, dr.collectionMapping, dr.colFilterStrings, dr.colFilterTgtIds,
+			dr.encryptionSvc)
 		differHandlers = append(differHandlers, differHandler)
 		go differHandler.run()
 	}
@@ -452,9 +461,13 @@ type DifferHandler struct {
 	colFilterTgtIds   []uint32
 
 	duplicatedHintMap DuplicatedHintMap
+
+	encryptionSvc encryption.EncryptionSvc
 }
 
-func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFileDir string, vbList []uint16, numberOfBins int, waitGroup *sync.WaitGroup, fdPool *fdp.FdPool, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32) *DifferHandler {
+func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFileDir string, vbList []uint16,
+	numberOfBins int, waitGroup *sync.WaitGroup, fdPool *fdp.FdPool, collectionMapping map[uint32][]uint32,
+	colFilterStrings []string, colFilterTgtIds []uint32, encryptionSvc encryption.EncryptionSvc) *DifferHandler {
 	return &DifferHandler{
 		driver:            driver,
 		index:             index,
@@ -468,6 +481,7 @@ func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFile
 		colFilterStrings:  colFilterStrings,
 		colFilterTgtIds:   colFilterTgtIds,
 		duplicatedHintMap: DuplicatedHintMap{},
+		encryptionSvc:     encryptionSvc,
 	}
 }
 
@@ -486,8 +500,8 @@ func (dh *DifferHandler) run() error {
 		srcVbItemCnt := 0
 		tgtVbItemCnt := 0
 		for bucketIndex := 0; bucketIndex < dh.numberOfBins; bucketIndex++ {
-			sourceFileName := utils.GetFileName(dh.sourceFileDir, vbno, bucketIndex)
-			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex)
+			sourceFileName := utils.GetFileName(dh.sourceFileDir, vbno, bucketIndex, dh.encryptionSvc)
+			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex, dh.encryptionSvc)
 
 			filesDiffer, err := NewFilesDifferWithFDPool(sourceFileName, targetFileName, dh.fileDescPool, dh.collectionMapping, dh.colFilterStrings, dh.colFilterTgtIds, dh.driver.logger)
 			if err != nil {

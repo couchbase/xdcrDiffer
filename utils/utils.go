@@ -25,9 +25,10 @@ import (
 	xdcrBase "github.com/couchbase/goxdcr/v8/base"
 	xdcrUtils "github.com/couchbase/goxdcr/v8/utils"
 	"github.com/couchbase/xdcrDiffer/base"
+	"github.com/couchbase/xdcrDiffer/encryption"
 )
 
-func GetFileName(fileDir string, vbno uint16, bucketIndex int) string {
+func GetFileName(fileDir string, vbno uint16, bucketIndex int, encryptor encryption.FileOps) string {
 	var buffer bytes.Buffer
 	buffer.WriteString(fileDir)
 	buffer.WriteString(base.FileDirDelimiter)
@@ -36,16 +37,18 @@ func GetFileName(fileDir string, vbno uint16, bucketIndex int) string {
 	buffer.WriteString(fmt.Sprintf("%v", vbno))
 	buffer.WriteString(base.FileNameDelimiter)
 	buffer.WriteString(fmt.Sprintf("%v", bucketIndex))
+	buffer.WriteString(encryptor.GetEncryptionFilenameSuffix())
 	return buffer.String()
 }
 
-func GetManifestFileName(fileDir string) string {
+func GetManifestFileName(fileDir string, encryptor encryption.FileOps) string {
 	var buffer bytes.Buffer
 	buffer.WriteString(fileDir)
 	buffer.WriteString(base.FileDirDelimiter)
 	buffer.WriteString(base.FileNamePrefix)
 	buffer.WriteString(base.FileNameDelimiter)
 	buffer.WriteString(fmt.Sprintf("%v", base.ManifestFileName))
+	buffer.WriteString(encryptor.GetEncryptionFilenameSuffix())
 	return buffer.String()
 }
 

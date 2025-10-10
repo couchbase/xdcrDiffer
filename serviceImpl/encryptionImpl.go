@@ -130,3 +130,10 @@ func (e *EncryptionServiceImpl) InitAESGCM256(passPhrase string) error {
 	}
 	return nil
 }
+
+func (e *EncryptionServiceImpl) GetEncryptionFilenameSuffix() string {
+	if atomic.LoadUint32(&e.enabled) == 0 {
+		return ""
+	}
+	return encryption.EncSuffix
+}

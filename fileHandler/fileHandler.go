@@ -7,6 +7,7 @@ import (
 
 	xdcrLog "github.com/couchbase/goxdcr/v8/log"
 	"github.com/couchbase/xdcrDiffer/base"
+	"github.com/couchbase/xdcrDiffer/encryption"
 	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
 	"github.com/couchbase/xdcrDiffer/utils"
 )
@@ -35,10 +36,11 @@ type FileHandler struct {
 	BucketMap           map[uint16]map[int]*Bucket
 	BucketLock          sync.RWMutex
 	logger              *xdcrLog.CommonLogger
+	encryptor           encryption.FileOps
 }
 
-func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool fdp.FdPoolIface, logger *xdcrLog.CommonLogger, bufferCap int) (*Bucket, error) {
-	fileName := utils.GetFileName(fileDir, vbno, bucketIndex)
+func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool fdp.FdPoolIface, logger *xdcrLog.CommonLogger, bufferCap int, encryptor encryption.FileOps) (*Bucket, error) {
+	fileName := utils.GetFileName(fileDir, vbno, bucketIndex, encryptor)
 	var cb fdp.FileOp
 	var closeOp func() error
 	var err error
@@ -124,7 +126,7 @@ func (b *Bucket) Close() {
 	}
 }
 
-func NewFileHandler(fileDir string, fdPool fdp.FdPoolIface, numberOfVbuckets uint16, numberOfBins int, bufferCapacity int, requiresVBRemapping bool, logger *xdcrLog.CommonLogger) *FileHandler {
+func NewFileHandler(fileDir string, fdPool fdp.FdPoolIface, numberOfVbuckets uint16, numberOfBins int, bufferCapacity int, requiresVBRemapping bool, logger *xdcrLog.CommonLogger, encryptor encryption.FileOps) *FileHandler {
 	return &FileHandler{
 		fileDir:             fileDir,
 		fdPool:              fdPool,
@@ -133,6 +135,7 @@ func NewFileHandler(fileDir string, fdPool fdp.FdPoolIface, numberOfVbuckets uin
 		bufferCapacity:      bufferCapacity,
 		RequiresVBRemapping: requiresVBRemapping,
 		logger:              logger,
+		encryptor:           encryptor,
 	}
 }
 
@@ -148,7 +151,7 @@ func (fh *FileHandler) Initialize() error {
 		innerMap := make(map[int]*Bucket)
 		fh.BucketMap[vbno] = innerMap
 		for bin := 0; bin < fh.numberOfBins; bin++ {
-			bucket, err := NewBucket(fh.fileDir, vbno, bin, fh.fdPool, fh.logger, fh.bufferCapacity)
+			bucket, err := NewBucket(fh.fileDir, vbno, bin, fh.fdPool, fh.logger, fh.bufferCapacity, fh.encryptor)
 			if err != nil {
 				return err
 			}

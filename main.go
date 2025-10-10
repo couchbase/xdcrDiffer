@@ -901,7 +901,9 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
 		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
 		difftool.srcCapabilities, difftool.srcCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity,
-		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode(), difftool.xattrKeysForNoCompare, difftool.vbInfo.sourceNoOfVbuckets, difftool.vbInfo.isVariableVB)
+		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode(),
+		difftool.xattrKeysForNoCompare, difftool.vbInfo.sourceNoOfVbuckets, difftool.vbInfo.isVariableVB,
+		difftool.encryptionSvc)
 
 	delayDurationBetweenSourceAndTarget := time.Duration(options.delayBetweenSourceAndTarget) * time.Second
 	difftool.logger.Infof("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
@@ -915,7 +917,9 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval, options.getStatsMaxBackoff,
 		options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
 		difftool.tgtCapabilities, difftool.tgtCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity,
-		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode(), difftool.xattrKeysForNoCompare, difftool.vbInfo.targetNoOfVbuckets, difftool.vbInfo.isVariableVB)
+		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode(),
+		difftool.xattrKeysForNoCompare, difftool.vbInfo.targetNoOfVbuckets, difftool.vbInfo.isVariableVB,
+		difftool.encryptionSvc)
 
 	difftool.curState.mtx.Lock()
 	difftool.curState.state = StateDcpStarted
@@ -949,7 +953,10 @@ func (difftool *xdcrDiffTool) diffDataFiles() error {
 	}
 	difftoolDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.fileDifferDir,
 		base.DiffKeysFileName, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBins),
-		int(options.numberOfFileDesc), difftool.srcToTgtColIdsMap, difftool.colFilterOrderedKeys, difftool.colFilterOrderedTargetColId, difftool.selfRef.Uuid_, difftool.specifiedRef.Uuid_, difftool.specifiedSpec.SourceBucketUUID, difftool.specifiedSpec.TargetBucketUUID, difftool.bucketTopologySvc, difftool.specifiedSpec, difftool.logger, numberOfVbuckets)
+		int(options.numberOfFileDesc), difftool.srcToTgtColIdsMap, difftool.colFilterOrderedKeys,
+		difftool.colFilterOrderedTargetColId, difftool.selfRef.Uuid_, difftool.specifiedRef.Uuid_,
+		difftool.specifiedSpec.SourceBucketUUID, difftool.specifiedSpec.TargetBucketUUID, difftool.bucketTopologySvc,
+		difftool.specifiedSpec, difftool.logger, numberOfVbuckets, difftool.encryptionSvc)
 	err = difftoolDriver.Run()
 	if err != nil {
 		difftool.logger.Errorf("Error from diffDataFiles = %v\n", err)
@@ -1011,14 +1018,14 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 	}
 }
 
-func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bucketBufferCap int, migrationMapping metadata.CollectionNamespaceMapping, mobileCompat int, expDelMode xdcrBase.FilterExpDelType, xattrKeysForNoCompare map[string]bool, numberOfVbuckets uint16, isVariableVB bool) *dcp.DcpDriver {
+func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bucketBufferCap int, migrationMapping metadata.CollectionNamespaceMapping, mobileCompat int, expDelMode xdcrBase.FilterExpDelType, xattrKeysForNoCompare map[string]bool, numberOfVbuckets uint16, isVariableVB bool, encryptionSvc encryption.EncryptionSvc) *dcp.DcpDriver {
 	waitGroup.Add(1)
 	dcpDriver := dcp.NewDcpDriver(logger, name, url, bucketName, ref, fileDir, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBins),
 		int(dcpHandlerChanSize), time.Duration(bucketOpTimeout)*time.Second, int(maxNumOfGetStatsRetry),
 		time.Duration(getStatsRetryInterval)*time.Second, time.Duration(getStatsMaxBackoff)*time.Second,
 		int(checkpointInterval), errChan, waitGroup, completeBySeqno, fdPool, filter, capabilities, collectionIDs, colMigrationFilters,
-		utils, bucketBufferCap, migrationMapping, mobileCompat, expDelMode, xattrKeysForNoCompare, numberOfVbuckets, isVariableVB)
+		utils, bucketBufferCap, migrationMapping, mobileCompat, expDelMode, xattrKeysForNoCompare, numberOfVbuckets, isVariableVB, encryptionSvc)
 	// dcp driver startup may take some time. Do it asynchronously
 	go startDcpDriverAysnc(dcpDriver, errChan, logger)
 	return dcpDriver
@@ -1351,13 +1358,13 @@ func (difftool *xdcrDiffTool) outputManifestsToFiles(err error) error {
 		return err
 	}
 
-	err = ioutil.WriteFile(utils.GetManifestFileName(options.sourceFileDir), srcManJson, 0644)
+	err = ioutil.WriteFile(utils.GetManifestFileName(options.sourceFileDir, difftool.encryptionSvc), srcManJson, 0644)
 	if err != nil {
 		difftool.logger.Errorf("SrcManifestWrite - %v\n", err)
 		return err
 	}
 
-	err = ioutil.WriteFile(utils.GetManifestFileName(options.targetFileDir), tgtManJson, 0644)
+	err = ioutil.WriteFile(utils.GetManifestFileName(options.targetFileDir, difftool.encryptionSvc), tgtManJson, 0644)
 	if err != nil {
 		difftool.logger.Errorf("TgtManifestWrite - %v\n", err)
 		return err

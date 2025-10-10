@@ -22,6 +22,7 @@ import (
 	"github.com/couchbase/goxdcr/v8/metadata"
 	xdcrUtils "github.com/couchbase/goxdcr/v8/utils"
 	"github.com/couchbase/xdcrDiffer/base"
+	"github.com/couchbase/xdcrDiffer/encryption"
 	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
 	fh "github.com/couchbase/xdcrDiffer/fileHandler"
 	"github.com/couchbase/xdcrDiffer/utils"
@@ -69,6 +70,8 @@ type DcpDriver struct {
 	// various counters
 	totalNumReceivedFromDCP                uint64
 	totalSysOrUnsubbedEventReceivedFromDCP uint64
+
+	encryptionSvc encryption.EncryptionSvc
 }
 
 type VBStateWithLock struct {
@@ -92,7 +95,7 @@ const (
 	DriverStateStopped DriverState = iota
 )
 
-func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration, checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIds []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping, mobileCompat int, expDelMode xdcrBase.FilterExpDelType, xattrKeysForNoCompare map[string]bool, numberOfVbuckets uint16, isVariableVB bool) *DcpDriver {
+func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfClients, numberOfWorkers, numberOfBins, dcpHandlerChanSize int, bucketOpTimeout time.Duration, maxNumOfGetStatsRetry int, getStatsRetryInterval, getStatsMaxBackoff time.Duration, checkpointInterval int, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIds []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bufferCap int, migrationMapping metadata.CollectionNamespaceMapping, mobileCompat int, expDelMode xdcrBase.FilterExpDelType, xattrKeysForNoCompare map[string]bool, numberOfVbuckets uint16, isVariableVB bool, encryptionSvc encryption.EncryptionSvc) *DcpDriver {
 	dcpDriver := &DcpDriver{
 		Name:                  name,
 		url:                   url,
@@ -122,9 +125,10 @@ func NewDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, re
 		expDelMode:            expDelMode,
 		xattrKeysForNoCompare: xattrKeysForNoCompare,
 		numberOfVbuckets:      numberOfVbuckets,
+		encryptionSvc:         encryptionSvc,
 	}
 	requiresVBRemapping := isVariableVB && numberOfVbuckets != base.TraditionalNumberOfVbuckets
-	dcpDriver.fileHandler = fh.NewFileHandler(fileDir, fdPool, numberOfVbuckets, numberOfBins, bufferCap, requiresVBRemapping, logger)
+	dcpDriver.fileHandler = fh.NewFileHandler(fileDir, fdPool, numberOfVbuckets, numberOfBins, bufferCap, requiresVBRemapping, logger, encryptionSvc)
 	var vbno uint16
 	for vbno = 0; vbno < dcpDriver.numberOfVbuckets; vbno++ {
 		dcpDriver.vbStateMap[vbno] = &VBStateWithLock{
