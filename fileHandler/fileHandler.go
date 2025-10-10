@@ -47,9 +47,28 @@ func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool fdp.FdPoolIf
 	var file *os.File
 
 	if fdPool == nil {
+		_, statErr := os.Stat(fileName)
+		fileExisted := !os.IsNotExist(statErr)
 		file, err = os.OpenFile(fileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, base.FileModeReadWrite)
 		if err != nil {
 			return nil, err
+		}
+		if !fileExisted {
+			err = encryptor.WriteEncHeader(file)
+			if err != nil {
+				logger.Errorf("Error writing encryption header to file %v.  err=%v\n", fileName, err)
+				file.Close()
+				return nil, err
+			}
+		} else {
+			isValid, err := encryptor.ValidateHeader(file)
+			if err != nil || !isValid {
+				file.Close()
+				if !isValid {
+					logger.Errorf("Error validating encryption header of pre-existing file %v.  err=%v\n", fileName, err)
+					return nil, encryption.ErrorEncryptionFormatUnrecog
+				}
+			}
 		}
 	} else {
 		_, cb, err = fdPool.RegisterFileHandle(fileName)
