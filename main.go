@@ -40,7 +40,9 @@ import (
 	"github.com/couchbase/xdcrDiffer/base"
 	"github.com/couchbase/xdcrDiffer/dcp"
 	"github.com/couchbase/xdcrDiffer/differ"
+	"github.com/couchbase/xdcrDiffer/encryption"
 	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
+	"github.com/couchbase/xdcrDiffer/serviceImpl"
 	"github.com/couchbase/xdcrDiffer/utils"
 	"github.com/stretchr/testify/mock"
 	"golang.org/x/term"
@@ -303,6 +305,7 @@ type xdcrDiffTool struct {
 	logger                  *xdcrLog.CommonLogger
 
 	xdcrTopologySvc service_def.XDCRCompTopologySvc
+	encryptionSvc   encryption.EncryptionSvc
 
 	selfRef             *metadata.RemoteClusterReference
 	selfRefPopulated    uint32
@@ -362,6 +365,7 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 		srcToTgtColIdsMap:       make(map[uint32][]uint32),
 		colFilterToTgtColIdsMap: map[string][]uint32{},
 		xattrKeysForNoCompare:   map[string]bool{},
+		encryptionSvc:           serviceImpl.NewEncryptionService(),
 	}
 	if options.fileContaingXattrKeysForNoComapre != "" {
 		readFile, er := os.Open(options.fileContaingXattrKeysForNoComapre)
@@ -377,28 +381,7 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 	}
 
 	if options.encryptionPassphrase {
-		fmt.Print("Enter encryption passphrase: ")
-		passphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
-		fmt.Println() // move to next line after input
-		if err != nil {
-			fmt.Printf("Error reading passphrase: %v\n", err)
-			os.Exit(1)
-		}
-		passphrase := string(passphraseBytes)
-		// Use passphrase as needed
-
-		fmt.Print("Enter the same encryption passphrase again: ")
-		confirmPassphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
-		fmt.Println()
-		if err != nil {
-			fmt.Printf("Error reading passphrase: %v\n", err)
-			os.Exit(1)
-		}
-		confirmPassphrase := string(confirmPassphraseBytes)
-		if passphrase != confirmPassphrase {
-			fmt.Println("Passphrases do not match. Exiting.")
-			os.Exit(1)
-		}
+		setupEncryption(difftool)
 	}
 
 	// HLV and importCas needs to be stripped from the Xattrs
@@ -512,6 +495,37 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 	go difftool.monitorInterruptSignal()
 
 	return difftool, err
+}
+
+func setupEncryption(difftool *xdcrDiffTool) {
+	fmt.Print("Enter encryption passphrase: ")
+	passphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Println() // move to next line after input
+	if err != nil {
+		fmt.Printf("Error reading passphrase: %v\n", err)
+		os.Exit(1)
+	}
+	passphrase := string(passphraseBytes)
+	// Use passphrase as needed
+
+	fmt.Print("Enter the same encryption passphrase again: ")
+	confirmPassphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Println()
+	if err != nil {
+		fmt.Printf("Error reading passphrase: %v\n", err)
+		os.Exit(1)
+	}
+	confirmPassphrase := string(confirmPassphraseBytes)
+	if passphrase != confirmPassphrase {
+		fmt.Println("Passphrases do not match. Exiting.")
+		os.Exit(1)
+	}
+
+	err = difftool.encryptionSvc.InitAESGCM256(passphrase)
+	if err != nil {
+		fmt.Printf("Error initializing encryption service: %v\n", err)
+		os.Exit(1)
+	}
 }
 
 func setupSecuritySvcMock(securitySvc *service_def_mock.SecuritySvc) {
