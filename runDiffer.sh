@@ -363,6 +363,9 @@ function setupFromCmdLine {
 	execString="${execString} -checkpointFileDir"
 	execString="${execString} $checkpointDir"
 
+		# For now, disable fd for encryption work is going on until it's done
+		execString="${execString} -numberOfFileDesc 0"
+
 	if [[ @PRODUCT_VERSION@ != @* ]]; then
 		if [[ "${outputDirectory}" == /opt/couchbase* ]]; then
 			echo "outputDir should be specified and should not be under /opt/couchbase"
