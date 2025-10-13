@@ -3,7 +3,11 @@ package serviceImpl
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"io"
+	"math/rand"
 	"os"
 	"testing"
 
@@ -66,19 +70,21 @@ func TestEncryptDecrypt_RoundTrip(t *testing.T) {
 	}
 
 	plaintext := []byte("secret data payload")
-	_, _, err := svc.Encrypt(plaintext)
+	ciphertext, _, err := svc.Encrypt(plaintext)
 	if err != nil {
 		t.Fatalf("Encrypt failed: %v", err)
 	}
 
-	// TODO NEIL - add decrypt
-	//out, err := svc.Decrypt(ciphertext)
-	//if err != nil {
-	//	t.Fatalf("Decrypt failed: %v", err)
-	//}
-	//if !bytes.Equal(out, plaintext) {
-	//	t.Fatalf("round-trip mismatch")
-	//}
+	nonce, actualCipherText, err := splitNonceAndCipherText(ciphertext)
+	assert.NoError(t, err, "SplitNonce failed")
+
+	out, err := svc.Decrypt(actualCipherText, nonce)
+	if err != nil {
+		t.Fatalf("Decrypt failed: %v", err)
+	}
+	if !bytes.Equal(out, plaintext) {
+		t.Fatalf("round-trip mismatch")
+	}
 }
 
 func TestEncryptionServiceImpl_GetEncryptionFilenameSuffix(t *testing.T) {
@@ -275,10 +281,618 @@ func TestEncryptionServiceImpl_WriteEncHeader_And_ValidateHeader(t *testing.T) {
 				assert := assert.New(t)
 				_, err = fd.Seek(0, 0)
 				assert.Nil(err)
-				valid, err := e.ValidateHeader(fd)
+				_, valid, err := e.ValidateHeader(fd)
 				assert.True(valid)
 				assert.Nil(err)
 			}
 		})
 	}
+}
+
+// New test focusing on the described OpenFile flow.
+func TestEncryptionServiceImpl_OpenFile_Success(t *testing.T) {
+	svc := newTestSvc()
+
+	// Random passphrase
+	rawPass := make([]byte, 32)
+	_, err := rand.Read(rawPass)
+	if err != nil {
+		t.Fatalf("rand.Read passphrase: %v", err)
+	}
+	passphrase := hex.EncodeToString(rawPass)
+
+	// Init service
+	if err := svc.InitAESGCM256(passphrase); err != nil {
+		t.Fatalf("InitAESGCM256 failed: %v", err)
+	}
+
+	// Random plaintext payload
+	plaintext := make([]byte, 256)
+	if _, err := rand.Read(plaintext); err != nil {
+		t.Fatalf("rand.Read data: %v", err)
+	}
+
+	// Create temp file with encryption suffix
+	assert.NotEqual(t, "", svc.GetEncryptionFilenameSuffix())
+	pattern := "openfile_*" + svc.GetEncryptionFilenameSuffix()
+	f, err := os.CreateTemp("", pattern)
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	fileName := f.Name()
+	defer os.Remove(fileName)
+
+	// Write encryption header
+	if err := svc.WriteEncHeader(f); err != nil {
+		t.Fatalf("WriteEncHeader: %v", err)
+	}
+
+	// Explicit Encrypt call (per requirement); discard result
+	cipherPreview, noncePreview, err := svc.Encrypt(plaintext)
+	if err != nil {
+		t.Fatalf("Encrypt preview failed: %v", err)
+	}
+	if len(cipherPreview) == 0 || len(noncePreview) == 0 {
+		t.Fatalf("preview encryption produced empty output")
+	}
+
+	// Write data using WriteToFile (will encrypt again)
+	n, err := svc.WriteToFile(f, plaintext)
+	if err != nil {
+		t.Fatalf("WriteToFile failed: %v", err)
+	}
+	if n != len(plaintext) {
+		t.Fatalf("WriteToFile reported %d bytes, want %d", n, len(plaintext))
+	}
+
+	// Close before reopening
+	if err := f.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	// Re-open via OpenFile
+	handle, err := svc.OpenFile(fileName)
+	if err != nil {
+		t.Fatalf("OpenFile failed: %v", err)
+	}
+	if handle == nil {
+		t.Fatalf("OpenFile returned nil handle")
+	}
+
+	buf := make([]byte, len(plaintext))
+	readN, err := handle.ReadAndFillBytes(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, len(plaintext), readN)
+	assert.True(t, bytes.Equal(plaintext, buf))
+
+	_ = bytes.MinRead // keep bytes import until read test is enabled
+	assert.NotNil(t, handle)
+}
+
+func TestEncryptionServiceImpl_Encrypt(t *testing.T) {
+	type fields struct {
+		enabled      uint32
+		nonceCounter uint64
+		logger       *xdcrLog.CommonLogger
+		config       *aes256Config
+	}
+	type args struct {
+		plaintext []byte
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		want    []byte
+		want1   []byte
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "encryption disabled returns plaintext",
+			fields: fields{
+				enabled: 0,
+			},
+			args:    args{plaintext: []byte("hello world")},
+			want:    []byte("hello world"),
+			want1:   nil,
+			wantErr: assert.NoError,
+		},
+		{
+			name: "encryption enabled success",
+			fields: fields{
+				enabled: 1,
+				config: func() *aes256Config {
+					pass := []byte("test passphrase")
+					salt := []byte("1234567890abcdef") // 16 bytes
+					iter := 5000
+					key := deriveKey(pass, salt, iter, 32)
+					return &aes256Config{
+						iteration: uint64(iter),
+						key:       key,
+						salt:      salt,
+					}
+				}(),
+			},
+			args:    args{plaintext: []byte("secret payload")},
+			want:    nil, // validated dynamically
+			want1:   nil,
+			wantErr: assert.NoError,
+		},
+		{
+			name: "encryption enabled missing config error",
+			fields: fields{
+				enabled: 1,
+				config:  nil,
+			},
+			args:    args{plaintext: []byte("data")},
+			want:    nil,
+			want1:   nil,
+			wantErr: assert.Error,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := &EncryptionServiceImpl{
+				enabled:      tt.fields.enabled,
+				nonceCounter: tt.fields.nonceCounter,
+				logger:       tt.fields.logger,
+				config:       tt.fields.config,
+			}
+			got, nonce, err := e.Encrypt(tt.args.plaintext)
+			if !tt.wantErr(t, err, fmt.Sprintf("Encrypt(%v)", tt.args.plaintext)) {
+				return
+			}
+			switch tt.name {
+			case "encryption disabled returns plaintext":
+				assert.Equal(t, tt.args.plaintext, got)
+				assert.Nil(t, nonce)
+			case "encryption enabled success":
+				assert.NotNil(t, nonce)
+				assert.NotEmpty(t, nonce)
+				assert.NotNil(t, got)
+				assert.NotEqual(t, tt.args.plaintext, got) // ciphertext should differ
+			case "encryption enabled missing config error":
+				// error already asserted
+			default:
+				assert.Equalf(t, tt.want, got, "Encrypt(%v)", tt.args.plaintext)
+				assert.Equalf(t, tt.want1, nonce, "Encrypt(%v)", tt.args.plaintext)
+			}
+		})
+	}
+}
+
+func TestEncryptionServiceImpl_Decrypt(t *testing.T) {
+	type fields struct {
+		enabled      uint32
+		nonceCounter uint64
+		logger       *xdcrLog.CommonLogger
+		config       *aes256Config
+	}
+	type args struct {
+		ciphertext []byte
+		nonce      []byte
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		want    []byte
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "disabled returns input unchanged",
+			fields: fields{
+				enabled: 0,
+			},
+			args: args{
+				ciphertext: []byte("plain data"),
+				nonce:      []byte("ignorednonce"),
+			},
+			want:    []byte("plain data"),
+			wantErr: assert.NoError,
+		},
+		{
+			name: "enabled success roundtrip",
+			fields: fields{
+				enabled: 1,
+				config: func() *aes256Config {
+					pass := []byte("rt pass")
+					salt := []byte("1234567890abcdef")
+					iter := 2000
+					key := deriveKey(pass, salt, iter, 32)
+					return &aes256Config{iteration: uint64(iter), key: key, salt: salt}
+				}(),
+			},
+			args: func() args {
+				pass := []byte("rt pass")
+				salt := []byte("1234567890abcdef")
+				iter := 2000
+				key := deriveKey(pass, salt, iter, 32)
+				tmp := &EncryptionServiceImpl{enabled: 1, config: &aes256Config{iteration: uint64(iter), key: key, salt: salt}}
+				plaintext := []byte("roundtrip plaintext")
+				full, nonce, _ := tmp.Encrypt(plaintext)
+				ct := full[len(nonce):]
+				return args{ciphertext: ct, nonce: nonce}
+			}(),
+			want:    []byte("roundtrip plaintext"),
+			wantErr: assert.NoError,
+		},
+		{
+			name: "enabled tampered ciphertext error",
+			fields: fields{
+				enabled: 1,
+				config: func() *aes256Config {
+					pass := []byte("tamper pass")
+					salt := []byte("abcdefghijklmnop")
+					iter := 3000
+					key := deriveKey(pass, salt, iter, 32)
+					return &aes256Config{iteration: uint64(iter), key: key, salt: salt}
+				}(),
+			},
+			args: func() args {
+				pass := []byte("tamper pass")
+				salt := []byte("abcdefghijklmnop")
+				iter := 3000
+				key := deriveKey(pass, salt, iter, 32)
+				tmp := &EncryptionServiceImpl{enabled: 1, config: &aes256Config{iteration: uint64(iter), key: key, salt: salt}}
+				full, nonce, _ := tmp.Encrypt([]byte("secret payload"))
+				ct := append([]byte{}, full[len(nonce):]...)
+				ct[0] ^= 0xFF
+				return args{ciphertext: ct, nonce: nonce}
+			}(),
+			want:    nil,
+			wantErr: assert.Error,
+		},
+		{
+			name: "enabled wrong nonce error",
+			fields: fields{
+				enabled: 1,
+				config: func() *aes256Config {
+					pass := []byte("wrong nonce pass")
+					salt := []byte("1234567890abcdef")
+					iter := 3500
+					key := deriveKey(pass, salt, iter, 32)
+					return &aes256Config{iteration: uint64(iter), key: key, salt: salt}
+				}(),
+			},
+			args: func() args {
+				pass := []byte("wrong nonce pass")
+				salt := []byte("1234567890abcdef")
+				iter := 3500
+				key := deriveKey(pass, salt, iter, 32)
+				tmp := &EncryptionServiceImpl{enabled: 1, config: &aes256Config{iteration: uint64(iter), key: key, salt: salt}}
+				full, nonce, _ := tmp.Encrypt([]byte("another secret"))
+				ct := full[len(nonce):]
+				badNonce := append([]byte{}, nonce...)
+				badNonce[0] ^= 0xFF
+				return args{ciphertext: ct, nonce: badNonce}
+			}(),
+			want:    nil,
+			wantErr: assert.Error,
+		},
+		{
+			name: "enabled missing config error",
+			fields: fields{
+				enabled: 1,
+				config:  nil,
+			},
+			args: args{
+				ciphertext: []byte("irrelevant"),
+				nonce:      []byte("badnoncehere"),
+			},
+			want:    nil,
+			wantErr: assert.Error,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := &EncryptionServiceImpl{
+				enabled:      tt.fields.enabled,
+				nonceCounter: tt.fields.nonceCounter,
+				logger:       tt.fields.logger,
+				config:       tt.fields.config,
+			}
+			got, err := e.Decrypt(tt.args.ciphertext, tt.args.nonce)
+			if !tt.wantErr(t, err, fmt.Sprintf("Decrypt(%v, %v)", tt.args.ciphertext, tt.args.nonce)) {
+				return
+			}
+			assert.Equalf(t, tt.want, got, "Decrypt(%v, %v)", tt.args.ciphertext, tt.args.nonce)
+		})
+	}
+}
+
+func TestEncryptionServiceImpl_WriteToFile(t *testing.T) {
+	type fields struct {
+		enabled      uint32
+		nonceCounter uint64
+		logger       *xdcrLog.CommonLogger
+		config       *aes256Config
+	}
+	type args struct {
+		fileDescriptor *os.File
+		data           []byte
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		want    int
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "write plaintext when encryption disabled",
+			fields: fields{
+				enabled: 0,
+			},
+			args: args{
+				fileDescriptor: nil, // will create inside test
+				data:           []byte("unencrypted plain content"),
+			},
+			want:    len([]byte("unencrypted plain content")),
+			wantErr: assert.NoError,
+		},
+		{
+			name: "write encrypted returns plaintext length",
+			fields: fields{
+				enabled: 1,
+				config: func() *aes256Config {
+					pass := []byte("write passphrase")
+					salt := []byte("saltforwritetest1") // 16 bytes
+					iter := 7777
+					key := deriveKey(pass, salt, iter, 32)
+					return &aes256Config{iteration: uint64(iter), key: key, salt: salt}
+				}(),
+			},
+			args: args{
+				fileDescriptor: nil,
+				data:           []byte("secret content that will be encrypted"),
+			},
+			want:    len([]byte("secret content that will be encrypted")),
+			wantErr: assert.NoError,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := &EncryptionServiceImpl{
+				enabled:      tt.fields.enabled,
+				nonceCounter: tt.fields.nonceCounter,
+				logger:       tt.fields.logger,
+				config:       tt.fields.config,
+			}
+
+			// Prepare temp file
+			var f *os.File
+			var err error
+			if tt.fields.enabled == 1 {
+				// must carry encryption suffix
+				f, err = os.CreateTemp("", "write_enc_*"+encryption.EncSuffix)
+				if err != nil {
+					t.Fatalf("CreateTemp: %v", err)
+				}
+				// header first
+				if err = e.WriteEncHeader(f); err != nil {
+					t.Fatalf("WriteEncHeader: %v", err)
+				}
+			} else {
+				f, err = os.CreateTemp("", "write_plain_*")
+				if err != nil {
+					t.Fatalf("CreateTemp: %v", err)
+				}
+			}
+			defer os.Remove(f.Name())
+			defer f.Close()
+
+			got, err := e.WriteToFile(f, tt.args.data)
+			if !tt.wantErr(t, err, fmt.Sprintf("WriteToFile(%v, %v)", f, len(tt.args.data))) {
+				return
+			}
+			assert.Equalf(t, tt.want, got, "returned byte count should equal plaintext length")
+
+			// Flush & inspect
+			_ = f.Sync()
+			info, _ := f.Stat()
+
+			if tt.fields.enabled == 0 {
+				// File contents must equal original data
+				content, _ := os.ReadFile(f.Name())
+				assert.Equal(t, string(tt.args.data), string(content))
+				assert.Equal(t, int64(len(tt.args.data)), info.Size())
+			} else {
+				// On-disk size should be larger than plaintext length (header + nonce + tag)
+				if int64(got) >= info.Size() {
+					t.Fatalf("expected encrypted file size > returned bytes. fileSize=%d returned=%d", info.Size(), got)
+				}
+				// Re-open and decrypt via service
+				f.Close()
+				handle, err := e.OpenFile(f.Name())
+				assert.NoError(t, err)
+				assert.NotNil(t, handle)
+				buf := make([]byte, len(tt.args.data))
+				readN, err := handle.ReadAndFillBytes(buf)
+				assert.NoError(t, err)
+				assert.Equal(t, len(tt.args.data), readN)
+				assert.Equal(t, tt.args.data, buf)
+			}
+			assert.Equalf(t, tt.want, got, "WriteToFile(%v, %v)", tt.args.fileDescriptor, tt.args.data)
+		})
+	}
+}
+
+// Helper to create random bytes.
+func randomBytes(t *testing.T, n int) []byte {
+	t.Helper()
+	b := make([]byte, n)
+	_, err := rand.Read(b)
+	if err != nil {
+		t.Fatalf("rand.Read: %v", err)
+	}
+	return b
+}
+
+func TestDecryptorReaderCtx_ReadAndFillBytes_RoundTrip(t *testing.T) {
+	type tc struct {
+		name           string
+		totalSize      int
+		writeChunks    []int // pattern for WriteToFile chunking
+		readBufPattern []int // pattern for ReadAndFillBytes buffer sizes
+	}
+	tests := []tc{
+		{
+			name:           "small_chunks_small_reads",
+			totalSize:      4096,
+			writeChunks:    []int{64, 32, 128, 256},
+			readBufPattern: []int{17, 33, 64, 95},
+		},
+		{
+			name:           "mixed_chunks_large_reads",
+			totalSize:      25 * 1024,
+			writeChunks:    []int{1024, 2048, 4096, 8192},
+			readBufPattern: []int{8192, 16384, 512},
+		},
+		{
+			name:           "single_large_write_many_tiny_reads",
+			totalSize:      10 * 1024,
+			writeChunks:    []int{1 << 20}, // effectively one big write truncated to totalSize
+			readBufPattern: []int{1, 2, 3, 4, 5, 7, 11, 13, 32, 64, 128},
+		},
+		{
+			name:           "unaligned_edge_sizes",
+			totalSize:      7777,
+			writeChunks:    []int{500, 333, 2048, 4096},
+			readBufPattern: []int{4095, 1024, 7777, 64},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// 1. Random passphrase and plaintext
+			passphrase := hex.EncodeToString(randomBytes(t, 32))
+			plaintext := randomBytes(t, tt.totalSize)
+
+			// 2. Init service
+			svc := newTestSvc()
+			if err := svc.InitAESGCM256(passphrase); err != nil {
+				t.Fatalf("InitAESGCM256: %v", err)
+			}
+
+			// 3. Temp file with suffix
+			pattern := "readfill_*" + svc.GetEncryptionFilenameSuffix()
+			f, err := os.CreateTemp("", pattern)
+			if err != nil {
+				t.Fatalf("CreateTemp: %v", err)
+			}
+			fileName := f.Name()
+			defer os.Remove(fileName)
+
+			// 4. Write header
+			if err := svc.WriteEncHeader(f); err != nil {
+				t.Fatalf("WriteEncHeader: %v", err)
+			}
+
+			// 5. Write encrypted chunks
+			offset := 0
+			wcIdx := 0
+			for offset < len(plaintext) {
+				chunkSize := tt.writeChunks[wcIdx%len(tt.writeChunks)]
+				wcIdx++
+				if chunkSize > len(plaintext)-offset {
+					chunkSize = len(plaintext) - offset
+				}
+				chunk := plaintext[offset : offset+chunkSize]
+				n, err := svc.WriteToFile(f, chunk)
+				if err != nil {
+					t.Fatalf("WriteToFile: %v", err)
+				}
+				if n != len(chunk) {
+					t.Fatalf("WriteToFile returned %d expected %d", n, len(chunk))
+				}
+				offset += chunkSize
+			}
+
+			// Close writer before reading
+			if err := f.Close(); err != nil {
+				t.Fatalf("close: %v", err)
+			}
+
+			// 6. Open file (produces decryptorReaderCtx)
+			reader, err := svc.OpenFile(fileName)
+			if err != nil {
+				t.Fatalf("OpenFile: %v", err)
+			}
+			defer func() {
+				// Close underlying file if possible
+				if dc, ok := reader.(*decryptorReaderCtx); ok && dc.file != nil {
+					_ = dc.file.Close()
+				}
+			}()
+
+			// 7. Repeated reads
+			var assembled bytes.Buffer
+			readIdx := 0
+			for {
+				bufSize := tt.readBufPattern[readIdx%len(tt.readBufPattern)]
+				readIdx++
+				buf := make([]byte, bufSize)
+				n, err := reader.ReadAndFillBytes(buf)
+				if n > 0 {
+					assembled.Write(buf[:n])
+				}
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatalf("ReadAndFillBytes error: %v", err)
+				}
+			}
+
+			// 8. Validate
+			got := assembled.Bytes()
+			assert.Equal(t, len(plaintext), len(got), "length mismatch")
+			assert.True(t, bytes.Equal(plaintext, got), "content mismatch")
+		})
+	}
+}
+
+// Additional test focusing on zero-length final read edge.
+func TestDecryptorReaderCtx_ReadAndFillBytes_ZeroLengthFinal(t *testing.T) {
+	passphrase := hex.EncodeToString(randomBytes(t, 16))
+	data := randomBytes(t, 2048)
+
+	svc := newTestSvc()
+	if err := svc.InitAESGCM256(passphrase); err != nil {
+		t.Fatalf("InitAESGCM256: %v", err)
+	}
+
+	f, err := os.CreateTemp("", "zero_final_*"+svc.GetEncryptionFilenameSuffix())
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	name := f.Name()
+	defer os.Remove(name)
+
+	if err := svc.WriteEncHeader(f); err != nil {
+		t.Fatalf("WriteEncHeader: %v", err)
+	}
+	if _, err := svc.WriteToFile(f, data); err != nil {
+		t.Fatalf("WriteToFile: %v", err)
+	}
+	f.Close()
+
+	r, err := svc.OpenFile(name)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	buf := make([]byte, 1500)
+	n1, err1 := r.ReadAndFillBytes(buf)
+	assert.NoError(t, err1)
+	assert.Equal(t, 1500, n1)
+
+	// Second read gets remainder
+	buf2 := make([]byte, 1000)
+	n2, err2 := r.ReadAndFillBytes(buf2)
+	assert.Equal(t, io.EOF, err2)
+	assert.Equal(t, len(data)-n1, n2)
+	combined := append(buf[:n1], buf2[:n2]...)
+	assert.True(t, bytes.Equal(data, combined))
 }

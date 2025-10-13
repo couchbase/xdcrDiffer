@@ -25,6 +25,7 @@ type Bucket struct {
 
 	logger    *xdcrLog.CommonLogger
 	bufferCap int
+	encryptor encryption.FileOps
 }
 type FileHandler struct {
 	fileDir             string
@@ -61,7 +62,7 @@ func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool fdp.FdPoolIf
 				return nil, err
 			}
 		} else {
-			isValid, err := encryptor.ValidateHeader(file)
+			_, isValid, err := encryptor.ValidateHeader(file)
 			if err != nil || !isValid {
 				file.Close()
 				if !isValid {
@@ -88,6 +89,7 @@ func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool fdp.FdPoolIf
 		closeOp:   closeOp,
 		logger:    logger,
 		bufferCap: bufferCap,
+		encryptor: encryptor,
 	}, nil
 }
 
@@ -113,7 +115,7 @@ func (b *Bucket) FlushToFile() error {
 	if b.fdPoolCb != nil {
 		numOfBytes, err = b.fdPoolCb(b.data[:b.index])
 	} else {
-		numOfBytes, err = b.file.Write(b.data[:b.index])
+		numOfBytes, err = b.encryptor.WriteToFile(b.file, b.data[:b.index])
 	}
 	if err != nil {
 		return err

@@ -19,8 +19,9 @@ import (
 )
 
 type CheckpointManager struct {
-	dcpDriver             *DcpDriver
-	clusterName           string
+	dcpDriver   *DcpDriver
+	clusterName string
+	// TODO NEIL - checkpoint file need encryption
 	oldCheckpointFileName string
 	newCheckpointFileName string
 	cluster               *gocb.Cluster
