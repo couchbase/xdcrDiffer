@@ -1358,13 +1358,26 @@ func (difftool *xdcrDiffTool) outputManifestsToFiles(err error) error {
 		return err
 	}
 
-	err = ioutil.WriteFile(utils.GetManifestFileName(options.sourceFileDir, difftool.encryptionSvc), srcManJson, 0644)
+	// Potentially encrypt, or plaintext if non enabled
+	postSrcEncrypted, _, err := difftool.encryptionSvc.Encrypt(srcManJson)
+	if err != nil {
+		difftool.logger.Errorf("SrcManifestEncrypt - %v\n", err)
+		return err
+	}
+
+	postTgtEncrypted, _, err := difftool.encryptionSvc.Encrypt(tgtManJson)
+	if err != nil {
+		difftool.logger.Errorf("TgtManifestEncrypt - %v\n", err)
+		return err
+	}
+
+	err = ioutil.WriteFile(utils.GetManifestFileName(options.sourceFileDir, difftool.encryptionSvc), postSrcEncrypted, 0644)
 	if err != nil {
 		difftool.logger.Errorf("SrcManifestWrite - %v\n", err)
 		return err
 	}
 
-	err = ioutil.WriteFile(utils.GetManifestFileName(options.targetFileDir, difftool.encryptionSvc), tgtManJson, 0644)
+	err = ioutil.WriteFile(utils.GetManifestFileName(options.targetFileDir, difftool.encryptionSvc), postTgtEncrypted, 0644)
 	if err != nil {
 		difftool.logger.Errorf("TgtManifestWrite - %v\n", err)
 		return err
