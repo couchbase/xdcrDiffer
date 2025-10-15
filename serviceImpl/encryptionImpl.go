@@ -151,6 +151,10 @@ func (e *EncryptionServiceImpl) InitAESGCM256(passPhrase string) error {
 	// Generate a salt given the time and some random data
 	randInt := mrand.Int()
 	salt := []byte(time.Now().String() + strconv.Itoa(randInt))
+	// Trim the salt to salt length
+	if len(salt) > encryption.SaltLen {
+		salt = salt[:encryption.SaltLen]
+	}
 
 	budgetDur := 3 * time.Second
 	targetDerivationDur := 100 * time.Millisecond
@@ -165,6 +169,7 @@ func (e *EncryptionServiceImpl) InitAESGCM256(passPhrase string) error {
 		salt:      salt,
 		key:       derivedKey,
 	}
+
 	return nil
 }
 
@@ -225,7 +230,6 @@ func (e *EncryptionServiceImpl) Encrypt(plaintext []byte) ([]byte, []byte, error
 // 1. Magic header
 // 2. 128-bits of unencrypted salt
 // 3. uint64 of PBKDF2 iteration count
-// 4. Encrypted header
 func (e *EncryptionServiceImpl) WriteEncHeader(fileDescriptor *os.File) error {
 	if e == nil || !e.IsEnabled() {
 		// Do nothing
@@ -266,39 +270,6 @@ func (e *EncryptionServiceImpl) WriteEncHeader(fileDescriptor *os.File) error {
 		return fmt.Errorf("failed to write iteration count: wrote %d of %d bytes", n, len(iterBuf))
 	}
 
-	// 4. An encrypted magic
-	// Encrypted writes is in the format of
-	// [nonce][ciphertextLen][ciphertext]
-	// where nonce is of variable length depending on the cipher (12 bytes for GCM)
-	// and ciphertextLen is uint32 big endian
-
-	encryptedHeader, nonce, err := e.Encrypt(encryption.FileMagic)
-	if err != nil {
-		return fmt.Errorf("failed to encrypt header: %w", err)
-	}
-
-	// nonce
-	if n, err := fileDescriptor.Write(nonce); err != nil {
-		return fmt.Errorf("failed to write nonce: %w", err)
-	} else if n != len(nonce) {
-		return fmt.Errorf("failed to write nonce: wrote %d of %d bytes", n, len(nonce))
-	}
-
-	// ciphertext length
-	ciphertextLenBuf := make([]byte, 4)
-	binary.BigEndian.PutUint32(ciphertextLenBuf, uint32(len(encryptedHeader)))
-	if n, err := fileDescriptor.Write(ciphertextLenBuf); err != nil {
-		return fmt.Errorf("failed to write ciphertext length: %w", err)
-	} else if n != len(ciphertextLenBuf) {
-		return fmt.Errorf("failed to write ciphertext length: wrote %d of %d bytes", n, len(ciphertextLenBuf))
-	}
-
-	// ciphertext
-	if n, err := fileDescriptor.Write(encryptedHeader); err != nil {
-		return err
-	} else if n != len(encryptedHeader) {
-		return fmt.Errorf("failed to write encrypted header: wrote %d of %d bytes", n, len(encryptedHeader))
-	}
 	return nil
 }
 
@@ -362,34 +333,6 @@ func (e *EncryptionServiceImpl) ValidateHeader(fileDescriptor *os.File) (*os.Fil
 		return nil, false, fmt.Errorf("invalid iteration count 0")
 	}
 
-	// 4. encrypted magic
-	// Encrypted magic section: [nonce(12)][ciphertextLen(4)][ciphertext]
-	nonce := make([]byte, 12)
-	if n, err := io.ReadFull(fileDescriptor, nonce); err != nil {
-		return nil, false, fmt.Errorf("read nonce error: %w", err)
-	} else if n < len(nonce) {
-		return nil, false, fmt.Errorf("incomplete read of nonce: %d < %d", n, len(nonce))
-	}
-
-	ciphertextLenBuf := make([]byte, 4)
-	if n, err := io.ReadFull(fileDescriptor, ciphertextLenBuf); err != nil {
-		return nil, false, fmt.Errorf("read ciphertext length error: %w", err)
-	} else if n < len(ciphertextLenBuf) {
-		return nil, false, fmt.Errorf("incomplete read of ciphertext length: %d < %d", n, len(ciphertextLenBuf))
-	}
-	ciphertextLen := binary.BigEndian.Uint32(ciphertextLenBuf)
-
-	if ciphertextLen == 0 || ciphertextLen > 10*1024 {
-		return nil, false, fmt.Errorf("invalid ciphertext length %d", ciphertextLen)
-	}
-
-	ciphertext := make([]byte, ciphertextLen)
-	if n, err := io.ReadFull(fileDescriptor, ciphertext); err != nil {
-		return nil, false, fmt.Errorf("read ciphertext error: %w", err)
-	} else if n < int(ciphertextLen) {
-		return nil, false, fmt.Errorf("incomplete read of ciphertext: %d < %d", n, ciphertextLen)
-	}
-
 	// Populate config if enabled and not yet set
 	if atomic.LoadUint32(&e.enabled) == 1 && e.config == nil {
 		e.config = &aes256Config{
@@ -447,21 +390,18 @@ func (e *EncryptionServiceImpl) IsEnabled() bool {
 	return e != nil && atomic.LoadUint32(&e.enabled) == 1
 }
 
-// OpenFile returns a FileReaderOps that can be used to read and decrypt data from the given file
-// It opens the file and then validates the header to ensure the encryption format is recognized
-// If encryption is disabled, it returns a no-op decryptor that reads data as-is
-func (e *EncryptionServiceImpl) OpenFile(fileName string) (encryption.FileReaderOps, error) {
+func (e *EncryptionServiceImpl) openFileImpl(fileName string) (*decryptorReaderCtx, error) {
 	if e == nil {
 		return nil, fmt.Errorf("encryption service is nil")
 	}
 
-	if e.config.key == nil && e.IsEnabled() {
-		return nil, fmt.Errorf("encryption is enabled but key is not set")
-	}
+	// Set enabled to be true and then calculate the key later
+	e.enabled = 1
 
 	decryptorCtx := &decryptorReaderCtx{
 		logger: e.logger,
-		config: e.config,
+		// Set nil so ValidateHeader will populate
+		config: nil,
 	}
 
 	var err error
@@ -494,6 +434,37 @@ func (e *EncryptionServiceImpl) OpenFile(fileName string) (encryption.FileReader
 	return decryptorCtx, nil
 }
 
+// OpenFile returns a FileReaderOps that can be used to read and decrypt data from the given file
+// It opens the file and then validates the header to ensure the encryption format is recognized
+// If encryption is disabled, it returns a no-op decryptor that reads data as-is
+func (e *EncryptionServiceImpl) OpenFile(fileName string) (encryption.FileReaderOps, error) {
+	return e.openFileImpl(fileName)
+}
+
+func (e *EncryptionServiceImpl) OpenFileForDecrypting(fileName string, passphraseGetter func() (string, error)) (encryption.FileReaderOps, error) {
+	decryptorCtx, err := e.openFileImpl(fileName)
+	if err != nil {
+		return nil, err
+	}
+
+	// After validate header, the iteration and salt are populated in e.config
+	if e.config == nil || e.config.salt == nil || e.config.iteration == 0 {
+		decryptorCtx.file.Close()
+		return nil, fmt.Errorf("encryption config not properly populated after header validation")
+	}
+
+	passphrase, err := passphraseGetter()
+	if err != nil {
+		decryptorCtx.file.Close()
+		return nil, fmt.Errorf("failed to get passphrase: %w", err)
+	}
+
+	derivedKey := deriveKey([]byte(passphrase), e.config.salt, int(e.config.iteration), 32)
+	e.config.key = derivedKey
+
+	return decryptorCtx, nil
+}
+
 func (e *EncryptionServiceImpl) Decrypt(ciphertext, nonce []byte) ([]byte, error) {
 	if e == nil || !e.IsEnabled() {
 		// No encryption; return ciphertext as-is
@@ -518,6 +489,34 @@ func (e *EncryptionServiceImpl) Decrypt(ciphertext, nonce []byte) ([]byte, error
 		return nil, err
 	}
 	return plaintext, nil
+}
+
+// DecryptFile reads an encrypted file and outputs the content in a byte slice
+func (e *EncryptionServiceImpl) DecryptFile(fileName string, passphraseGetter func() (string, error)) ([]byte, error) {
+	if e == nil {
+		return nil, fmt.Errorf("encryption service is nil")
+	}
+
+	decryptor, err := e.OpenFileForDecrypting(fileName, passphraseGetter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file %s: %w", fileName, err)
+	}
+
+	var output bytes.Buffer
+	buf := make([]byte, 4096)
+	for {
+		n, err := decryptor.ReadAndFillBytes(buf)
+		if n > 0 {
+			output.Write(buf[:n])
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("error reading and decrypting file %s: %w", fileName, err)
+		}
+	}
+	return output.Bytes(), nil
 }
 
 // ReadAndFillBytes be passed in a buffer with a pre-allocated length

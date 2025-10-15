@@ -29,6 +29,8 @@ var ErrorEncryptionFormatUnrecog = errors.New("encryption file format unrecogniz
 
 type EncryptionSvc interface {
 	FileOps
+	IsEnabled() bool
 	InitAESGCM256(passPhrase string) error
 	Encrypt(plaintext []byte) ([]byte, []byte, error)
+	DecryptFile(fileName string, passphraseGetter func() (string, error)) ([]byte, error)
 }

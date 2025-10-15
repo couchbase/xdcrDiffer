@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"os"
 	"os/signal"
@@ -142,13 +141,15 @@ type inputOptions struct {
 	yamlConfigFilePath string
 	// Prompts the user for an encryption passphrase
 	encryptionPassphrase bool
+	// path or identifier of file to decrypt
+	decryptModeFile string
 }
 
 var options inputOptions = inputOptions{}
 
 func (o inputOptions) String() string {
-	return fmt.Sprintf("Options{sourceUrl: %s, sourceUsername: %s, sourcePassword: REDACTED, sourceBucketName: %s, remoteClusterName: %s, sourceFileDir: %s, targetUrl: %s, targetUsername: %s, targetPassword: REDACTED, targetBucketName: %s, targetFileDir: %s, numberOfSourceDcpClients: %d, numberOfWorkersPerSourceDcpClient: %d, numberOfTargetDcpClients: %d, numberOfWorkersPerTargetDcpClient: %d, numberOfWorkersForFileDiffer: %d, numberOfWorkersForMutationDiffer: %d, numberOfBins: %d, numberOfFileDesc: %d, completeByDuration: %d, completeBySeqno: %t, checkpointFileDir: %s, oldCheckpointFileName: %s, newCheckpointFileName: %s, fileDifferDir: %s, mutationDifferDir: %s, mutationDifferBatchSize: %d, mutationDifferTimeout: %d, sourceDcpHandlerChanSize: %d, targetDcpHandlerChanSize: %d, bucketOpTimeout: %d, maxNumOfGetStatsRetry: %d, maxNumOfSendBatchRetry: %d, getStatsRetryInterval: %d, sendBatchRetryInterval: %d, getStatsMaxBackoff: %d, sendBatchMaxBackoff: %d, delayBetweenSourceAndTarget: %d, checkpointInterval: %d, runDataGeneration: %t, runFileDiffer: %t, runMutationDiffer: %t, enforceTLS: %t, bucketBufferCapacity: %d, compareType: %s, mutationDifferRetries: %d, mutationDifferRetriesWaitSecs: %d, numOfFiltersInFilterPool: %d, debugMode: %t, setupTimeout: %d, fileContaingXattrKeysForNoComapre: %s, yamlConfigFilePath: %s, encryptionPassphrase: %t}",
-		o.sourceUrl, o.sourceUsername, o.sourceBucketName, o.remoteClusterName, o.sourceFileDir, o.targetUrl, o.targetUsername, o.targetBucketName, o.targetFileDir, o.numberOfSourceDcpClients, o.numberOfWorkersPerSourceDcpClient, o.numberOfTargetDcpClients, o.numberOfWorkersPerTargetDcpClient, o.numberOfWorkersForFileDiffer, o.numberOfWorkersForMutationDiffer, o.numberOfBins, o.numberOfFileDesc, o.completeByDuration, o.completeBySeqno, o.checkpointFileDir, o.oldCheckpointFileName, o.newCheckpointFileName, o.fileDifferDir, o.mutationDifferDir, o.mutationDifferBatchSize, o.mutationDifferTimeout, o.sourceDcpHandlerChanSize, o.targetDcpHandlerChanSize, o.bucketOpTimeout, o.maxNumOfGetStatsRetry, o.maxNumOfSendBatchRetry, o.getStatsRetryInterval, o.sendBatchRetryInterval, o.getStatsMaxBackoff, o.sendBatchMaxBackoff, o.delayBetweenSourceAndTarget, o.checkpointInterval, o.runDataGeneration, o.runFileDiffer, o.runMutationDiffer, o.enforceTLS, o.bucketBufferCapacity, o.compareType, o.mutationDifferRetries, o.mutationDifferRetriesWaitSecs, o.numOfFiltersInFilterPool, o.debugMode, o.setupTimeout, o.fileContaingXattrKeysForNoComapre, o.yamlConfigFilePath, o.encryptionPassphrase)
+	return fmt.Sprintf("Options{sourceUrl: %s, sourceUsername: %s, sourcePassword: REDACTED, sourceBucketName: %s, remoteClusterName: %s, sourceFileDir: %s, targetUrl: %s, targetUsername: %s, targetPassword: REDACTED, targetBucketName: %s, targetFileDir: %s, numberOfSourceDcpClients: %d, numberOfWorkersPerSourceDcpClient: %d, numberOfTargetDcpClients: %d, numberOfWorkersPerTargetDcpClient: %d, numberOfWorkersForFileDiffer: %d, numberOfWorkersForMutationDiffer: %d, numberOfBins: %d, numberOfFileDesc: %d, completeByDuration: %d, completeBySeqno: %t, checkpointFileDir: %s, oldCheckpointFileName: %s, newCheckpointFileName: %s, fileDifferDir: %s, mutationDifferDir: %s, mutationDifferBatchSize: %d, mutationDifferTimeout: %d, sourceDcpHandlerChanSize: %d, targetDcpHandlerChanSize: %d, bucketOpTimeout: %d, maxNumOfGetStatsRetry: %d, maxNumOfSendBatchRetry: %d, getStatsRetryInterval: %d, sendBatchRetryInterval: %d, getStatsMaxBackoff: %d, sendBatchMaxBackoff: %d, delayBetweenSourceAndTarget: %d, checkpointInterval: %d, runDataGeneration: %t, runFileDiffer: %t, runMutationDiffer: %t, enforceTLS: %t, bucketBufferCapacity: %d, compareType: %s, mutationDifferRetries: %d, mutationDifferRetriesWaitSecs: %d, numOfFiltersInFilterPool: %d, debugMode: %t, setupTimeout: %d, fileContaingXattrKeysForNoComapre: %s, yamlConfigFilePath: %s, encryptionPassphrase: %t decryptionFile: %s}",
+		o.sourceUrl, o.sourceUsername, o.sourceBucketName, o.remoteClusterName, o.sourceFileDir, o.targetUrl, o.targetUsername, o.targetBucketName, o.targetFileDir, o.numberOfSourceDcpClients, o.numberOfWorkersPerSourceDcpClient, o.numberOfTargetDcpClients, o.numberOfWorkersPerTargetDcpClient, o.numberOfWorkersForFileDiffer, o.numberOfWorkersForMutationDiffer, o.numberOfBins, o.numberOfFileDesc, o.completeByDuration, o.completeBySeqno, o.checkpointFileDir, o.oldCheckpointFileName, o.newCheckpointFileName, o.fileDifferDir, o.mutationDifferDir, o.mutationDifferBatchSize, o.mutationDifferTimeout, o.sourceDcpHandlerChanSize, o.targetDcpHandlerChanSize, o.bucketOpTimeout, o.maxNumOfGetStatsRetry, o.maxNumOfSendBatchRetry, o.getStatsRetryInterval, o.sendBatchRetryInterval, o.getStatsMaxBackoff, o.sendBatchMaxBackoff, o.delayBetweenSourceAndTarget, o.checkpointInterval, o.runDataGeneration, o.runFileDiffer, o.runMutationDiffer, o.enforceTLS, o.bucketBufferCapacity, o.compareType, o.mutationDifferRetries, o.mutationDifferRetriesWaitSecs, o.numOfFiltersInFilterPool, o.debugMode, o.setupTimeout, o.fileContaingXattrKeysForNoComapre, o.yamlConfigFilePath, o.encryptionPassphrase, o.decryptModeFile)
 }
 
 func argParse() {
@@ -258,6 +259,8 @@ func argParse() {
 		"Path to the file containing configuration for the difftool")
 	flag.BoolVar(&options.encryptionPassphrase, "encryptionPassphrase", false,
 		"If present, enables encryption passphrase mode (no argument).")
+	flag.StringVar(&options.decryptModeFile, "decrypt", "",
+		" run the program specifically for the purpose of decrypting an encrypted file with the output to standard out")
 	flag.Parse()
 }
 
@@ -380,8 +383,25 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 		}
 	}
 
+	if options.decryptModeFile != "" && !options.encryptionPassphrase {
+		fmt.Fprintf(os.Stderr, "'-decrypt' requires '-encryptionPassphrase'\n")
+		os.Exit(1)
+	}
+
 	if options.encryptionPassphrase {
-		setupEncryption(difftool)
+		if options.decryptModeFile != "" {
+			// decrypt mode
+			output, err := difftool.encryptionSvc.DecryptFile(options.decryptModeFile, passphraseGetter)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error decrypting file %v: %v\n", options.decryptModeFile, err)
+				os.Exit(1)
+			}
+			fmt.Printf("%s", output)
+			os.Exit(0)
+		} else {
+			// encrypt mode
+			setupEncryption(difftool)
+		}
 	}
 
 	// HLV and importCas needs to be stripped from the Xattrs
@@ -497,13 +517,12 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 	return difftool, err
 }
 
-func setupEncryption(difftool *xdcrDiffTool) {
+func passphraseGetter() (string, error) {
 	fmt.Print("Enter encryption passphrase: ")
 	passphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Println() // move to next line after input
 	if err != nil {
-		fmt.Printf("Error reading passphrase: %v\n", err)
-		os.Exit(1)
+		return "", fmt.Errorf("Error reading passphrase: %v\n", err)
 	}
 	passphrase := string(passphraseBytes)
 	// Use passphrase as needed
@@ -512,12 +531,18 @@ func setupEncryption(difftool *xdcrDiffTool) {
 	confirmPassphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Println()
 	if err != nil {
-		fmt.Printf("Error reading passphrase: %v\n", err)
-		os.Exit(1)
+		return "", fmt.Errorf("Error reading passphrase: %v\n", err)
 	}
 	confirmPassphrase := string(confirmPassphraseBytes)
 	if passphrase != confirmPassphrase {
-		fmt.Println("Passphrases do not match. Exiting.")
+		return "", fmt.Errorf("Passphrases do not match. Exiting.")
+	}
+	return passphrase, nil
+}
+
+func setupEncryption(difftool *xdcrDiffTool) {
+	passphrase, err := passphraseGetter()
+	if err != nil {
 		os.Exit(1)
 	}
 
@@ -1358,28 +1383,41 @@ func (difftool *xdcrDiffTool) outputManifestsToFiles(err error) error {
 		return err
 	}
 
-	// Potentially encrypt, or plaintext if non enabled
-	postSrcEncrypted, _, err := difftool.encryptionSvc.Encrypt(srcManJson)
+	srcFd, err := os.OpenFile(utils.GetManifestFileName(options.sourceFileDir, difftool.encryptionSvc), os.O_WRONLY|os.O_CREATE, base.FileModeReadWrite)
 	if err != nil {
-		difftool.logger.Errorf("SrcManifestEncrypt - %v\n", err)
+		difftool.logger.Errorf("SrcManifestOpenFile - %v\n", err)
+		return err
+	}
+	defer srcFd.Close()
+
+	tgtFd, err := os.OpenFile(utils.GetManifestFileName(options.targetFileDir, difftool.encryptionSvc), os.O_WRONLY|os.O_CREATE, base.FileModeReadWrite)
+	if err != nil {
+		difftool.logger.Errorf("TgtManifestOpenFile - %v\n", err)
+		return err
+	}
+	defer tgtFd.Close()
+
+	err = difftool.encryptionSvc.WriteEncHeader(srcFd)
+	if err != nil {
+		difftool.logger.Errorf("SrcManifestWriteHeader - %v\n", err)
 		return err
 	}
 
-	postTgtEncrypted, _, err := difftool.encryptionSvc.Encrypt(tgtManJson)
+	err = difftool.encryptionSvc.WriteEncHeader(tgtFd)
 	if err != nil {
-		difftool.logger.Errorf("TgtManifestEncrypt - %v\n", err)
+		difftool.logger.Errorf("TgtManifestWriteHeader - %v\n", err)
 		return err
 	}
 
-	err = ioutil.WriteFile(utils.GetManifestFileName(options.sourceFileDir, difftool.encryptionSvc), postSrcEncrypted, 0644)
+	_, err = difftool.encryptionSvc.WriteToFile(srcFd, srcManJson)
 	if err != nil {
-		difftool.logger.Errorf("SrcManifestWrite - %v\n", err)
+		difftool.logger.Errorf("SrcManifestWriteToFile - %v\n", err)
 		return err
 	}
 
-	err = ioutil.WriteFile(utils.GetManifestFileName(options.targetFileDir, difftool.encryptionSvc), postTgtEncrypted, 0644)
+	_, err = difftool.encryptionSvc.WriteToFile(tgtFd, tgtManJson)
 	if err != nil {
-		difftool.logger.Errorf("TgtManifestWrite - %v\n", err)
+		difftool.logger.Errorf("TgtManifestWriteToFile - %v\n", err)
 		return err
 	}
 	return nil
