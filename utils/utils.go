@@ -263,12 +263,16 @@ func PopulateCCCPConnectString(url string) string {
 	return cccpUrl
 }
 
-func DiffKeysFileName(isSource bool, diffFileDir, diffKeysFileName string) string {
+func DiffKeysFileName(isSource bool, diffFileDir, diffKeysFileName string, svc encryption.EncryptionSvc) string {
 	suffix := base.SourceClusterName
 	if !isSource {
 		suffix = base.TargetClusterName
 	}
-	return diffFileDir + base.FileDirDelimiter + diffKeysFileName + base.FileNameDelimiter + suffix
+	return diffFileDir + base.FileDirDelimiter + diffKeysFileName + base.FileNameDelimiter + suffix + svc.GetEncryptionFilenameSuffix()
+}
+
+func DiffKeysSrcMigrationFileName(diffKeysFileName string, svc encryption.EncryptionSvc) string {
+	return fmt.Sprintf("%v_%v%v", diffKeysFileName, base.DiffKeysSrcMigrationHintSuffix+svc.GetEncryptionFilenameSuffix())
 }
 
 func GetCertificate(u xdcrUtils.UtilsIface, hostname string, username, password string, authMech xdcrBase.HttpAuthMech) ([]byte, error) {

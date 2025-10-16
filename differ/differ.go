@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +25,7 @@ import (
 	crMeta "github.com/couchbase/goxdcr/v8/crMeta"
 	hlv "github.com/couchbase/goxdcr/v8/hlv"
 	xdcrLog "github.com/couchbase/goxdcr/v8/log"
+	"github.com/couchbase/xdcrDiffer/encryption"
 	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
 	"github.com/couchbase/xdcrDiffer/utils"
 )
@@ -102,13 +102,19 @@ type FileAttributes struct {
 	closeOp       func() error
 }
 
-func NewFileAttribute(fileName string) *FileAttributes {
+func NewFileAttribute(fileName string, encReader encryption.FileOps) (*FileAttributes, error) {
+	fileReaderOps, err := encReader.OpenFile(fileName)
+	if err != nil {
+		return nil, err
+	}
+
 	attr := &FileAttributes{
 		name:          fileName,
 		entries:       make(map[uint32]map[string]*oneEntry),
 		sortedEntries: make(map[uint32][]*oneEntry),
+		readOp:        fileReaderOps.ReadAndFillBytes,
 	}
-	return attr
+	return attr, nil
 }
 
 type oneEntry struct {
@@ -231,10 +237,19 @@ func (srcEntry *oneEntry) MapsToTargetCol(tgtColId uint32, colFilterTgtIds []uin
 	return false
 }
 
-func NewFilesDiffer(file1, file2 string, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32, logger *xdcrLog.CommonLogger) *FilesDiffer {
+func NewFilesDiffer(file1, file2 string, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32, logger *xdcrLog.CommonLogger, encReader encryption.FileOps) (*FilesDiffer, error) {
+	file1Attr, err := NewFileAttribute(file1, encReader)
+	if err != nil {
+		return nil, err
+	}
+	file2Attr, err := NewFileAttribute(file2, encReader)
+	if err != nil {
+		return nil, err
+	}
+
 	differ := &FilesDiffer{
-		file1:               *NewFileAttribute(file1),
-		file2:               *NewFileAttribute(file2),
+		file1:               *file1Attr,
+		file2:               *file2Attr,
 		collectionIdMapping: collectionMapping,
 		colFilterStrings:    colFilterStrings,
 		colFilterTgtIds:     colFilterTgtIds,
@@ -246,12 +261,15 @@ func NewFilesDiffer(file1, file2 string, collectionMapping map[uint32][]uint32, 
 		differ.collectionIdMapping = make(map[uint32][]uint32)
 		differ.collectionIdMapping[0] = []uint32{0}
 	}
-	return differ
+	return differ, nil
 }
 
-func NewFilesDifferWithFDPool(file1, file2 string, fdPool *fdp.FdPool, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32, logger *xdcrLog.CommonLogger) (*FilesDiffer, error) {
+func NewFilesDifferWithFDPool(file1, file2 string, fdPool *fdp.FdPool, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32, logger *xdcrLog.CommonLogger, encryptionSvc encryption.FileOps) (*FilesDiffer, error) {
 	var err error
-	differ := NewFilesDiffer(file1, file2, collectionMapping, colFilterStrings, colFilterTgtIds, logger)
+	differ, err := NewFilesDiffer(file1, file2, collectionMapping, colFilterStrings, colFilterTgtIds, logger, encryptionSvc)
+	if err != nil {
+		return nil, err
+	}
 	if fdPool != nil {
 		differ.fdPool = fdPool
 		differ.file1.readOp, err = fdPool.RegisterReadOnlyFileHandle(file1)
@@ -450,7 +468,6 @@ func (attr *FileAttributes) fillAndDedupEntries() error {
 	if strings.Contains(err.Error(), io.EOF.Error()) {
 		err = nil
 	}
-
 	return err
 }
 
@@ -469,13 +486,6 @@ func (attr *FileAttributes) LoadFileIntoBuffer() error {
 	}
 	if attr.readOp != nil && attr.closeOp != nil {
 		defer attr.closeOp()
-	} else {
-		file, err := os.Open(attr.name)
-		defer file.Close()
-		if err != nil {
-			return err
-		}
-		attr.readOp = file.Read
 	}
 	err := attr.fillAndDedupEntries()
 	if err != nil {

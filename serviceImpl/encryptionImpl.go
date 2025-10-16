@@ -390,13 +390,15 @@ func (e *EncryptionServiceImpl) IsEnabled() bool {
 	return e != nil && atomic.LoadUint32(&e.enabled) == 1
 }
 
-func (e *EncryptionServiceImpl) openFileImpl(fileName string) (*decryptorReaderCtx, error) {
+func (e *EncryptionServiceImpl) openFileImpl(fileName string, forceEnable bool) (*decryptorReaderCtx, error) {
 	if e == nil {
 		return nil, fmt.Errorf("encryption service is nil")
 	}
 
-	// Set enabled to be true and then calculate the key later
-	e.enabled = 1
+	if forceEnable {
+		// Set enabled to be true and then calculate the key later
+		e.enabled = 1
+	}
 
 	decryptorCtx := &decryptorReaderCtx{
 		logger: e.logger,
@@ -438,11 +440,11 @@ func (e *EncryptionServiceImpl) openFileImpl(fileName string) (*decryptorReaderC
 // It opens the file and then validates the header to ensure the encryption format is recognized
 // If encryption is disabled, it returns a no-op decryptor that reads data as-is
 func (e *EncryptionServiceImpl) OpenFile(fileName string) (encryption.FileReaderOps, error) {
-	return e.openFileImpl(fileName)
+	return e.openFileImpl(fileName, false)
 }
 
 func (e *EncryptionServiceImpl) OpenFileForDecrypting(fileName string, passphraseGetter func() (string, error)) (encryption.FileReaderOps, error) {
-	decryptorCtx, err := e.openFileImpl(fileName)
+	decryptorCtx, err := e.openFileImpl(fileName, true)
 	if err != nil {
 		return nil, err
 	}
@@ -547,7 +549,7 @@ func (d *decryptorReaderCtx) ReadAndFillBytes(buffer []byte) (int, error) {
 	defer d.mtx.Unlock()
 
 	if d.bytesDecrypted == 0 {
-		// Reached EOF cleanly
+		// No more data to read
 		return 0, io.EOF
 	}
 
@@ -562,8 +564,6 @@ func (d *decryptorReaderCtx) ReadAndFillBytes(buffer []byte) (int, error) {
 
 	if d.bytesDecrypted < 0 {
 		return 0, fmt.Errorf("internal error: bytesDecrypted < 0")
-	} else if d.bytesDecrypted == 0 {
-		return lenToRead, io.EOF
 	} else {
 		return lenToRead, nil
 	}
@@ -584,7 +584,7 @@ func (d *decryptorReaderCtx) decryptAndFillInternalBuffer(lenToRead int) error {
 		if n, err := io.ReadFull(d.file, nonceAndCipherLen[:]); err != nil {
 			if err == io.EOF && n == 0 {
 				// Reached EOF cleanly
-				return nil
+				break
 			}
 		} else if n != len(nonceAndCipherLen) {
 			return fmt.Errorf("incomplete read of nonce+ciphertext length: %d < %d", n, len(nonceAndCipherLen))
@@ -640,7 +640,6 @@ func (d *decryptorReaderCtx) decryptAndFillInternalBuffer(lenToRead int) error {
 
 		copy(d.decryptedBuf[d.bytesDecrypted:], plaintext)
 		d.bytesDecrypted += len(plaintext)
-		continue
 	}
 
 	return nil

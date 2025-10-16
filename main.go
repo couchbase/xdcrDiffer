@@ -1036,7 +1036,7 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 		time.Duration(options.sendBatchRetryInterval)*time.Millisecond,
 		time.Duration(options.sendBatchMaxBackoff)*time.Second, options.compareType, difftool.logger, difftool.srcToTgtColIdsMap,
 		difftool.srcCapabilities, difftool.tgtCapabilities, difftool.utils, options.mutationDifferRetries,
-		options.mutationDifferRetriesWaitSecs, difftool.duplicatedMapping)
+		options.mutationDifferRetriesWaitSecs, difftool.duplicatedMapping, difftool.encryptionSvc)
 	err = mutationDiffer.Run()
 	if err != nil {
 		difftool.logger.Errorf("Error from runMutationDiffer = %v\n", err)

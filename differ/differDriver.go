@@ -12,7 +12,6 @@ package differ
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"sort"
 	"sync"
@@ -424,22 +423,46 @@ func (dr *DifferDriver) writeSrcDiffKeys(isSrc bool, waitGrp *sync.WaitGroup) er
 		return err
 	}
 
-	diffKeysFileName := utils.DiffKeysFileName(isSrc, dr.diffFileDir, dr.diffKeysFileName)
+	diffKeysFileName := utils.DiffKeysFileName(isSrc, dr.diffFileDir, dr.diffKeysFileName, dr.encryptionSvc)
 	diffKeysFile, err := os.OpenFile(diffKeysFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
 	if err != nil {
 		return err
 	}
-	_, err = diffKeysFile.Write(diffKeysBytes)
-	diffKeysFile.Close()
+	defer diffKeysFile.Close()
+
+	err = dr.encryptionSvc.WriteEncHeader(diffKeysFile)
+	if err != nil {
+		dr.logger.Errorf("writeSrcDiffKeys - %v\n", err)
+		return err
+	}
+
+	_, err = dr.encryptionSvc.WriteToFile(diffKeysFile, diffKeysBytes)
+	if err != nil {
+		dr.logger.Errorf("writeSrcDiffKeys to file - %v\n", err)
+		return err
+	}
 
 	if isSrc && len(dr.colFilterStrings) > 0 {
-		migrationHintFile := fmt.Sprintf("%v_%v", diffKeysFileName, base.DiffKeysSrcMigrationHintSuffix)
+		migrationHintFile := utils.DiffKeysSrcMigrationFileName(diffKeysFileName, dr.encryptionSvc)
 		data, err := json.Marshal(dr.srcMigrationHint)
 		if err != nil {
 			return err
 		}
-		err = ioutil.WriteFile(migrationHintFile, data, 0644)
+
+		srcMigrationHintFd, err := os.OpenFile(migrationHintFile, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
 		if err != nil {
+			return err
+		}
+		defer srcMigrationHintFd.Close()
+
+		err = dr.encryptionSvc.WriteEncHeader(srcMigrationHintFd)
+		if err != nil {
+			dr.logger.Errorf("writeSrcDiffKeys migration hint - %v\n", err)
+			return err
+		}
+		_, err = dr.encryptionSvc.WriteToFile(srcMigrationHintFd, data)
+		if err != nil {
+			dr.logger.Errorf("writeSrcDiffKeys migration hint to file - %v\n", err)
 			return err
 		}
 	}
@@ -486,8 +509,6 @@ func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFile
 }
 
 func (dh *DifferHandler) run() error {
-	//fmt.Printf("DiffHandler %v starting\n", dh.index)
-	//defer fmt.Printf("DiffHandler %v stopping\n", dh.index)
 	defer dh.waitGroup.Done()
 
 	err := dh.initialize()
@@ -503,7 +524,7 @@ func (dh *DifferHandler) run() error {
 			sourceFileName := utils.GetFileName(dh.sourceFileDir, vbno, bucketIndex, dh.encryptionSvc)
 			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex, dh.encryptionSvc)
 
-			filesDiffer, err := NewFilesDifferWithFDPool(sourceFileName, targetFileName, dh.fileDescPool, dh.collectionMapping, dh.colFilterStrings, dh.colFilterTgtIds, dh.driver.logger)
+			filesDiffer, err := NewFilesDifferWithFDPool(sourceFileName, targetFileName, dh.fileDescPool, dh.collectionMapping, dh.colFilterStrings, dh.colFilterTgtIds, dh.driver.logger, dh.encryptionSvc)
 			if err != nil {
 				// Most likely FD overrun, program should exit. Print a msg just in case
 				dh.driver.logger.Errorf("Creating file differ for files %v and %v resulted in error: %v\n",
@@ -522,7 +543,7 @@ func (dh *DifferHandler) run() error {
 			}
 			srcDiffMap, tgtDiffMap, migrationHints, diffBytes, err := filesDiffer.Diff()
 			if err != nil {
-				fmt.Printf("error getting srcDiff from file differ. err=%v\n", err)
+				dh.driver.logger.Errorf("error occured while diffing files. err %v", err)
 				continue
 			}
 			if len(srcDiffMap) > 0 || len(tgtDiffMap) > 0 {

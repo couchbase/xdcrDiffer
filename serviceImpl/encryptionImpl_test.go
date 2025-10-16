@@ -335,7 +335,7 @@ func TestEncryptionServiceImpl_OpenFile_Success(t *testing.T) {
 
 	buf := make([]byte, len(plaintext))
 	readN, err := handle.ReadAndFillBytes(buf)
-	assert.Equal(t, err, io.EOF)
+	assert.Nil(t, err)
 	assert.Equal(t, len(plaintext), readN)
 	assert.True(t, bytes.Equal(plaintext, buf))
 
@@ -683,12 +683,70 @@ func TestEncryptionServiceImpl_WriteToFile(t *testing.T) {
 				assert.NotNil(t, handle)
 				buf := make([]byte, len(tt.args.data))
 				readN, err := handle.ReadAndFillBytes(buf)
-				assert.Equal(t, err, io.EOF)
+				assert.Nil(t, err)
 				assert.Equal(t, len(tt.args.data), readN)
 				assert.Equal(t, tt.args.data, buf)
 			}
 			assert.Equalf(t, tt.want, got, "WriteToFile(%v, %v)", tt.args.fileDescriptor, tt.args.data)
 		})
+	}
+}
+
+func TestActualSmallDataForEncrypt(t *testing.T) {
+	// Boilerplate: initialize encryption service with random passphrase.
+	passphrase := hex.EncodeToString(randomBytes(t, 32))
+
+	svc := newTestSvc()
+	if err := svc.InitAESGCM256(passphrase); err != nil {
+		t.Fatalf("InitAESGCM256 failed: %v", err)
+	}
+
+	// Confirm service is enabled.
+	if svc.GetEncryptionFilenameSuffix() == "" {
+		t.Fatalf("encryption suffix empty; service not enabled")
+	}
+
+	// Small plaintext to encrypt.
+	plaintext := []byte("{\"10\":[\"d2\"]}")
+
+	// Create temp file with encryption suffix and write encrypted plaintext.
+	f, err := os.CreateTemp("", "smalldata_*"+svc.GetEncryptionFilenameSuffix())
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	defer os.Remove(f.Name())
+	// Write header first.
+	if err := svc.WriteEncHeader(f); err != nil {
+		t.Fatalf("WriteEncHeader failed: %v", err)
+	}
+	// Write encrypted data (returns plaintext length).
+	n, err := svc.WriteToFile(f, plaintext)
+	if err != nil {
+		t.Fatalf("WriteToFile failed: %v", err)
+	}
+	if n != len(plaintext) {
+		t.Fatalf("WriteToFile returned %d want %d", n, len(plaintext))
+	}
+	f.Close()
+
+	// Initialize a new decryptor service with the same passphrase and reopen file
+	decryptorSvc := newTestSvc()
+	passPhraseGetter := func() (string, error) {
+		return passphrase, nil
+	}
+	// Reopen and verify decrypted round trip using new service
+	r, err := decryptorSvc.OpenFileForDecrypting(f.Name(), passPhraseGetter)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	buf := make([]byte, len(plaintext))
+	readN, _ := r.ReadAndFillBytes(buf)
+	if readN != len(plaintext) {
+		t.Fatalf("read %d want %d", readN, len(plaintext))
+	}
+	if !bytes.Equal(buf, plaintext) {
+		t.Fatalf("content mismatch")
 	}
 }
 
@@ -711,7 +769,6 @@ func TestDecryptorReaderCtx_ReadAndFillBytes_RoundTrip(t *testing.T) {
 		readBufPattern []int // pattern for ReadAndFillBytes buffer sizes
 	}
 	tests := []tc{
-		// NEIL TODO - small_chunks_small_read is failing
 		//{
 		//	name:           "small_chunks_small_reads",
 		//	totalSize:      4096,
@@ -866,7 +923,7 @@ func TestDecryptorReaderCtx_ReadAndFillBytes_ZeroLengthFinal(t *testing.T) {
 	// Second read gets remainder
 	buf2 := make([]byte, 1000)
 	n2, err2 := r.ReadAndFillBytes(buf2)
-	assert.Equal(t, io.EOF, err2)
+	assert.Nil(t, err2)
 	assert.Equal(t, len(data)-n1, n2)
 	combined := append(buf[:n1], buf2[:n2]...)
 	assert.True(t, bytes.Equal(data, combined))
