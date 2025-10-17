@@ -576,17 +576,22 @@ func (dh *DifferHandler) run() error {
 }
 
 func (dh *DifferHandler) initialize() error {
-	diffDetailsFileName := dh.driver.diffFileDir + base.FileDirDelimiter + base.DiffDetailsFileName + base.FileNameDelimiter + fmt.Sprintf("%v", dh.index)
-	diffDetailsFile, err := os.OpenFile(diffDetailsFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
+	diffDetailsFileName := dh.driver.diffFileDir + base.FileDirDelimiter + base.DiffDetailsFileName + base.FileNameDelimiter + fmt.Sprintf("%v", dh.index) + dh.encryptionSvc.GetEncryptionFilenameSuffix()
+	diffDetailsFileDesc, err := os.OpenFile(diffDetailsFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
 	if err != nil {
 		return err
 	}
-	dh.diffDetailsFile = diffDetailsFile
+	err = dh.encryptionSvc.WriteEncHeader(diffDetailsFileDesc)
+	if err != nil {
+		dh.driver.logger.Errorf("DifferHandler initialize - %v\n", err)
+		return err
+	}
+	dh.diffDetailsFile = diffDetailsFileDesc
 	return nil
 }
 
 func (dh *DifferHandler) writeDiffBytes(diffBytes []byte) error {
-	_, err := dh.diffDetailsFile.Write(diffBytes)
+	_, err := dh.encryptionSvc.WriteToFile(dh.diffDetailsFile, diffBytes)
 	if err != nil {
 		fmt.Printf("Diff handler %v error writing srcDiff details. err=%v\n", dh.index, err)
 	}
