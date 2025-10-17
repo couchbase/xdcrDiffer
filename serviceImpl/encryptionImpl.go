@@ -129,6 +129,9 @@ type EncryptionServiceImpl struct {
 
 	logger *xdcrLog.CommonLogger
 	config *aes256Config
+
+	encryptedLoggerContext *xdcrLog.LoggerContext
+	encryptedWriter        *encryptedIoWriter
 }
 
 func NewEncryptionService() *EncryptionServiceImpl {
@@ -665,4 +668,82 @@ func (d *decryptorReaderCtx) decryptAndFillInternalBuffer(lenToRead int) error {
 	}
 
 	return nil
+}
+
+type encryptedIoWriter struct {
+	fileName       string
+	fileDescriptor *os.File
+	fileOps        encryption.FileOps
+}
+
+func (e *encryptedIoWriter) Init(svc *EncryptionServiceImpl) error {
+	// If a file already exists, error out
+	if _, err := os.Stat(e.fileName); err == nil {
+		return fmt.Errorf("file %s already exists", e.fileName)
+	}
+
+	fd, err := os.Create(e.fileName)
+	if err != nil {
+		return fmt.Errorf("failed to create file %s: %w", e.fileName, err)
+	}
+
+	e.fileOps = svc
+	err = e.fileOps.WriteEncHeader(fd)
+	if err != nil {
+		return fmt.Errorf("failed to write encryption header to file %s: %w", e.fileName, err)
+	}
+
+	e.fileDescriptor = fd
+	return nil
+}
+
+func (e *encryptedIoWriter) Close() error {
+	if e.fileDescriptor != nil {
+		return e.fileDescriptor.Close()
+	}
+	return nil
+}
+
+func (e *encryptedIoWriter) Write(p []byte) (n int, err error) {
+	if e.fileDescriptor == nil {
+		return 0, fmt.Errorf("file descriptor is nil")
+	}
+	// Output to stdout
+	_, _ = os.Stdout.Write(p)
+	return e.fileOps.WriteToFile(e.fileDescriptor, p)
+}
+
+func (e *EncryptionServiceImpl) GetLoggerContext(fileName string) (*xdcrLog.LoggerContext, func(), error) {
+	if !e.IsEnabled() {
+		return nil, nil, fmt.Errorf("service is not enabled")
+	}
+
+	e.encryptedWriter = &encryptedIoWriter{
+		fileName: fileName,
+	}
+
+	err := e.encryptedWriter.Init(e)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to initialize encrypted log writer: %w", err)
+	}
+
+	doneCb := func() {
+		e.encryptedWriter.Close()
+	}
+
+	logWriters := make(map[xdcrLog.LogLevel]io.Writer)
+	encryptedLogWriter := e.encryptedWriter
+	logWriters[xdcrLog.LogLevelFatal] = encryptedLogWriter
+	logWriters[xdcrLog.LogLevelError] = encryptedLogWriter
+	logWriters[xdcrLog.LogLevelWarn] = encryptedLogWriter
+	logWriters[xdcrLog.LogLevelInfo] = encryptedLogWriter
+	logWriters[xdcrLog.LogLevelDebug] = encryptedLogWriter
+	logWriters[xdcrLog.LogLevelTrace] = encryptedLogWriter
+
+	encryptedCtx := &xdcrLog.LoggerContext{
+		Log_writers: logWriters,
+		Log_level:   xdcrLog.LogLevelInfo,
+	}
+
+	return encryptedCtx, doneCb, nil
 }

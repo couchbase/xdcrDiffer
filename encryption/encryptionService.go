@@ -1,6 +1,10 @@
 package encryption
 
-import "errors"
+import (
+	"errors"
+
+	xdcrLog "github.com/couchbase/goxdcr/v8/log"
+)
 
 const (
 	EncSuffix = ".enc"
@@ -33,4 +37,5 @@ type EncryptionSvc interface {
 	InitAESGCM256(passPhrase string) error
 	Encrypt(plaintext []byte) ([]byte, []byte, error)
 	DecryptFile(fileName string, passphraseGetter func() (string, error)) ([]byte, error)
+	GetLoggerContext(fileName string) (*xdcrLog.LoggerContext, func(), error)
 }

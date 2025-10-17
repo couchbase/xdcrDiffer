@@ -219,9 +219,7 @@ function clearBeforeRun {
 	local outDir=$2
 	if [[ ! -z "$clean" ]]; then
 		echo "Cleaning up before run..."
-		for directory in "source" "target" "fileDiff" "mutationDiff" "checkpoint" "xdcrDiffer.log"; do
-			rm -rf "$outDir/$directory"
-		done
+		rm -rf "$outDir"
 	fi
 }
 
@@ -333,6 +331,8 @@ function setupFromCmdLine {
 		execString="${execString} $debugMode"
 	fi
 	if [[ ! -z "$encryptionPassphrase" ]]; then
+		execString="${execString} -encryptedLogFile"
+		execString="${execString} \"$differLogFilePath\""
 		execString="${execString} -encryptionPassphrase"
 	fi
 	if [[ ! -z "$xattrExcludeKeysFile" ]]; then
@@ -416,6 +416,11 @@ else
 	setupFromCmdLine
 fi
 
-$execString 2>&1 | tee $differLogFilePath
+if [[ ! -z "$encryptionPassphrase" ]];then
+  # encryption mode means the script doesn't log the file, let the encrypted logger log the file
+  $execString 2>&1
+else
+  $execString 2>&1 | tee $differLogFilePath
+fi
 
 unset CBAUTH_REVRPC_URL
