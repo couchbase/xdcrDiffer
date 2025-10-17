@@ -12,7 +12,6 @@ package differ
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"math"
 	"os"
 	"reflect"
@@ -398,39 +397,55 @@ func (d *MutationDiffer) writeDiffDetails() error {
 }
 
 func (d *MutationDiffer) writeCollectionMapping() error {
-	fileName := base.MutationDiffColIdMapping
-	srcMapFilename := d.mutationDifferFileDir + base.FileDirDelimiter + fileName
-
-	srcMappingBytes, srcErr := json.Marshal(d.colIdsMap)
-	if srcErr != nil {
+	srcMappingBytes, err := json.Marshal(d.colIdsMap)
+	if err != nil {
 		d.logger.Errorf("Unable to marshal colIdsMap: %v\n", d.colIdsMap)
-	} else {
-		srcErr = ioutil.WriteFile(srcMapFilename, srcMappingBytes, 0644)
+		return err
 	}
 
-	if srcErr != nil {
-		return srcErr
-	} else {
-		return nil
+	fileName := base.MutationDiffColIdMapping
+	srcMapFilename := d.mutationDifferFileDir + base.FileDirDelimiter + fileName + d.encryptionSvc.GetEncryptionFilenameSuffix()
+	srcMapFd, err := os.OpenFile(srcMapFilename, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
+	if err != nil {
+		d.logger.Errorf("Unable to open collection mapping file: %v\n", srcMapFilename)
+		return err
 	}
+	defer srcMapFd.Close()
+
+	err = d.encryptionSvc.WriteEncHeader(srcMapFd)
+	if err != nil {
+		d.logger.Errorf("Unable to write collection mapping file: %v\n", srcMapFilename)
+		return err
+	}
+	_, err = d.encryptionSvc.WriteToFile(srcMapFd, srcMappingBytes)
+	if err != nil {
+		d.logger.Errorf("Unable to write collection mapping file: %v\n", srcMapFilename)
+		return err
+	}
+	return nil
 }
 
 func (d *MutationDiffer) writeKeysWithError() error {
 	keysWithErrorBytes, err := json.Marshal(d.keysWithError)
 	if err != nil {
+		d.logger.Errorf("Unable to marshal keysWithError: %v\n", d.keysWithError)
 		return err
 	}
 
-	keysWithErrorFileName := d.mutationDifferFileDir + base.FileDirDelimiter + base.DiffErrorKeysFileName
+	keysWithErrorFileName := d.mutationDifferFileDir + base.FileDirDelimiter + base.DiffErrorKeysFileName + d.encryptionSvc.GetEncryptionFilenameSuffix()
 	keysWithErrorFile, err := os.OpenFile(keysWithErrorFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
+	err = d.encryptionSvc.WriteEncHeader(keysWithErrorFile)
 	if err != nil {
+		d.logger.Errorf("Unable to write collection mapping file: %v\n", keysWithErrorFileName)
 		return err
 	}
-
 	defer keysWithErrorFile.Close()
-
-	_, err = keysWithErrorFile.Write(keysWithErrorBytes)
-	return err
+	_, err = d.encryptionSvc.WriteToFile(keysWithErrorFile, keysWithErrorBytes)
+	if err != nil {
+		d.logger.Errorf("Unable to write keysWithError file: %v\n", keysWithErrorFileName)
+		return err
+	}
+	return nil
 }
 
 func (d *MutationDiffer) getDiffBytes() ([]byte, error) {
@@ -448,7 +463,7 @@ func (d *MutationDiffer) getDiffBytes() ([]byte, error) {
 
 func (d *MutationDiffer) writeDiffBytesToFile(diffBytes []byte) error {
 	fileName := base.MutationDiffFileName
-	fullFileName := d.mutationDifferFileDir + base.FileDirDelimiter + fileName
+	fullFileName := d.mutationDifferFileDir + base.FileDirDelimiter + fileName + d.encryptionSvc.GetEncryptionFilenameSuffix()
 
 	diffFile, err := os.OpenFile(fullFileName, os.O_RDWR|os.O_CREATE, base.FileModeReadWrite)
 	if err != nil {
@@ -457,9 +472,18 @@ func (d *MutationDiffer) writeDiffBytesToFile(diffBytes []byte) error {
 
 	defer diffFile.Close()
 
-	_, err = diffFile.Write(diffBytes)
-	return err
+	err = d.encryptionSvc.WriteEncHeader(diffFile)
+	if err != nil {
+		d.logger.Errorf("Unable to write collection mapping file: %v\n", fullFileName)
+		return err
+	}
 
+	_, err = d.encryptionSvc.WriteToFile(diffFile, diffBytes)
+	if err != nil {
+		d.logger.Errorf("Unable to write diff file: %v\n", fullFileName)
+		return err
+	}
+	return nil
 }
 
 func (d *MutationDiffer) loadDiffKeys() (DiffKeysMap, DiffKeysMap, MigrationHintMap, error) {
@@ -1435,14 +1459,29 @@ func (d *MutationDiffer) clearGoCbResults() {
 
 func (d *MutationDiffer) writeMigrationDetails() error {
 	fileName := base.MutationDiffMigrationDetails
-	srcMapFilename := d.mutationDifferFileDir + base.FileDirDelimiter + fileName
+	srcMapFilename := d.mutationDifferFileDir + base.FileDirDelimiter + fileName + d.encryptionSvc.GetEncryptionFilenameSuffix()
 
 	bytes, err := json.Marshal(d.duplicateMap.ToIntMap())
 	if err != nil {
 		return err
 	}
-	err = os.WriteFile(srcMapFilename, bytes, 0644)
+
+	fd, err := os.OpenFile(srcMapFilename, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
+		d.logger.Errorf("writeMigrationDetails migration err - %v\n", err)
+		return err
+	}
+	defer fd.Close()
+
+	err = d.encryptionSvc.WriteEncHeader(fd)
+	if err != nil {
+		d.logger.Errorf("writeMigrationDetails migration err - %v\n", err)
+		return err
+	}
+
+	_, err = d.encryptionSvc.WriteToFile(fd, bytes)
+	if err != nil {
+		d.logger.Errorf("writeMigrationDetails migration err - %v\n", err)
 		return err
 	}
 	return nil
