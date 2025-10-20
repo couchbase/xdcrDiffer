@@ -569,6 +569,28 @@ func (d *decryptorReaderCtx) ReadAndFillBytes(buffer []byte) (int, error) {
 	}
 }
 
+func (d *decryptorReaderCtx) ReadFile() ([]byte, error) {
+	if d == nil {
+		return nil, fmt.Errorf("decryptor context is nil")
+	}
+	// Use incremental reader so we leverage existing buffering/decryption logic.
+	var buf bytes.Buffer
+	tmp := make([]byte, 4096)
+	for {
+		n, err := d.ReadAndFillBytes(tmp)
+		if n > 0 {
+			buf.Write(tmp[:n])
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
+}
+
 func (d *decryptorReaderCtx) decryptAndFillInternalBuffer(lenToRead int) error {
 	d.mtx.Lock()
 	defer d.mtx.Unlock()

@@ -928,3 +928,78 @@ func TestDecryptorReaderCtx_ReadAndFillBytes_ZeroLengthFinal(t *testing.T) {
 	combined := append(buf[:n1], buf2[:n2]...)
 	assert.True(t, bytes.Equal(data, combined))
 }
+
+func Test_decryptorReaderCtx_ReadFile(t *testing.T) {
+	type fileSizeCase struct {
+		name string
+		size int
+	}
+	cases := []fileSizeCase{
+		{name: "empty_file", size: 0},
+		{name: "tiny_file", size: 1},
+		{name: "small_file", size: 32},
+		{name: "medium_unaligned", size: 4096 + 123},
+		{name: "large_file", size: 512 * 1024},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			passphrase := hex.EncodeToString(randomBytes(t, 32))
+			svc := newTestSvc()
+			if err := svc.InitAESGCM256(passphrase); err != nil {
+				t.Fatalf("InitAESGCM256: %v", err)
+			}
+
+			f, err := os.CreateTemp("", fmt.Sprintf("readfile_%s_*%s", c.name, svc.GetEncryptionFilenameSuffix()))
+			if err != nil {
+				t.Fatalf("CreateTemp: %v", err)
+			}
+			defer os.Remove(f.Name())
+
+			if err := svc.WriteEncHeader(f); err != nil {
+				t.Fatalf("WriteEncHeader: %v", err)
+			}
+
+			original := randomBytes(t, c.size)
+			if c.size > 0 {
+				chunkPattern := []int{1, 7, 64, 1024, 8192}
+				offset := 0
+				i := 0
+				for offset < len(original) {
+					cs := chunkPattern[i%len(chunkPattern)]
+					i++
+					if cs > len(original)-offset {
+						cs = len(original) - offset
+					}
+					if n, err := svc.WriteToFile(f, original[offset:offset+cs]); err != nil {
+						t.Fatalf("WriteToFile: %v", err)
+					} else if n != cs {
+						t.Fatalf("WriteToFile returned %d want %d", n, cs)
+					}
+					offset += cs
+				}
+			}
+
+			if err := f.Close(); err != nil {
+				t.Fatalf("close: %v", err)
+			}
+
+			handle, err := svc.OpenFile(f.Name())
+			if err != nil {
+				t.Fatalf("OpenFile: %v", err)
+			}
+			dc, ok := handle.(*decryptorReaderCtx)
+			if !ok {
+				t.Fatalf("expected *decryptorReaderCtx")
+			}
+
+			out, err := dc.ReadFile()
+			if err != nil {
+				t.Fatalf("ReadFile: %v", err)
+			}
+			if !bytes.Equal(original, out) {
+				t.Fatalf("decrypted mismatch size=%d", c.size)
+			}
+		})
+	}
+}

@@ -463,21 +463,34 @@ func (d *MutationDiffer) writeDiffBytesToFile(diffBytes []byte) error {
 }
 
 func (d *MutationDiffer) loadDiffKeys() (DiffKeysMap, DiffKeysMap, MigrationHintMap, error) {
-	srcDiffKeysBytes, err := ioutil.ReadFile(d.srcDiffKeysFileName)
+	readerOps, err := d.encryptionSvc.OpenFile(d.srcDiffKeysFileName)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	srcDiffKeysBytes, err := readerOps.ReadFile()
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	tgtDiffKeyBytes, err := ioutil.ReadFile(d.tgtDiffKeysFileName)
+	readerOps, err = d.encryptionSvc.OpenFile(d.tgtDiffKeysFileName)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	tgtDiffKeyBytes, err := readerOps.ReadFile()
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
 	// migration hint map may or may not exist
 	var migrationHintFound bool
-	migrationHintFile := fmt.Sprintf("%v_%v", d.srcDiffKeysFileName, base.DiffKeysSrcMigrationHintSuffix)
-	migrationHintBytes, err := ioutil.ReadFile(migrationHintFile)
+	var migrationHintBytes []byte
+	migrationHintFile := utils.DiffKeysSrcMigrationFileName(d.srcDiffKeysFileName, d.encryptionSvc)
+	readerOps, err = d.encryptionSvc.OpenFile(migrationHintFile)
 	if err == nil {
+		migrationHintBytes, err = readerOps.ReadFile()
+		if err != nil {
+			return nil, nil, nil, err
+		}
 		migrationHintFound = true
 	}
 

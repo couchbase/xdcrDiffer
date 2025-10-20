@@ -14,4 +14,5 @@ type FileOps interface {
 
 type FileReaderOps interface {
 	ReadAndFillBytes(buffer []byte) (int, error)
+	ReadFile() ([]byte, error)
 }
