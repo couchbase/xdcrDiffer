@@ -21,7 +21,7 @@ func newTestSvc() *EncryptionServiceImpl {
 }
 
 func TestInitAESGCM256_Idempotent(t *testing.T) {
-	passphrase := "once only"
+	passphrase := []byte("once only")
 	svc := newTestSvc()
 
 	if err := svc.InitAESGCM256(passphrase); err != nil {
@@ -37,7 +37,7 @@ func TestInitAESGCM256_Idempotent(t *testing.T) {
 }
 
 func TestInitAESGCM256_DerivesKey(t *testing.T) {
-	passphrase := "correct horse battery staple"
+	passphrase := []byte("correct horse battery staple")
 
 	svc := newTestSvc()
 	if err := svc.InitAESGCM256(passphrase); err != nil {
@@ -62,7 +62,7 @@ func TestInitAESGCM256_DerivesKey(t *testing.T) {
 }
 
 func TestEncryptDecrypt_RoundTrip(t *testing.T) {
-	passphrase := "round trip pass"
+	passphrase := []byte("round trip pass")
 
 	svc := newTestSvc()
 	if err := svc.InitAESGCM256(passphrase); err != nil {
@@ -273,7 +273,7 @@ func TestEncryptionServiceImpl_OpenFile_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("rand.Read passphrase: %v", err)
 	}
-	passphrase := hex.EncodeToString(rawPass)
+	passphrase := []byte(hex.EncodeToString(rawPass))
 
 	// Init service
 	if err := svc.InitAESGCM256(passphrase); err != nil {
@@ -694,7 +694,7 @@ func TestEncryptionServiceImpl_WriteToFile(t *testing.T) {
 
 func TestActualSmallDataForEncrypt(t *testing.T) {
 	// Boilerplate: initialize encryption service with random passphrase.
-	passphrase := hex.EncodeToString(randomBytes(t, 32))
+	passphrase := []byte(hex.EncodeToString(randomBytes(t, 32)))
 
 	svc := newTestSvc()
 	if err := svc.InitAESGCM256(passphrase); err != nil {
@@ -731,7 +731,7 @@ func TestActualSmallDataForEncrypt(t *testing.T) {
 
 	// Initialize a new decryptor service with the same passphrase and reopen file
 	decryptorSvc := newTestSvc()
-	passPhraseGetter := func() (string, error) {
+	passPhraseGetter := func() ([]byte, error) {
 		return passphrase, nil
 	}
 	// Reopen and verify decrypted round trip using new service
@@ -798,7 +798,7 @@ func TestDecryptorReaderCtx_ReadAndFillBytes_RoundTrip(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// 1. Random passphrase and plaintext
-			passphrase := hex.EncodeToString(randomBytes(t, 32))
+			passphrase := []byte(hex.EncodeToString(randomBytes(t, 32)))
 			plaintext := randomBytes(t, tt.totalSize)
 
 			// 2. Init service
@@ -887,7 +887,7 @@ func TestDecryptorReaderCtx_ReadAndFillBytes_RoundTrip(t *testing.T) {
 
 // Additional test focusing on zero-length final read edge.
 func TestDecryptorReaderCtx_ReadAndFillBytes_ZeroLengthFinal(t *testing.T) {
-	passphrase := hex.EncodeToString(randomBytes(t, 16))
+	passphrase := []byte(hex.EncodeToString(randomBytes(t, 16)))
 	data := randomBytes(t, 2048)
 
 	svc := newTestSvc()
@@ -944,7 +944,7 @@ func Test_decryptorReaderCtx_ReadFile(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			passphrase := hex.EncodeToString(randomBytes(t, 32))
+			passphrase := []byte(hex.EncodeToString(randomBytes(t, 32)))
 			svc := newTestSvc()
 			if err := svc.InitAESGCM256(passphrase); err != nil {
 				t.Fatalf("InitAESGCM256: %v", err)

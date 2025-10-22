@@ -9,7 +9,7 @@ type FileOps interface {
 	WriteToFile(fileDescriptor *os.File, data []byte) (int, error)
 
 	OpenFile(fileName string) (FileReaderOps, error)
-	OpenFileForDecrypting(fileName string, passphraseGetter func() (string, error)) (FileReaderOps, error)
+	OpenFileForDecrypting(fileName string, passphraseGetter PassphraseGetter) (FileReaderOps, error)
 }
 
 type FileReaderOps interface {

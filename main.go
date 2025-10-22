@@ -11,6 +11,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"crypto/subtle"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -535,27 +537,35 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 	return difftool, err
 }
 
-func passphraseGetter() (string, error) {
+func passphraseGetter() ([]byte, error) {
 	fmt.Print("Enter encryption passphrase: ")
 	passphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Println() // move to next line after input
 	if err != nil {
-		return "", fmt.Errorf("Error reading passphrase: %v\n", err)
+		return nil, fmt.Errorf("Error reading passphrase: %v\n", err)
 	}
-	passphrase := string(passphraseBytes)
 	// Use passphrase as needed
 
 	fmt.Print("Enter the same encryption passphrase again: ")
 	confirmPassphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Println()
+	defer func() {
+		for i := range confirmPassphraseBytes {
+			confirmPassphraseBytes[i] = 0
+		}
+		// Prevent the compiler from eliminating the loop.
+		// The subtle.ConstantTimeByteEq call forces the data to be read.
+		if len(confirmPassphraseBytes) > 0 {
+			_ = subtle.ConstantTimeByteEq(confirmPassphraseBytes[0], 0)
+		}
+	}()
 	if err != nil {
-		return "", fmt.Errorf("Error reading passphrase: %v\n", err)
+		return nil, fmt.Errorf("Error reading passphrase: %v\n", err)
 	}
-	confirmPassphrase := string(confirmPassphraseBytes)
-	if passphrase != confirmPassphrase {
-		return "", fmt.Errorf("Passphrases do not match. Exiting.")
+	if !bytes.Equal(passphraseBytes, confirmPassphraseBytes) {
+		return nil, fmt.Errorf("Passphrases do not match. Exiting.")
 	}
-	return passphrase, nil
+	return passphraseBytes, nil
 }
 
 func setupEncryption(difftool *xdcrDiffTool) {
@@ -569,6 +579,16 @@ func setupEncryption(difftool *xdcrDiffTool) {
 	if err != nil {
 		fmt.Printf("Error initializing encryption service: %v\n", err)
 		os.Exit(1)
+	}
+
+	if len(passphrase) > 0 {
+		// Zero out the passphrase slice for security
+		for i := range passphrase {
+			passphrase[i] = 0
+		}
+		// Prevent the compiler from eliminating the loop.
+		// The subtle.ConstantTimeByteEq call forces the data to be read.
+		_ = subtle.ConstantTimeByteEq(passphrase[0], 0)
 	}
 }
 

@@ -141,7 +141,9 @@ func NewEncryptionService() *EncryptionServiceImpl {
 	}
 }
 
-func (e *EncryptionServiceImpl) InitAESGCM256(passPhrase string) error {
+// InitAESGCM256 initializes the encryption service to use AES-GCM-256 with a key derived
+// It does *not* clear the passPhrase securely
+func (e *EncryptionServiceImpl) InitAESGCM256(passPhrase []byte) error {
 	if e == nil {
 		return fmt.Errorf("encryption service is nil")
 	}
@@ -163,10 +165,10 @@ func (e *EncryptionServiceImpl) InitAESGCM256(passPhrase string) error {
 	targetDerivationDur := 100 * time.Millisecond
 	// AES-256 requires a 32-byte key
 	keyLen := 32
-	iterToUse := CalibrateIterations([]byte(passPhrase), salt, keyLen, budgetDur, targetDerivationDur)
+	iterToUse := CalibrateIterations(passPhrase, salt, keyLen, budgetDur, targetDerivationDur)
 	e.logger.Infof(fmt.Sprintf("PBKDF2 iteration count calibrated to %d (target %s, budget %s)", iterToUse, targetDerivationDur, budgetDur))
 
-	derivedKey := deriveKey([]byte(passPhrase), salt, iterToUse, keyLen)
+	derivedKey := deriveKey(passPhrase, salt, iterToUse, keyLen)
 	e.config = &aes256Config{
 		iteration: uint64(iterToUse),
 		salt:      salt,
@@ -446,7 +448,7 @@ func (e *EncryptionServiceImpl) OpenFile(fileName string) (encryption.FileReader
 	return e.openFileImpl(fileName, false)
 }
 
-func (e *EncryptionServiceImpl) OpenFileForDecrypting(fileName string, passphraseGetter func() (string, error)) (encryption.FileReaderOps, error) {
+func (e *EncryptionServiceImpl) OpenFileForDecrypting(fileName string, passphraseGetter encryption.PassphraseGetter) (encryption.FileReaderOps, error) {
 	decryptorCtx, err := e.openFileImpl(fileName, true)
 	if err != nil {
 		return nil, err
@@ -497,7 +499,7 @@ func (e *EncryptionServiceImpl) Decrypt(ciphertext, nonce []byte) ([]byte, error
 }
 
 // DecryptFile reads an encrypted file and outputs the content in a byte slice
-func (e *EncryptionServiceImpl) DecryptFile(fileName string, passphraseGetter func() (string, error)) ([]byte, error) {
+func (e *EncryptionServiceImpl) DecryptFile(fileName string, passphraseGetter encryption.PassphraseGetter) ([]byte, error) {
 	if e == nil {
 		return nil, fmt.Errorf("encryption service is nil")
 	}
