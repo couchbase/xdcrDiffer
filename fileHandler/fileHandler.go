@@ -8,7 +8,6 @@ import (
 	xdcrLog "github.com/couchbase/goxdcr/v8/log"
 	"github.com/couchbase/xdcrDiffer/base"
 	"github.com/couchbase/xdcrDiffer/encryption"
-	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
 	"github.com/couchbase/xdcrDiffer/utils"
 )
 
@@ -20,16 +19,12 @@ type Bucket struct {
 	file     *os.File
 	fileName string
 
-	fdPoolCb fdp.FileOp
-	closeOp  func() error
-
 	logger    *xdcrLog.CommonLogger
 	bufferCap int
 	encryptor encryption.FileOps
 }
 type FileHandler struct {
 	fileDir             string
-	fdPool              fdp.FdPoolIface
 	numberOfVbuckets    uint16
 	numberOfBins        int
 	RequiresVBRemapping bool
@@ -40,44 +35,32 @@ type FileHandler struct {
 	encryptor           encryption.FileOps
 }
 
-func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool fdp.FdPoolIface, logger *xdcrLog.CommonLogger, bufferCap int, encryptor encryption.FileOps) (*Bucket, error) {
+func NewBucket(fileDir string, vbno uint16, bucketIndex int, logger *xdcrLog.CommonLogger, bufferCap int, encryptor encryption.FileOps) (*Bucket, error) {
 	fileName := utils.GetFileName(fileDir, vbno, bucketIndex, encryptor)
-	var cb fdp.FileOp
-	var closeOp func() error
 	var err error
 	var file *os.File
 
-	if fdPool == nil {
-		_, statErr := os.Stat(fileName)
-		fileExisted := !os.IsNotExist(statErr)
-		file, err = os.OpenFile(fileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, base.FileModeReadWrite)
+	_, statErr := os.Stat(fileName)
+	fileExisted := !os.IsNotExist(statErr)
+	file, err = os.OpenFile(fileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, base.FileModeReadWrite)
+	if err != nil {
+		return nil, err
+	}
+	if !fileExisted {
+		err = encryptor.WriteEncHeader(file)
 		if err != nil {
+			logger.Errorf("Error writing encryption header to file %v.  err=%v\n", fileName, err)
+			file.Close()
 			return nil, err
-		}
-		if !fileExisted {
-			err = encryptor.WriteEncHeader(file)
-			if err != nil {
-				logger.Errorf("Error writing encryption header to file %v.  err=%v\n", fileName, err)
-				file.Close()
-				return nil, err
-			}
-		} else {
-			_, isValid, err := encryptor.ValidateHeader(file)
-			if err != nil || !isValid {
-				file.Close()
-				if !isValid {
-					logger.Errorf("Error validating encryption header of pre-existing file %v.  err=%v\n", fileName, err)
-					return nil, encryption.ErrorEncryptionFormatUnrecog
-				}
-			}
 		}
 	} else {
-		_, cb, err = fdPool.RegisterFileHandle(fileName)
-		if err != nil {
-			return nil, err
-		}
-		closeOp = func() error {
-			return fdPool.DeRegisterFileHandle(fileName)
+		_, isValid, err := encryptor.ValidateHeader(file)
+		if err != nil || !isValid {
+			file.Close()
+			if !isValid {
+				logger.Errorf("Error validating encryption header of pre-existing file %v.  err=%v\n", fileName, err)
+				return nil, encryption.ErrorEncryptionFormatUnrecog
+			}
 		}
 	}
 	return &Bucket{
@@ -85,8 +68,6 @@ func NewBucket(fileDir string, vbno uint16, bucketIndex int, fdPool fdp.FdPoolIf
 		index:     0,
 		file:      file,
 		fileName:  fileName,
-		fdPoolCb:  cb,
-		closeOp:   closeOp,
 		logger:    logger,
 		bufferCap: bufferCap,
 		encryptor: encryptor,
@@ -112,11 +93,7 @@ func (b *Bucket) Write(item []byte) error {
 func (b *Bucket) FlushToFile() error {
 	var numOfBytes int
 	var err error
-	if b.fdPoolCb != nil {
-		numOfBytes, err = b.fdPoolCb(b.data[:b.index])
-	} else {
-		numOfBytes, err = b.encryptor.WriteToFile(b.file, b.data[:b.index])
-	}
+	numOfBytes, err = b.encryptor.WriteToFile(b.file, b.data[:b.index])
 	if err != nil {
 		return err
 	}
@@ -134,23 +111,15 @@ func (b *Bucket) Close() {
 	if err != nil {
 		b.logger.Errorf("Error flushing to file %v at bucket close err=%v\n", b.fileName, err)
 	}
-	if b.fdPoolCb != nil {
-		err = b.closeOp()
-		if err != nil {
-			b.logger.Errorf("Error closing file %v.  err=%v\n", b.fileName, err)
-		}
-	} else {
-		err = b.file.Close()
-		if err != nil {
-			b.logger.Errorf("Error closing file %v.  err=%v\n", b.fileName, err)
-		}
+	err = b.file.Close()
+	if err != nil {
+		b.logger.Errorf("Error closing file %v.  err=%v\n", b.fileName, err)
 	}
 }
 
-func NewFileHandler(fileDir string, fdPool fdp.FdPoolIface, numberOfVbuckets uint16, numberOfBins int, bufferCapacity int, requiresVBRemapping bool, logger *xdcrLog.CommonLogger, encryptor encryption.FileOps) *FileHandler {
+func NewFileHandler(fileDir string, numberOfVbuckets uint16, numberOfBins int, bufferCapacity int, requiresVBRemapping bool, logger *xdcrLog.CommonLogger, encryptor encryption.FileOps) *FileHandler {
 	return &FileHandler{
 		fileDir:             fileDir,
-		fdPool:              fdPool,
 		numberOfVbuckets:    numberOfVbuckets,
 		numberOfBins:        numberOfBins,
 		bufferCapacity:      bufferCapacity,
@@ -172,7 +141,7 @@ func (fh *FileHandler) Initialize() error {
 		innerMap := make(map[int]*Bucket)
 		fh.BucketMap[vbno] = innerMap
 		for bin := 0; bin < fh.numberOfBins; bin++ {
-			bucket, err := NewBucket(fh.fileDir, vbno, bin, fh.fdPool, fh.logger, fh.bufferCapacity, fh.encryptor)
+			bucket, err := NewBucket(fh.fileDir, vbno, bin, fh.logger, fh.bufferCapacity, fh.encryptor)
 			if err != nil {
 				return err
 			}

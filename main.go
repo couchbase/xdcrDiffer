@@ -40,7 +40,6 @@ import (
 	"github.com/couchbase/xdcrDiffer/dcp"
 	"github.com/couchbase/xdcrDiffer/differ"
 	"github.com/couchbase/xdcrDiffer/encryption"
-	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
 	"github.com/couchbase/xdcrDiffer/serviceImpl"
 	"github.com/couchbase/xdcrDiffer/utils"
 	"github.com/stretchr/testify/mock"
@@ -69,7 +68,6 @@ type inputOptions struct {
 	numberOfWorkersForFileDiffer      uint64
 	numberOfWorkersForMutationDiffer  uint64
 	numberOfBins                      uint64
-	numberOfFileDesc                  uint64
 	// the duration that the tools should be run, in minutes
 	completeByDuration uint64
 	// whether tool should complete after processing all mutations at tool start time
@@ -150,8 +148,8 @@ type inputOptions struct {
 var options inputOptions = inputOptions{}
 
 func (o inputOptions) String() string {
-	return fmt.Sprintf("Options{sourceUrl: %s, sourceUsername: %s, sourcePassword: REDACTED, sourceBucketName: %s, remoteClusterName: %s, sourceFileDir: %s, targetUrl: %s, targetUsername: %s, targetPassword: REDACTED, targetBucketName: %s, targetFileDir: %s, numberOfSourceDcpClients: %d, numberOfWorkersPerSourceDcpClient: %d, numberOfTargetDcpClients: %d, numberOfWorkersPerTargetDcpClient: %d, numberOfWorkersForFileDiffer: %d, numberOfWorkersForMutationDiffer: %d, numberOfBins: %d, numberOfFileDesc: %d, completeByDuration: %d, completeBySeqno: %t, checkpointFileDir: %s, oldCheckpointFileName: %s, newCheckpointFileName: %s, fileDifferDir: %s, mutationDifferDir: %s, mutationDifferBatchSize: %d, mutationDifferTimeout: %d, sourceDcpHandlerChanSize: %d, targetDcpHandlerChanSize: %d, bucketOpTimeout: %d, maxNumOfGetStatsRetry: %d, maxNumOfSendBatchRetry: %d, getStatsRetryInterval: %d, sendBatchRetryInterval: %d, getStatsMaxBackoff: %d, sendBatchMaxBackoff: %d, delayBetweenSourceAndTarget: %d, checkpointInterval: %d, runDataGeneration: %t, runFileDiffer: %t, runMutationDiffer: %t, enforceTLS: %t, bucketBufferCapacity: %d, compareType: %s, mutationDifferRetries: %d, mutationDifferRetriesWaitSecs: %d, numOfFiltersInFilterPool: %d, debugMode: %t, setupTimeout: %d, fileContaingXattrKeysForNoComapre: %s, yamlConfigFilePath: %s, encryptionPassphrase: %t encryptionLogFile: %s}",
-		o.sourceUrl, o.sourceUsername, o.sourceBucketName, o.remoteClusterName, o.sourceFileDir, o.targetUrl, o.targetUsername, o.targetBucketName, o.targetFileDir, o.numberOfSourceDcpClients, o.numberOfWorkersPerSourceDcpClient, o.numberOfTargetDcpClients, o.numberOfWorkersPerTargetDcpClient, o.numberOfWorkersForFileDiffer, o.numberOfWorkersForMutationDiffer, o.numberOfBins, o.numberOfFileDesc, o.completeByDuration, o.completeBySeqno, o.checkpointFileDir, o.oldCheckpointFileName, o.newCheckpointFileName, o.fileDifferDir, o.mutationDifferDir, o.mutationDifferBatchSize, o.mutationDifferTimeout, o.sourceDcpHandlerChanSize, o.targetDcpHandlerChanSize, o.bucketOpTimeout, o.maxNumOfGetStatsRetry, o.maxNumOfSendBatchRetry, o.getStatsRetryInterval, o.sendBatchRetryInterval, o.getStatsMaxBackoff, o.sendBatchMaxBackoff, o.delayBetweenSourceAndTarget, o.checkpointInterval, o.runDataGeneration, o.runFileDiffer, o.runMutationDiffer, o.enforceTLS, o.bucketBufferCapacity, o.compareType, o.mutationDifferRetries, o.mutationDifferRetriesWaitSecs, o.numOfFiltersInFilterPool, o.debugMode, o.setupTimeout, o.fileContaingXattrKeysForNoComapre, o.yamlConfigFilePath, o.encryptionPassphrase, o.encryptedLogFile)
+	return fmt.Sprintf("Options{sourceUrl: %s, sourceUsername: %s, sourcePassword: REDACTED, sourceBucketName: %s, remoteClusterName: %s, sourceFileDir: %s, targetUrl: %s, targetUsername: %s, targetPassword: REDACTED, targetBucketName: %s, targetFileDir: %s, numberOfSourceDcpClients: %d, numberOfWorkersPerSourceDcpClient: %d, numberOfTargetDcpClients: %d, numberOfWorkersPerTargetDcpClient: %d, numberOfWorkersForFileDiffer: %d, numberOfWorkersForMutationDiffer: %d, numberOfBins: %d, completeByDuration: %d, completeBySeqno: %t, checkpointFileDir: %s, oldCheckpointFileName: %s, newCheckpointFileName: %s, fileDifferDir: %s, mutationDifferDir: %s, mutationDifferBatchSize: %d, mutationDifferTimeout: %d, sourceDcpHandlerChanSize: %d, targetDcpHandlerChanSize: %d, bucketOpTimeout: %d, maxNumOfGetStatsRetry: %d, maxNumOfSendBatchRetry: %d, getStatsRetryInterval: %d, sendBatchRetryInterval: %d, getStatsMaxBackoff: %d, sendBatchMaxBackoff: %d, delayBetweenSourceAndTarget: %d, checkpointInterval: %d, runDataGeneration: %t, runFileDiffer: %t, runMutationDiffer: %t, enforceTLS: %t, bucketBufferCapacity: %d, compareType: %s, mutationDifferRetries: %d, mutationDifferRetriesWaitSecs: %d, numOfFiltersInFilterPool: %d, debugMode: %t, setupTimeout: %d, fileContaingXattrKeysForNoComapre: %s, yamlConfigFilePath: %s, encryptionPassphrase: %t encryptionLogFile: %s}",
+		o.sourceUrl, o.sourceUsername, o.sourceBucketName, o.remoteClusterName, o.sourceFileDir, o.targetUrl, o.targetUsername, o.targetBucketName, o.targetFileDir, o.numberOfSourceDcpClients, o.numberOfWorkersPerSourceDcpClient, o.numberOfTargetDcpClients, o.numberOfWorkersPerTargetDcpClient, o.numberOfWorkersForFileDiffer, o.numberOfWorkersForMutationDiffer, o.numberOfBins, o.completeByDuration, o.completeBySeqno, o.checkpointFileDir, o.oldCheckpointFileName, o.newCheckpointFileName, o.fileDifferDir, o.mutationDifferDir, o.mutationDifferBatchSize, o.mutationDifferTimeout, o.sourceDcpHandlerChanSize, o.targetDcpHandlerChanSize, o.bucketOpTimeout, o.maxNumOfGetStatsRetry, o.maxNumOfSendBatchRetry, o.getStatsRetryInterval, o.sendBatchRetryInterval, o.getStatsMaxBackoff, o.sendBatchMaxBackoff, o.delayBetweenSourceAndTarget, o.checkpointInterval, o.runDataGeneration, o.runFileDiffer, o.runMutationDiffer, o.enforceTLS, o.bucketBufferCapacity, o.compareType, o.mutationDifferRetries, o.mutationDifferRetriesWaitSecs, o.numOfFiltersInFilterPool, o.debugMode, o.setupTimeout, o.fileContaingXattrKeysForNoComapre, o.yamlConfigFilePath, o.encryptionPassphrase, o.encryptedLogFile)
 }
 
 func argParse() {
@@ -191,8 +189,6 @@ func argParse() {
 		"number of worker threads for mutation differ ")
 	flag.Uint64Var(&options.numberOfBins, "numberOfBins", 5,
 		"number of buckets per vbucket")
-	flag.Uint64Var(&options.numberOfFileDesc, "numberOfFileDesc", 500,
-		"number of file descriptors")
 	flag.Uint64Var(&options.completeByDuration, "completeByDuration", 0,
 		"duration that the tool should run")
 	flag.BoolVar(&options.completeBySeqno, "completeBySeqno", true,
@@ -949,11 +945,6 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 	errChan := make(chan error, 1)
 	waitGroup := &sync.WaitGroup{}
 
-	var fileDescPool fdp.FdPoolIface
-	if options.numberOfFileDesc > 0 {
-		fileDescPool = fdp.NewFileDescriptorPool(int(options.numberOfFileDesc))
-	}
-
 	if err := difftool.createFilter(); err != nil {
 		difftool.logger.Errorf("Error creating filter: %v", err.Error())
 		os.Exit(1)
@@ -964,7 +955,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.oldCheckpointFileName, options.newCheckpointFileName, options.numberOfSourceDcpClients,
 		options.numberOfWorkersPerSourceDcpClient, options.numberOfBins, options.sourceDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval,
-		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
+		options.getStatsMaxBackoff, options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, difftool.filter,
 		difftool.srcCapabilities, difftool.srcCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity,
 		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode(),
 		difftool.xattrKeysForNoCompare, difftool.vbInfo.sourceNoOfVbuckets, difftool.vbInfo.isVariableVB,
@@ -980,7 +971,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		options.targetFileDir, options.checkpointFileDir, options.oldCheckpointFileName, options.newCheckpointFileName,
 		options.numberOfTargetDcpClients, options.numberOfWorkersPerTargetDcpClient, options.numberOfBins, options.targetDcpHandlerChanSize,
 		options.bucketOpTimeout, options.maxNumOfGetStatsRetry, options.getStatsRetryInterval, options.getStatsMaxBackoff,
-		options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, fileDescPool, difftool.filter,
+		options.checkpointInterval, errChan, waitGroup, options.completeBySeqno, difftool.filter,
 		difftool.tgtCapabilities, difftool.tgtCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity,
 		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode(),
 		difftool.xattrKeysForNoCompare, difftool.vbInfo.targetNoOfVbuckets, difftool.vbInfo.isVariableVB,
@@ -1018,7 +1009,7 @@ func (difftool *xdcrDiffTool) diffDataFiles() error {
 	}
 	difftoolDriver := differ.NewDifferDriver(options.sourceFileDir, options.targetFileDir, options.fileDifferDir,
 		base.DiffKeysFileName, int(options.numberOfWorkersForFileDiffer), int(options.numberOfBins),
-		int(options.numberOfFileDesc), difftool.srcToTgtColIdsMap, difftool.colFilterOrderedKeys,
+		difftool.srcToTgtColIdsMap, difftool.colFilterOrderedKeys,
 		difftool.colFilterOrderedTargetColId, difftool.selfRef.Uuid_, difftool.specifiedRef.Uuid_,
 		difftool.specifiedSpec.SourceBucketUUID, difftool.specifiedSpec.TargetBucketUUID, difftool.bucketTopologySvc,
 		difftool.specifiedSpec, difftool.logger, numberOfVbuckets, difftool.encryptionSvc)
@@ -1083,13 +1074,13 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 	}
 }
 
-func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, fdPool fdp.FdPoolIface, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bucketBufferCap int, migrationMapping metadata.CollectionNamespaceMapping, mobileCompat int, expDelMode xdcrBase.FilterExpDelType, xattrKeysForNoCompare map[string]bool, numberOfVbuckets uint16, isVariableVB bool, encryptionSvc encryption.EncryptionSvc) *dcp.DcpDriver {
+func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bucketBufferCap int, migrationMapping metadata.CollectionNamespaceMapping, mobileCompat int, expDelMode xdcrBase.FilterExpDelType, xattrKeysForNoCompare map[string]bool, numberOfVbuckets uint16, isVariableVB bool, encryptionSvc encryption.EncryptionSvc) *dcp.DcpDriver {
 	waitGroup.Add(1)
 	dcpDriver := dcp.NewDcpDriver(logger, name, url, bucketName, ref, fileDir, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBins),
 		int(dcpHandlerChanSize), time.Duration(bucketOpTimeout)*time.Second, int(maxNumOfGetStatsRetry),
 		time.Duration(getStatsRetryInterval)*time.Second, time.Duration(getStatsMaxBackoff)*time.Second,
-		int(checkpointInterval), errChan, waitGroup, completeBySeqno, fdPool, filter, capabilities, collectionIDs, colMigrationFilters,
+		int(checkpointInterval), errChan, waitGroup, completeBySeqno, filter, capabilities, collectionIDs, colMigrationFilters,
 		utils, bucketBufferCap, migrationMapping, mobileCompat, expDelMode, xattrKeysForNoCompare, numberOfVbuckets, isVariableVB, encryptionSvc)
 	// dcp driver startup may take some time. Do it asynchronously
 	go startDcpDriverAysnc(dcpDriver, errChan, logger)

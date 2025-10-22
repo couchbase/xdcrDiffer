@@ -126,8 +126,6 @@ Usage of ./xdcrDiffer:
         new checkpoint file to write to when tool shuts down
   -numberOfBins uint
         number of buckets per vbucket (default 10)
-  -numberOfFileDesc uint
-        number of file descriptors
   -numberOfWorkersForDcp uint
         number of worker threads for dcp (default 10)
   -numberOfWorkersForFileDiffer uint

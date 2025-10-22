@@ -24,7 +24,6 @@ import (
 	"github.com/couchbase/goxdcr/v8/service_def"
 	"github.com/couchbase/xdcrDiffer/base"
 	"github.com/couchbase/xdcrDiffer/encryption"
-	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
 	"github.com/couchbase/xdcrDiffer/utils"
 )
 
@@ -227,7 +226,6 @@ type DifferDriver struct {
 	srcDiffKeys       DiffKeysMap
 	tgtDiffKeys       DiffKeysMap
 	stateLock         *sync.RWMutex
-	fileDescPool      *fdp.FdPool
 	vbCompleted       uint32
 	finChan           chan bool
 	stopOnce          sync.Once
@@ -249,14 +247,10 @@ type DifferDriver struct {
 }
 
 func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName string,
-	numberOfWorkers, numberOfBins, numberOfFds int, collectionMapping map[uint32][]uint32, colFilterStrings []string,
+	numberOfWorkers, numberOfBins int, collectionMapping map[uint32][]uint32, colFilterStrings []string,
 	colFilterTgtIds []uint32, sourceClusterUUID, targetClusterUUID, sourceBucketUUID, targetBucketUUID string,
 	bucketTopologySvc service_def.BucketTopologySvc, specifiedSpec *metadata.ReplicationSpecification,
 	logger *xdcrLog.CommonLogger, numOfVbuckets uint16, encryptionSvc encryption.EncryptionSvc) *DifferDriver {
-	var fdPool *fdp.FdPool
-	if numberOfFds > 0 {
-		fdPool = fdp.NewFileDescriptorPool(numberOfFds)
-	}
 
 	return &DifferDriver{
 		sourceFileDir:     sourceFileDir,
@@ -267,7 +261,6 @@ func NewDifferDriver(sourceFileDir, targetFileDir, diffFileDir, diffKeysFileName
 		numberOfBins:      numberOfBins,
 		waitGroup:         &sync.WaitGroup{},
 		stateLock:         &sync.RWMutex{},
-		fileDescPool:      fdPool,
 		finChan:           make(chan bool),
 		collectionMapping: collectionMapping,
 		srcDiffKeys:       make(DiffKeysMap),
@@ -315,7 +308,7 @@ func (dr *DifferDriver) Run() error {
 
 		dr.waitGroup.Add(1)
 		differHandler := NewDifferHandler(dr, i, dr.sourceFileDir, dr.targetFileDir, vbList, dr.numberOfBins,
-			dr.waitGroup, dr.fileDescPool, dr.collectionMapping, dr.colFilterStrings, dr.colFilterTgtIds,
+			dr.waitGroup, dr.collectionMapping, dr.colFilterStrings, dr.colFilterTgtIds,
 			dr.encryptionSvc)
 		differHandlers = append(differHandlers, differHandler)
 		go differHandler.run()
@@ -478,7 +471,6 @@ type DifferHandler struct {
 	diffDetailsFile   *os.File
 	numberOfBins      int
 	waitGroup         *sync.WaitGroup
-	fileDescPool      *fdp.FdPool
 	collectionMapping map[uint32][]uint32
 	colFilterStrings  []string
 	colFilterTgtIds   []uint32
@@ -489,7 +481,7 @@ type DifferHandler struct {
 }
 
 func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFileDir string, vbList []uint16,
-	numberOfBins int, waitGroup *sync.WaitGroup, fdPool *fdp.FdPool, collectionMapping map[uint32][]uint32,
+	numberOfBins int, waitGroup *sync.WaitGroup, collectionMapping map[uint32][]uint32,
 	colFilterStrings []string, colFilterTgtIds []uint32, encryptionSvc encryption.EncryptionSvc) *DifferHandler {
 	return &DifferHandler{
 		driver:            driver,
@@ -499,7 +491,6 @@ func NewDifferHandler(driver *DifferDriver, index int, sourceFileDir, targetFile
 		vbList:            vbList,
 		numberOfBins:      numberOfBins,
 		waitGroup:         waitGroup,
-		fileDescPool:      fdPool,
 		collectionMapping: collectionMapping,
 		colFilterStrings:  colFilterStrings,
 		colFilterTgtIds:   colFilterTgtIds,
@@ -524,7 +515,7 @@ func (dh *DifferHandler) run() error {
 			sourceFileName := utils.GetFileName(dh.sourceFileDir, vbno, bucketIndex, dh.encryptionSvc)
 			targetFileName := utils.GetFileName(dh.targetFileDir, vbno, bucketIndex, dh.encryptionSvc)
 
-			filesDiffer, err := NewFilesDifferWithFDPool(sourceFileName, targetFileName, dh.fileDescPool, dh.collectionMapping, dh.colFilterStrings, dh.colFilterTgtIds, dh.driver.logger, dh.encryptionSvc)
+			filesDiffer, err := NewFilesDiffer(sourceFileName, targetFileName, dh.collectionMapping, dh.colFilterStrings, dh.colFilterTgtIds, dh.driver.logger, dh.encryptionSvc)
 			if err != nil {
 				// Most likely FD overrun, program should exit. Print a msg just in case
 				dh.driver.logger.Errorf("Creating file differ for files %v and %v resulted in error: %v\n",

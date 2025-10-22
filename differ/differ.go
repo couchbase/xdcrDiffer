@@ -47,8 +47,6 @@ type FilesDiffer struct {
 	MissingFromFile2     []*oneEntry
 	BothExistButMismatch []*entryPair
 
-	fdPool *fdp.FdPool
-
 	collectionIdMapping map[uint32][]uint32
 	colFilterStrings    []string
 	colFilterTgtIds     []uint32 // target collection IDs
@@ -260,32 +258,6 @@ func NewFilesDiffer(file1, file2 string, collectionMapping map[uint32][]uint32, 
 		// This means this is legacy mode - no collection support
 		differ.collectionIdMapping = make(map[uint32][]uint32)
 		differ.collectionIdMapping[0] = []uint32{0}
-	}
-	return differ, nil
-}
-
-func NewFilesDifferWithFDPool(file1, file2 string, fdPool *fdp.FdPool, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32, logger *xdcrLog.CommonLogger, encryptionSvc encryption.FileOps) (*FilesDiffer, error) {
-	var err error
-	differ, err := NewFilesDiffer(file1, file2, collectionMapping, colFilterStrings, colFilterTgtIds, logger, encryptionSvc)
-	if err != nil {
-		return nil, err
-	}
-	if fdPool != nil {
-		differ.fdPool = fdPool
-		differ.file1.readOp, err = fdPool.RegisterReadOnlyFileHandle(file1)
-		if err != nil {
-			return nil, err
-		}
-		differ.file1.closeOp = func() error {
-			return fdPool.DeRegisterFileHandle(file1)
-		}
-		differ.file2.readOp, err = fdPool.RegisterReadOnlyFileHandle(file2)
-		if err != nil {
-			return nil, err
-		}
-		differ.file2.closeOp = func() error {
-			return fdPool.DeRegisterFileHandle(file2)
-		}
 	}
 	return differ, nil
 }

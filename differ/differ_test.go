@@ -24,7 +24,7 @@ import (
 	"github.com/couchbase/gomemcached"
 	"github.com/couchbase/goxdcr/v8/log"
 	"github.com/couchbase/xdcrDiffer/dcp"
-	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
+	"github.com/couchbase/xdcrDiffer/serviceImpl"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -220,7 +220,8 @@ func TestLoader(t *testing.T) {
 	err := ioutil.WriteFile(outputFileTemp, data, 0644)
 	assert.Nil(err)
 
-	differ := NewFilesDiffer(outputFileTemp, "", nil, nil, nil, testLogger)
+	encSvc := &serviceImpl.EncryptionServiceImpl{}
+	differ, _ := NewFilesDiffer(outputFileTemp, "", nil, nil, nil, testLogger, encSvc)
 	err = differ.file1.LoadFileIntoBuffer()
 	assert.Nil(err)
 
@@ -241,7 +242,8 @@ func TestLoaderWithColFilters(t *testing.T) {
 	err := ioutil.WriteFile(outputFileTemp, data, 0644)
 	assert.Nil(err)
 
-	differ := NewFilesDiffer(outputFileTemp, "", nil, nil, nil, testLogger)
+	encSvc := &serviceImpl.EncryptionServiceImpl{}
+	differ, _ := NewFilesDiffer(outputFileTemp, "", nil, nil, nil, testLogger, encSvc)
 	err = differ.file1.LoadFileIntoBuffer()
 	assert.Nil(err)
 
@@ -266,7 +268,8 @@ func TestLoadSameFile(t *testing.T) {
 	err := genSameFiles(entries, file1, file2)
 	assert.Equal(nil, err)
 
-	differ := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger)
+	encSvc := &serviceImpl.EncryptionServiceImpl{}
+	differ, _ := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger, encSvc)
 	assert.NotNil(differ)
 
 	srcDiffMap, tgtDiffMap, _, _, _ := differ.Diff()
@@ -294,7 +297,8 @@ func Disabled_TestLoadMismatchedFilesOnly(t *testing.T) {
 	keys, err := genMismatchedFiles(entries, numMismatch, file1, file2)
 	assert.Nil(err)
 
-	differ := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger)
+	encSvc := &serviceImpl.EncryptionServiceImpl{}
+	differ, _ := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger, encSvc)
 	assert.NotNil(differ)
 
 	srcDiffMap, tgtDiffMap, _, _, _ := differ.Diff()
@@ -338,7 +342,8 @@ func Disabled_TestLoadMismatchedFilesAndUneven(t *testing.T) {
 	assert.Nil(err)
 	f.Close()
 
-	differ := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger)
+	encSvc := &serviceImpl.EncryptionServiceImpl{}
+	differ, _ := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger, encSvc)
 	assert.NotNil(differ)
 
 	srcDiffMap, tgtDiffMap, _, _, _ := differ.Diff()
@@ -353,43 +358,6 @@ func Disabled_TestLoadMismatchedFilesAndUneven(t *testing.T) {
 	assert.Equal(extraEntries, len(differ.MissingFromFile2))
 	differ.PrettyPrintResult()
 	fmt.Println("============== Test case start: TestLoadMismatchedFilesAndUneven =================")
-}
-
-func TestLoadSameFileWPool(t *testing.T) {
-	fmt.Println("============== Test case start: TestLoadSameFileWPool =================")
-	assert := assert.New(t)
-
-	fileDescPool := fdp.NewFileDescriptorPool(50)
-
-	file1 := "/tmp/test1.bin"
-	file2 := "/tmp/test2.bin"
-	defer os.Remove(file1)
-	defer os.Remove(file2)
-
-	entries := 10000
-
-	err := genSameFiles(entries, file1, file2)
-	assert.Equal(nil, err)
-
-	differ, err := NewFilesDifferWithFDPool(file1, file2, fileDescPool, nil, nil, nil, testLogger)
-	assert.NotNil(differ)
-	assert.Nil(err)
-
-	srcDiffMap, tgtDiffMap, _, _, _ := differ.Diff()
-
-	assert.True(len(srcDiffMap) == 0)
-	assert.True(len(tgtDiffMap) == 0)
-	fmt.Println("============== Test case end: TestLoadSameFileWPool =================")
-}
-
-func TestNoFilePool(t *testing.T) {
-	fmt.Println("============== Test case start: TestNoFilePool =================")
-	assert := assert.New(t)
-
-	differDriver := NewDifferDriver("", "", "", "", 2, 2, 0, nil, nil, nil, "", "", "", "", nil, nil, testLogger, 1024)
-	assert.NotNil(differDriver)
-	assert.Nil(differDriver.fileDescPool)
-	fmt.Println("============== Test case end: TestNoFilePool =================")
 }
 
 func setupMutationDiffer(md *MutationDiffer) {

@@ -275,15 +275,6 @@ function setupFromCmdLine {
 	export CBAUTH_REVRPC_URL="http://$username:$password@$hostname"
 
 	unameOut=$(uname)
-	maxFileDescs=""
-
-	if [[ "$unameOut" == "Linux" ]] || [[ "$unameOut" == "Darwin" ]]; then
-		maxFileDescs=$(ulimit -n)
-		if (($? == 0)) && [[ "$maxFileDescs" =~ ^[[:digit:]]+$ ]] && (($maxFileDescs > 4)); then
-			# use 3/4 to prevent overrun
-			maxFileDescs=$(echo $(($maxFileDescs / 4 * 3)))
-		fi
-	fi
 
 	execString="$execGo"
 	execString="${execString} -sourceUrl"
@@ -309,10 +300,6 @@ function setupFromCmdLine {
 	elif [[ ! -z "$targetUrl" ]]; then
 		execString="${execString} -targetUrl"
 		execString="${execString} $targetUrl"
-	fi
-	if [[ ! -z "$maxFileDescs" ]]; then
-		execString="${execString} -numberOfFileDesc"
-		execString="${execString} $maxFileDescs"
 	fi
 	if [[ ! -z "$compareType" ]]; then
 		execString="${execString} -compareType"
@@ -362,9 +349,6 @@ function setupFromCmdLine {
 	execString="${execString} $mutationDiffDir"
 	execString="${execString} -checkpointFileDir"
 	execString="${execString} $checkpointDir"
-
-		# For now, disable fd for encryption work is going on until it's done
-		execString="${execString} -numberOfFileDesc 0"
 
 	if [[ @PRODUCT_VERSION@ != @* ]]; then
 		if [[ "${outputDirectory}" == /opt/couchbase* ]]; then
@@ -416,11 +400,12 @@ else
 	setupFromCmdLine
 fi
 
-if [[ ! -z "$encryptionPassphrase" ]];then
-  # encryption mode means the script doesn't log the file, let the encrypted logger log the file
-  $execString 2>&1
+if [[ ! -z "$encryptionPassphrase" ]]; then
+	# encryption mode means the script doesn't log the file, let the encrypted logger log the file
+	$execString 2>&1
 else
-  $execString 2>&1 | tee $differLogFilePath
+	mkdir -p $(dirname $differLogFilePath)
+	$execString 2>&1 | tee $differLogFilePath
 fi
 
 unset CBAUTH_REVRPC_URL
