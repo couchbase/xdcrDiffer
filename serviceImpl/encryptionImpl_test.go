@@ -24,12 +24,12 @@ func TestInitAESGCM256_Idempotent(t *testing.T) {
 	passphrase := []byte("once only")
 	svc := newTestSvc()
 
-	if err := svc.InitAESGCM256(passphrase); err != nil {
-		t.Fatalf("first InitAESGCM256 failed: %v", err)
+	if err := svc.Init(passphrase); err != nil {
+		t.Fatalf("first Init failed: %v", err)
 	}
-	err := svc.InitAESGCM256(passphrase)
+	err := svc.Init(passphrase)
 	if err == nil {
-		t.Fatalf("expected error on second InitAESGCM256")
+		t.Fatalf("expected error on second Init")
 	}
 	if !errors.Is(err, encryption.ErrorAlreadyEnabled) {
 		t.Fatalf("expected ErrorAlreadyEnabled, got %v", err)
@@ -40,8 +40,8 @@ func TestInitAESGCM256_DerivesKey(t *testing.T) {
 	passphrase := []byte("correct horse battery staple")
 
 	svc := newTestSvc()
-	if err := svc.InitAESGCM256(passphrase); err != nil {
-		t.Fatalf("InitAESGCM256 failed: %v", err)
+	if err := svc.Init(passphrase); err != nil {
+		t.Fatalf("Init failed: %v", err)
 	}
 
 	// Access internal config (tests are in same package).
@@ -65,8 +65,8 @@ func TestEncryptDecrypt_RoundTrip(t *testing.T) {
 	passphrase := []byte("round trip pass")
 
 	svc := newTestSvc()
-	if err := svc.InitAESGCM256(passphrase); err != nil {
-		t.Fatalf("InitAESGCM256 failed: %v", err)
+	if err := svc.Init(passphrase); err != nil {
+		t.Fatalf("Init failed: %v", err)
 	}
 
 	plaintext := []byte("secret data payload")
@@ -276,8 +276,8 @@ func TestEncryptionServiceImpl_OpenFile_Success(t *testing.T) {
 	passphrase := []byte(hex.EncodeToString(rawPass))
 
 	// Init service
-	if err := svc.InitAESGCM256(passphrase); err != nil {
-		t.Fatalf("InitAESGCM256 failed: %v", err)
+	if err := svc.Init(passphrase); err != nil {
+		t.Fatalf("Init failed: %v", err)
 	}
 
 	// Random plaintext payload
@@ -697,8 +697,8 @@ func TestActualSmallDataForEncrypt(t *testing.T) {
 	passphrase := []byte(hex.EncodeToString(randomBytes(t, 32)))
 
 	svc := newTestSvc()
-	if err := svc.InitAESGCM256(passphrase); err != nil {
-		t.Fatalf("InitAESGCM256 failed: %v", err)
+	if err := svc.Init(passphrase); err != nil {
+		t.Fatalf("Init failed: %v", err)
 	}
 
 	// Confirm service is enabled.
@@ -803,8 +803,8 @@ func TestDecryptorReaderCtx_ReadAndFillBytes_RoundTrip(t *testing.T) {
 
 			// 2. Init service
 			svc := newTestSvc()
-			if err := svc.InitAESGCM256(passphrase); err != nil {
-				t.Fatalf("InitAESGCM256: %v", err)
+			if err := svc.Init(passphrase); err != nil {
+				t.Fatalf("Init: %v", err)
 			}
 
 			// 3. Temp file with suffix
@@ -891,8 +891,8 @@ func TestDecryptorReaderCtx_ReadAndFillBytes_ZeroLengthFinal(t *testing.T) {
 	data := randomBytes(t, 2048)
 
 	svc := newTestSvc()
-	if err := svc.InitAESGCM256(passphrase); err != nil {
-		t.Fatalf("InitAESGCM256: %v", err)
+	if err := svc.Init(passphrase); err != nil {
+		t.Fatalf("Init: %v", err)
 	}
 
 	f, err := os.CreateTemp("", "zero_final_*"+svc.GetEncryptionFilenameSuffix())
@@ -946,8 +946,8 @@ func Test_decryptorReaderCtx_ReadFile(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			passphrase := []byte(hex.EncodeToString(randomBytes(t, 32)))
 			svc := newTestSvc()
-			if err := svc.InitAESGCM256(passphrase); err != nil {
-				t.Fatalf("InitAESGCM256: %v", err)
+			if err := svc.Init(passphrase); err != nil {
+				t.Fatalf("Init: %v", err)
 			}
 
 			f, err := os.CreateTemp("", fmt.Sprintf("readfile_%s_*%s", c.name, svc.GetEncryptionFilenameSuffix()))

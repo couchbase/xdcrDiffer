@@ -575,7 +575,7 @@ func setupEncryption(difftool *xdcrDiffTool) {
 		os.Exit(1)
 	}
 
-	err = difftool.encryptionSvc.InitAESGCM256(passphrase)
+	err = difftool.encryptionSvc.Init(passphrase)
 	if err != nil {
 		fmt.Printf("Error initializing encryption service: %v\n", err)
 		os.Exit(1)

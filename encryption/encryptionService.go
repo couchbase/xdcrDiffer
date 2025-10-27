@@ -22,7 +22,7 @@ type PassphraseGetter func() ([]byte, error)
 type EncryptionSvc interface {
 	FileOps
 	IsEnabled() bool
-	InitAESGCM256(passPhrase []byte) error
+	Init(passPhrase []byte) error
 	Encrypt(plaintext []byte) ([]byte, []byte, error)
 	DecryptFile(fileName string, passphraseGetter PassphraseGetter) ([]byte, error)
 	GetLoggerContext(fileName string) (*xdcrLog.LoggerContext, func(), error)

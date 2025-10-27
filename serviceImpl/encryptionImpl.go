@@ -26,10 +26,10 @@ func deriveKey(passphrase, salt []byte, iterations, keyLen int) []byte {
 	return pbkdf2.Key(passphrase, salt, iterations, keyLen, sha256.New)
 }
 
-// CalibrateIterations benchmarks PBKDF2 within a time budget to find an iteration
+// calibrateIterations benchmarks PBKDF2 within a time budget to find an iteration
 // count whose single derivation time is close to targetDerivationDur (undershooting if needed).
 // budgetDur limits total calibration time (e.g. 3 * time.Second).
-func CalibrateIterations(passphrase, salt []byte, keyLen int, budgetDur, targetDerivationDur time.Duration) int {
+func calibrateIterations(passphrase, salt []byte, keyLen int, budgetDur, targetDerivationDur time.Duration) int {
 	// Minimum sane starting point.
 	iter := 1000
 	start := time.Now()
@@ -58,7 +58,7 @@ func CalibrateIterations(passphrase, salt []byte, keyLen int, budgetDur, targetD
 	}
 
 	// Exponential search to overshoot targetDerivationDur.
-	lowIter, _ := iter, dur
+	lowIter := iter
 	highIter, highDur := iter, dur
 	for highDur < targetDerivationDur && time.Since(start) < budgetDur {
 		highIter *= 2
@@ -141,9 +141,9 @@ func NewEncryptionService() *EncryptionServiceImpl {
 	}
 }
 
-// InitAESGCM256 initializes the encryption service to use AES-GCM-256 with a key derived
+// Init initializes the encryption service to use AES-GCM-256 with a key derived
 // It does *not* clear the passPhrase securely
-func (e *EncryptionServiceImpl) InitAESGCM256(passPhrase []byte) error {
+func (e *EncryptionServiceImpl) Init(passPhrase []byte) error {
 	if e == nil {
 		return fmt.Errorf("encryption service is nil")
 	}
@@ -165,7 +165,7 @@ func (e *EncryptionServiceImpl) InitAESGCM256(passPhrase []byte) error {
 	targetDerivationDur := 100 * time.Millisecond
 	// AES-256 requires a 32-byte key
 	keyLen := 32
-	iterToUse := CalibrateIterations(passPhrase, salt, keyLen, budgetDur, targetDerivationDur)
+	iterToUse := calibrateIterations(passPhrase, salt, keyLen, budgetDur, targetDerivationDur)
 	e.logger.Infof(fmt.Sprintf("PBKDF2 iteration count calibrated to %d (target %s, budget %s)", iterToUse, targetDerivationDur, budgetDur))
 
 	derivedKey := deriveKey(passPhrase, salt, iterToUse, keyLen)
