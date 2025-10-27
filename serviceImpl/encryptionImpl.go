@@ -188,7 +188,7 @@ func (e *EncryptionServiceImpl) GetEncryptionFilenameSuffix() string {
 // Encrypt will take a plain text, and return
 // 1a. ciphertext if encryption is enabled
 // 1b. plaintext as-is if encryption is disabled
-// In both cases, the second return value is the nonce (nil if encryption is disabled).
+// 2. nil for the nonce if encryption is disabled
 // The return "output" value of Encrypt will contain the nonce prepended
 // Error is returned if encryption is enabled but fails.
 func (e *EncryptionServiceImpl) Encrypt(plaintext []byte) ([]byte, []byte, error) {
