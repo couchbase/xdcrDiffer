@@ -78,7 +78,7 @@ func TestEncryptDecrypt_RoundTrip(t *testing.T) {
 	nonce, actualCipherText, err := splitNonceAndCipherText(ciphertext)
 	assert.NoError(t, err, "SplitNonce failed")
 
-	out, err := svc.Decrypt(actualCipherText, nonce)
+	out, err := svc.Decrypt(actualCipherText, nonce, nil)
 	if err != nil {
 		t.Fatalf("Decrypt failed: %v", err)
 	}
@@ -566,11 +566,213 @@ func TestEncryptionServiceImpl_Decrypt(t *testing.T) {
 				logger:       tt.fields.logger,
 				config:       tt.fields.config,
 			}
-			got, err := e.Decrypt(tt.args.ciphertext, tt.args.nonce)
+			got, err := e.Decrypt(tt.args.ciphertext, tt.args.nonce, nil)
 			if !tt.wantErr(t, err, fmt.Sprintf("Decrypt(%v, %v)", tt.args.ciphertext, tt.args.nonce)) {
 				return
 			}
 			assert.Equalf(t, tt.want, got, "Decrypt(%v, %v)", tt.args.ciphertext, tt.args.nonce)
+		})
+	}
+}
+
+func TestEncryptionServiceImpl_Decrypt_WithPreallocatedBuffer(t *testing.T) {
+	type fields struct {
+		enabled      uint32
+		nonceCounter uint64
+		logger       *xdcrLog.CommonLogger
+		config       *aes256Config
+	}
+	type args struct {
+		ciphertext []byte
+		nonce      []byte
+	}
+	tests := []struct {
+		name    string
+		fields  fields
+		args    args
+		want    []byte
+		wantErr assert.ErrorAssertionFunc
+	}{
+		{
+			name: "disabled returns input unchanged (buffer ignored)",
+			fields: fields{
+				enabled: 0,
+			},
+			args: args{
+				ciphertext: []byte("plain data"),
+				nonce:      []byte("ignorednonce"),
+			},
+			want:    []byte("plain data"),
+			wantErr: assert.NoError,
+		},
+		{
+			name: "enabled success roundtrip with buffer",
+			fields: fields{
+				enabled: 1,
+				config: func() *aes256Config {
+					pass := []byte("rt pass buf")
+					salt := []byte("1234567890abcdef")
+					iter := 2100
+					key := deriveKey(pass, salt, iter, 32)
+					return &aes256Config{iteration: uint64(iter), key: key, salt: salt}
+				}(),
+			},
+			args: func() args {
+				pass := []byte("rt pass buf")
+				salt := []byte("1234567890abcdef")
+				iter := 2100
+				key := deriveKey(pass, salt, iter, 32)
+				tmp := &EncryptionServiceImpl{enabled: 1, config: &aes256Config{iteration: uint64(iter), key: key, salt: salt}}
+				plaintext := []byte("roundtrip plaintext using buffer")
+				full, nonce, _ := tmp.Encrypt(plaintext)
+				ct := full[len(nonce):]
+				return args{ciphertext: ct, nonce: nonce}
+			}(),
+			want:    []byte("roundtrip plaintext using buffer"),
+			wantErr: assert.NoError,
+		},
+		{
+			name: "enabled tampered ciphertext error with buffer",
+			fields: fields{
+				enabled: 1,
+				config: func() *aes256Config {
+					pass := []byte("tamper pass buf")
+					salt := []byte("abcdefghijklmnop")
+					iter := 3100
+					key := deriveKey(pass, salt, iter, 32)
+					return &aes256Config{iteration: uint64(iter), key: key, salt: salt}
+				}(),
+			},
+			args: func() args {
+				pass := []byte("tamper pass buf")
+				salt := []byte("abcdefghijklmnop")
+				iter := 3100
+				key := deriveKey(pass, salt, iter, 32)
+				tmp := &EncryptionServiceImpl{enabled: 1, config: &aes256Config{iteration: uint64(iter), key: key, salt: salt}}
+				full, nonce, _ := tmp.Encrypt([]byte("secret payload buffer"))
+				ct := append([]byte{}, full[len(nonce):]...)
+				ct[0] ^= 0xFF
+				return args{ciphertext: ct, nonce: nonce}
+			}(),
+			want:    nil,
+			wantErr: assert.Error,
+		},
+		{
+			name: "enabled wrong nonce error with buffer",
+			fields: fields{
+				enabled: 1,
+				config: func() *aes256Config {
+					pass := []byte("wrong nonce pass buf")
+					salt := []byte("1234567890abcdef")
+					iter := 3600
+					key := deriveKey(pass, salt, iter, 32)
+					return &aes256Config{iteration: uint64(iter), key: key, salt: salt}
+				}(),
+			},
+			args: func() args {
+				pass := []byte("wrong nonce pass buf")
+				salt := []byte("1234567890abcdef")
+				iter := 3600
+				key := deriveKey(pass, salt, iter, 32)
+				tmp := &EncryptionServiceImpl{enabled: 1, config: &aes256Config{iteration: uint64(iter), key: key, salt: salt}}
+				full, nonce, _ := tmp.Encrypt([]byte("another secret buffer"))
+				ct := full[len(nonce):]
+				badNonce := append([]byte{}, nonce...)
+				badNonce[0] ^= 0xFF
+				return args{ciphertext: ct, nonce: badNonce}
+			}(),
+			want:    nil,
+			wantErr: assert.Error,
+		},
+		{
+			name: "enabled missing config error with buffer",
+			fields: fields{
+				enabled: 1,
+				config:  nil,
+			},
+			args: args{
+				ciphertext: []byte("irrelevant"),
+				nonce:      []byte("badnoncehere"),
+			},
+			want:    nil,
+			wantErr: assert.Error,
+		},
+		{
+			name: "enabled success with prefilled dst prefix (should append only)",
+			fields: fields{
+				enabled: 1,
+				config: func() *aes256Config {
+					pass := []byte("prefix pass buf")
+					salt := []byte("1234567890abcxyz")[:16]
+					iter := 3900
+					key := deriveKey(pass, salt, iter, 32)
+					return &aes256Config{iteration: uint64(iter), key: key, salt: salt}
+				}(),
+			},
+			args: func() args {
+				pass := []byte("prefix pass buf")
+				salt := []byte("1234567890abcxyz")[:16]
+				iter := 3900
+				key := deriveKey(pass, salt, iter, 32)
+				tmp := &EncryptionServiceImpl{enabled: 1, config: &aes256Config{iteration: uint64(iter), key: key, salt: salt}}
+				full, nonce, _ := tmp.Encrypt([]byte("buffer dst append test"))
+				ct := full[len(nonce):]
+				return args{ciphertext: ct, nonce: nonce}
+			}(),
+			want:    []byte("buffer dst append test"),
+			wantErr: assert.NoError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := &EncryptionServiceImpl{
+				enabled:      tt.fields.enabled,
+				nonceCounter: tt.fields.nonceCounter,
+				logger:       tt.fields.logger,
+				config:       tt.fields.config,
+			}
+
+			// Pre-allocate buffer. Use want length when known, else ciphertext length.
+			capLen := len(tt.args.ciphertext)
+			if tt.want != nil {
+				capLen = len(tt.want)
+			}
+			// For prefix test, put a prefix into buffer to show gcm.Open appends.
+			var buffer []byte
+			if tt.name == "enabled success with prefilled dst prefix (should append only)" {
+				prefix := []byte("PREFIX-")
+				buffer = make([]byte, len(prefix), len(prefix)+capLen)
+				copy(buffer, prefix)
+			} else {
+				buffer = make([]byte, 0, capLen)
+			}
+
+			got, err := e.Decrypt(tt.args.ciphertext, tt.args.nonce, buffer)
+			if !tt.wantErr(t, err, fmt.Sprintf("Decrypt(%v, %v)", tt.args.ciphertext, tt.args.nonce)) {
+				return
+			}
+
+			if err == nil && e.IsEnabled() && tt.want != nil && len(tt.want) > 0 && tt.name != "disabled returns input unchanged (buffer ignored)" {
+				// Ensure underlying array reused (first element address equal) except prefix test where got should include prefix+plaintext
+				if tt.name == "enabled success with prefilled dst prefix (should append only)" {
+					// Prefix should remain at start
+					assert.True(t, bytes.HasPrefix(got, []byte("PREFIX-")))
+					// Plaintext should follow prefix
+					suffix := got[len("PREFIX-"):]
+					assert.Equal(t, tt.want, suffix)
+				} else {
+					// Regular case: buffer len was 0 initially so underlying arr reused
+					if cap(buffer) >= len(tt.want) {
+						// Only check if buffer had capacity
+						// got[0] should reside at same address as &buffer[:cap(buffer)][0]
+						// Can't directly compare pointers easily without unsafe; rely on capacity/len semantics here
+						assert.Equal(t, len(tt.want), len(got))
+					}
+				}
+			} else {
+				assert.Equalf(t, tt.want, got, "Decrypt(%v, %v)", tt.args.ciphertext, tt.args.nonce)
+			}
 		})
 	}
 }

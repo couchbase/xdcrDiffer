@@ -114,7 +114,7 @@ type aes256Config struct {
 type decryptorReaderCtx struct {
 	mtx sync.Mutex
 
-	decryptor func([]byte, []byte) ([]byte, error)
+	decryptor func([]byte, []byte, []byte) ([]byte, error)
 
 	enabled bool
 	logger  *xdcrLog.CommonLogger
@@ -474,7 +474,12 @@ func (e *EncryptionServiceImpl) OpenFileForDecrypting(fileName string, passphras
 	return decryptorCtx, nil
 }
 
-func (e *EncryptionServiceImpl) Decrypt(ciphertext, nonce []byte) ([]byte, error) {
+// Decrypt will take in a ciphertext and nonce, and return
+// decrypted text in the first return value
+// Error is returned if encryption is enabled but fails.
+// If encryption is disabled, it returns the plain text read as is
+// If preAllocatedBuf is passed in, it'll use it as part of the decryption process
+func (e *EncryptionServiceImpl) Decrypt(ciphertext, nonce, preAllocatedBuf []byte) ([]byte, error) {
 	if e == nil || !e.IsEnabled() {
 		// No encryption; return ciphertext as-is
 		return ciphertext, nil
@@ -493,7 +498,7 @@ func (e *EncryptionServiceImpl) Decrypt(ciphertext, nonce []byte) ([]byte, error
 		return nil, err
 	}
 
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	plaintext, err := gcm.Open(preAllocatedBuf, nonce, ciphertext, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -659,7 +664,9 @@ func (d *decryptorReaderCtx) decryptAndFillInternalBuffer(lenToRead int) error {
 			d.decryptedBuf = newBuf
 		}
 
-		plaintext, err := d.decryptor(ciphertext, nonce)
+		buf := d.decryptedBuf[d.bytesDecrypted:needed] // len == expectedPlainLen
+		dst := buf[:0]                                 // len 0, cap == expectedPlainLen
+		plaintext, err := d.decryptor(ciphertext, nonce, dst)
 		if err != nil {
 			return fmt.Errorf("decrypt error: %w", err)
 		}
@@ -667,7 +674,6 @@ func (d *decryptorReaderCtx) decryptAndFillInternalBuffer(lenToRead int) error {
 			return fmt.Errorf("unexpected plaintext length: got %d want %d", len(plaintext), expectedPlainLen)
 		}
 
-		copy(d.decryptedBuf[d.bytesDecrypted:], plaintext)
 		d.bytesDecrypted += len(plaintext)
 	}
 
