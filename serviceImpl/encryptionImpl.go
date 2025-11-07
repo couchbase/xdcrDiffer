@@ -49,7 +49,9 @@ func calibrateIterations(passphrase, salt []byte, keyLen int, budgetDur, targetD
 	if !ok {
 		return iter
 	}
-	for dur < time.Millisecond && iter < 1_000_000 {
+
+	maxIter := 1_000_000
+	for dur < time.Millisecond && iter < maxIter {
 		iter *= 2
 		dur, ok = measure(iter)
 		if !ok {
@@ -60,7 +62,7 @@ func calibrateIterations(passphrase, salt []byte, keyLen int, budgetDur, targetD
 	// Exponential search to overshoot targetDerivationDur.
 	lowIter := iter
 	highIter, highDur := iter, dur
-	for highDur < targetDerivationDur && time.Since(start) < budgetDur {
+	for highDur < targetDerivationDur && time.Since(start) < budgetDur && highIter < maxIter {
 		highIter *= 2
 		dur, ok = measure(highIter)
 		if !ok {
@@ -71,7 +73,7 @@ func calibrateIterations(passphrase, salt []byte, keyLen int, budgetDur, targetD
 	}
 
 	// If even doubled upper bound is still below target, return highest tested.
-	if highDur < targetDerivationDur || time.Since(start) >= budgetDur {
+	if highDur < targetDerivationDur || time.Since(start) >= budgetDur || highIter >= maxIter {
 		return highIter
 	}
 
