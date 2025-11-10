@@ -29,6 +29,8 @@ If an XDCR is ongoing, it is quite possible that the tool will show documents as
 
 ### Prerequisites
 
+Couchbase Server version 7.1 and later
+
 Golang version 1.23.0 or above.
 
 First, clone the repository to any preferred destination.

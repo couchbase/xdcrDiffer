@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"net"
@@ -1255,10 +1256,18 @@ func (difftool *xdcrDiffTool) populateSelfRef() error {
 
 	// Only grab certificate if on a loopback device
 	if difftool.specifiedRef.IsHttps() && isURLLoopBack(options.sourceUrl) {
-		cert, err := utils.GetCertificate(difftool.utils, options.sourceUrl, options.sourceUsername,
+		certResp, err := utils.GetCertificate(difftool.utils, options.sourceUrl, options.sourceUsername,
 			options.sourcePassword, xdcrBase.HttpAuthMechPlain)
 		if err != nil {
 			return err
+		}
+
+		var cert []byte
+		for _, c := range certResp {
+			cert = append(cert, c.PEM...)
+		}
+		if len(cert) == 0 {
+			return errors.New("did not receive any root certificates in the response")
 		}
 
 		internalHttpsHostname, _, err := difftool.utils.HttpsRemoteHostAddr(options.sourceUrl, nil)
