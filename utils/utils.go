@@ -11,9 +11,11 @@ package utils
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/crc32"
-	"io/ioutil"
+	"io"
 	"math"
 	mrand "math/rand"
 	"sort"
@@ -268,11 +270,18 @@ func DiffKeysFileName(isSource bool, diffFileDir, diffKeysFileName string) strin
 	return diffFileDir + base.FileDirDelimiter + diffKeysFileName + base.FileNameDelimiter + suffix
 }
 
-func GetCertificate(u xdcrUtils.UtilsIface, hostname string, username, password string, authMech xdcrBase.HttpAuthMech) ([]byte, error) {
+// Relevant fields from NS-Server's response to /pools/default/trustedCAs
+type CertResponse struct {
+	ID    int      `json:"id"`
+	PEM   string   `json:"pem"`
+	Nodes []string `json:"nodes"`
+}
+
+func GetCertificate(u xdcrUtils.UtilsIface, hostname string, username, password string, authMech xdcrBase.HttpAuthMech) ([]CertResponse, error) {
 	certificate := make([]byte, 0)
 
 	userAuthMode := xdcrBase.UserAuthModeBasic
-	req, host, err := u.ConstructHttpRequest(hostname, xdcrBase.DefaultPoolPath+"/certificate", false, username, password, authMech, userAuthMode, xdcrBase.MethodGet, xdcrBase.DefaultContentType, nil, nil)
+	req, host, err := u.ConstructHttpRequest(hostname, xdcrBase.DefaultPoolPath+"/trustedCAs", false, username, password, authMech, userAuthMode, xdcrBase.MethodGet, xdcrBase.DefaultContentType, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +295,18 @@ func GetCertificate(u xdcrUtils.UtilsIface, hostname string, username, password 
 		return nil, err
 	}
 
-	return ioutil.ReadAll(res.Body)
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		return nil, err
+	}
+	if len(body) == 0 {
+		return nil, errors.New("empty response body received from /pools/default/trustedCAs")
+	}
+
+	var nsServerTrustedCAsResponse []CertResponse
+	err = json.Unmarshal(body, &nsServerTrustedCAsResponse)
+
+	return nsServerTrustedCAsResponse, err
 }
 
 // type to facilitate the sorting of uint16 lists
