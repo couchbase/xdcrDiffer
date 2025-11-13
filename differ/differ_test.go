@@ -212,16 +212,21 @@ func verifyMisMatch(mismatchKeys []string, differ *FilesDiffer) bool {
 
 func TestLoader(t *testing.T) {
 	assert := assert.New(t)
-	var outputFileTemp string = "/tmp/xdcrDiffer.tmp"
-	defer os.Remove(outputFileTemp)
+	var outputFileTemp1 string = "/tmp/xdcrDiffer1.tmp"
+	var outputFileTemp2 string = "/tmp/xdcrDiffer2.tmp"
+	defer os.Remove(outputFileTemp1)
+	defer os.Remove(outputFileTemp2)
 
 	key, seqno, _, _, _, _, _, _, data, _, _ := genTestData(true, false)
 
-	err := ioutil.WriteFile(outputFileTemp, data, 0644)
+	err := os.WriteFile(outputFileTemp1, data, 0644)
+	assert.Nil(err)
+	err = os.WriteFile(outputFileTemp2, data, 0644)
 	assert.Nil(err)
 
 	encSvc := &serviceImpl.EncryptionServiceImpl{}
-	differ, _ := NewFilesDiffer(outputFileTemp, "", nil, nil, nil, testLogger, encSvc)
+	differ, err := NewFilesDiffer(outputFileTemp1, outputFileTemp2, nil, nil, nil, testLogger, encSvc)
+	assert.Nil(err)
 	err = differ.file1.LoadFileIntoBuffer()
 	assert.Nil(err)
 
@@ -234,16 +239,21 @@ func TestLoader(t *testing.T) {
 
 func TestLoaderWithColFilters(t *testing.T) {
 	assert := assert.New(t)
-	var outputFileTemp string = "/tmp/xdcrDiffer.tmp"
-	defer os.Remove(outputFileTemp)
+	var outputFileTemp1 string = "/tmp/xdcrDiffer1.tmp"
+	var outputFileTemp2 string = "/tmp/xdcrDiffer2.tmp"
+	defer os.Remove(outputFileTemp1)
+	defer os.Remove(outputFileTemp2)
 
 	key, _, _, _, _, _, _, _, data, _, filterIds := genTestData(true, true)
 
-	err := ioutil.WriteFile(outputFileTemp, data, 0644)
+	err := os.WriteFile(outputFileTemp1, data, 0644)
+	assert.Nil(err)
+	err = os.WriteFile(outputFileTemp2, data, 0644)
 	assert.Nil(err)
 
 	encSvc := &serviceImpl.EncryptionServiceImpl{}
-	differ, _ := NewFilesDiffer(outputFileTemp, "", nil, nil, nil, testLogger, encSvc)
+	differ, err := NewFilesDiffer(outputFileTemp1, outputFileTemp2, nil, nil, nil, testLogger, encSvc)
+	assert.Nil(err)
 	err = differ.file1.LoadFileIntoBuffer()
 	assert.Nil(err)
 
@@ -269,7 +279,8 @@ func TestLoadSameFile(t *testing.T) {
 	assert.Equal(nil, err)
 
 	encSvc := &serviceImpl.EncryptionServiceImpl{}
-	differ, _ := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger, encSvc)
+	differ, err := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger, encSvc)
+	assert.Nil(err)
 	assert.NotNil(differ)
 
 	srcDiffMap, tgtDiffMap, _, _, _ := differ.Diff()
@@ -298,7 +309,8 @@ func Disabled_TestLoadMismatchedFilesOnly(t *testing.T) {
 	assert.Nil(err)
 
 	encSvc := &serviceImpl.EncryptionServiceImpl{}
-	differ, _ := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger, encSvc)
+	differ, err := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger, encSvc)
+	assert.Nil(err)
 	assert.NotNil(differ)
 
 	srcDiffMap, tgtDiffMap, _, _, _ := differ.Diff()
@@ -343,7 +355,8 @@ func Disabled_TestLoadMismatchedFilesAndUneven(t *testing.T) {
 	f.Close()
 
 	encSvc := &serviceImpl.EncryptionServiceImpl{}
-	differ, _ := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger, encSvc)
+	differ, err := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger, encSvc)
+	assert.Nil(err)
 	assert.NotNil(differ)
 
 	srcDiffMap, tgtDiffMap, _, _, _ := differ.Diff()
