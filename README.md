@@ -15,6 +15,8 @@ If an XDCR is ongoing, it is quite possible that the tool will show documents as
         + [Preparing xdcrDiffer host for running differ](#preparing-xdcrdiffer-host-for-running-differ)
         + [Tool binary](#tool-binary)
         + [Running with TLS encrypted traffic](#running-with-tls-encrypted-traffic)
+        + [Running with Encryption-At-Rest](#running-with-encryption-at-rest)
+            - [Decrypt encrypted output files](#decrypt-encrypted-output-files)
 - [DiffTool Process Flow](#difftool-process-flow)
 - [Output](#output)
     * [Manifests](#manifests)
@@ -96,7 +98,6 @@ In the above command, the container will be launched where the created `dockerOu
 The host network will be used by the container to connect to the Couchbase cluster node.
 The `nodeIP` should be an IP that is displayed by the Couchbase Server UI console (under the `Servers` tab)
 
-
 #### Preparing xdcrDiffer host for running differ
 While the differ can run on any couchbase node that compiles the binary, it is **strongly recommended** to run the differ tool on a **non-KV Couchbase node**. Running xdcrDiffer can cause noticeable CPU utilization spikes, so using a non-KV node helps avoid impacting cluster performance.
 
@@ -106,87 +107,6 @@ The runDiffer script above will then allow the differ to access metadata informa
 
 While currently it could be run on a non-Couchbase node as an independent binary, this functionality will be deprecated in the future.
 When that time comes, the binary must be run on a Couchbase Server node.
-
-#### Tool binary
-The legacy method is to run the tool binary natively by using the options provided that can be found using "-h".
-Note that running the tool natively will bypass the `remote cluster reference` and `replication specification` retrieval from the source node's metakv.
-And that this legacy method does not support features that are introduced _after_ Couchbase Server 6.0.
-
-```
-Usage of ./xdcrDiffer:
-  -checkpointFileDir string
-        directory for checkpoint files (default "checkpoint")
-  -completeByDuration uint
-        duration that the tool should run (default 1)
-  -completeBySeqno
-        whether tool should automatically complete (after processing all mutations at start time) (default true)
-  -diffFileDir string
-         directory for storing diffs (default "diff")
-  -enforceTLS
-         stops executing if pre-requisites are not in place to ensure TLS communications
-  -newCheckpointFileName string
-        new checkpoint file to write to when tool shuts down
-  -numberOfBins uint
-        number of buckets per vbucket (default 10)
-  -numberOfWorkersForDcp uint
-        number of worker threads for dcp (default 10)
-  -numberOfWorkersForFileDiffer uint
-        number of worker threads for file differ  (default 10)
-  -numberOfWorkersForMutationDiffer uint
-        number of worker threads for mutation differ  (default 10)
-  -oldCheckpointFileName string
-        old checkpoint file to load from when tool starts
-  -sourceBucketName string
-        bucket name for source cluster (default "default")
-  -sourceFileDir string
-        directory to store mutations in source cluster (default "source")
-  -sourcePassword string
-        password for source cluster (default "welcome")
-  -sourceUrl string
-        url for source cluster (default "http://localhost:9000")
-  -sourceUsername string
-        username for source cluster (default "Administrator")
-  -targetBucketName string
-        bucket name for target cluster (default "target")
-  -targetFileDir string
-        directory to store mutations in target cluster (default "target")
-  -targetPassword string
-        password for target cluster (default "welcome")
-  -targetUrl string
-        url for target cluster (default "http://localhost:9000")
-  -targetUsername string
-        username for target cluster (default "Administrator")
-  -verifyDiffKeys
-        whether to verify diff keys through aysnc Get on clusters (default true)
-  -mutationRetries int
-      Additional number of times to retry to resolve the mutation differences
-  -mutationRetriesWaitSecs int
-      Seconds to wait in between retries for mutation differences
-  -compareType string
-      What to compare during mutationDiff. Accepted values are: meta (default), body, both
-  -setupTimeout int
-      Common setup timeout duration in seconds. Default is 10 (seconds)
-  -debugMode
-      Set xdcrDiffer to DEBUG log level and also enable SDK (gocb) verbose logging.
-  -fileContaingXattrKeysForNoComapre
-      Path to the file containing xattrs that should be excluded from comparison
-  -yamlConfigFilePath
-      Path to yaml config file
-```
-
-A few options worth noting:
-
-- completeBySeqno - This flag will determine whether or not the tool will end by sequence number, or by time.
-- checkpointDir - checkpointing allows the tool to resume from the last point in time when the tool was interrupted.
-- oldCheckpointFileName - this is the flag to use to specify a last checkpoint from which to resume.
-- verifyDiffKeys - By default this is enabled, which uses a non-stream based, key-by-key retrieval and validation. This is what is considered the second pass of verification after the first pass.
-- numberOfBins - Each Couchbase bucket contains 1024 vbuckets. For optimizing sorting, each vbucket is also sub-divided into bins as the data are streamed before the diff operation.
-- numberOfFileDesc - If the tool has exhausted all system file descriptors, this option allows the tool to limit the max number of concurently open file descriptors.
-- mutationRetries - If there are differences, the tool will retry a specified amount of times to try to reconcile potential in-flight differences
-- compareType - This specifies what to compare during mutationDiff. Accepted values are
-  - meta: This is the default. It will get metadata for comparison. This is faster and includes tombstones.
-  - body: It will get document body and only compare the document body. This is slower and does not include tombstones.
-  - both: It will get document body and compare both document body and metadata. This is slower and does not include tombstones.
 
 #### Running with TLS encrypted traffic
 The xdcrDiffer supports running with encrypted traffic such that no data (or metadata) is sent or received in plain text over the wire. To run TLS, the followings need to be in place:
@@ -204,6 +124,32 @@ Once the above are in place, the xdcrDiffer will:
 4. Use the local cluster's root certificate to contact local cluster's KV services over KV SSL ports
 6. Use the remote cluster reference's root certificate to contact remote cluster's ns_server for any necessary information
 5. Use the remote cluster reference's root certificate to contact remote cluster's KV services over KV SSL ports
+
+#### Running with Encryption-At-Rest
+The xdcrDiffer supports encryption at rest such that sensitive that lands on disk is encrypted.
+To run the xdcrDiffer in encryption mode, issue “-x” to the runDiffer shell script, and it will prompt at the command line prompt to enter an encryption passphrase:
+
+```
+./runDiffer.sh -x -u Administrator -p <password> -h 127.0.0.1:8091 -r C2 -s B1 -t B2 -c
+…
+Enter encryption passphrase:
+Enter the same encryption passphrase again:
+2025-11-24T14:12:56.877-08:00 INFO GOXDCR.differEncryption: Initializing encryption at rest with AES-GCM-256 and calculating key...
+```
+
+Output of the encrypted files will be encrypted with an .enc suffix.
+
+##### Decrypt encrypted output files
+
+To decrypt an encrypted file, use the differ as a decryptor tool with the following parameters:
+
+```
+$ ./xdcrDiffer -encryptionPassphrase -decrypt outputs/xdcrDiffer.log.enc
+Enter encryption passphrase:
+Enter the same encryption passphrase again:
+<decrypted output to STDOUT>
+```
+
 
 ## DiffTool Process Flow
 The difftool performs the following in order:
