@@ -24,6 +24,7 @@ import (
 	"github.com/couchbase/gomemcached"
 	"github.com/couchbase/goxdcr/v8/log"
 	"github.com/couchbase/xdcrDiffer/dcp"
+	"github.com/couchbase/xdcrDiffer/encryption"
 	"github.com/couchbase/xdcrDiffer/file"
 	"github.com/stretchr/testify/assert"
 )
@@ -224,7 +225,7 @@ func TestLoader(t *testing.T) {
 	err = os.WriteFile(outputFileTemp2, data, 0644)
 	assert.Nil(err)
 
-	factory := file.NewFactory(false, nil)
+	factory := file.NewFactory(false, encryption.PBKDF2, nil)
 	differ, err := NewFilesDiffer(outputFileTemp1, outputFileTemp2, nil, nil, nil, testLogger, factory)
 	assert.Nil(err)
 	err = differ.file1.LoadFileIntoBuffer()
@@ -251,7 +252,7 @@ func TestLoaderWithColFilters(t *testing.T) {
 	err = os.WriteFile(outputFileTemp2, data, 0644)
 	assert.Nil(err)
 
-	factory := file.NewFactory(false, nil)
+	factory := file.NewFactory(false, encryption.PBKDF2, nil)
 	differ, err := NewFilesDiffer(outputFileTemp1, outputFileTemp2, nil, nil, nil, testLogger, factory)
 	assert.Nil(err)
 	err = differ.file1.LoadFileIntoBuffer()
@@ -278,7 +279,7 @@ func TestLoadSameFile(t *testing.T) {
 	err := genSameFiles(entries, file1, file2)
 	assert.Equal(nil, err)
 
-	factory := file.NewFactory(false, nil)
+	factory := file.NewFactory(false, encryption.PBKDF2, nil)
 	differ, err := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger, factory)
 	assert.Nil(err)
 	assert.NotNil(differ)
@@ -308,7 +309,7 @@ func Disabled_TestLoadMismatchedFilesOnly(t *testing.T) {
 	keys, err := genMismatchedFiles(entries, numMismatch, file1, file2)
 	assert.Nil(err)
 
-	factory := file.NewFactory(false, nil)
+	factory := file.NewFactory(false, encryption.PBKDF2, nil)
 	differ, err := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger, factory)
 	assert.Nil(err)
 	assert.NotNil(differ)
@@ -354,7 +355,7 @@ func Disabled_TestLoadMismatchedFilesAndUneven(t *testing.T) {
 	assert.Nil(err)
 	f.Close()
 
-	factory := file.NewFactory(false, nil)
+	factory := file.NewFactory(false, encryption.PBKDF2, nil)
 	differ, err := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger, factory)
 	assert.Nil(err)
 	assert.NotNil(differ)

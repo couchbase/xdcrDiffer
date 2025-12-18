@@ -31,32 +31,13 @@ type EncryptorDecryptor interface {
 }
 
 // Config holds configuration parameters for encryption operations.
-type PBKDF2Config struct {
+type Config struct {
+	// KeyDerivationAlgo denotes the key derivation algorithm used
+	KeyDerivationAlgo KDF
 	// Salt is the cryptographic salt used in key derivation
 	Salt []byte
 	// Iteration is the number of PBKDF2 iterations used in key derivation
 	Iteration uint64
-	// Key is the derived encryption key
-	Key []byte
-}
-
-// Clone creates a deep copy of the Config.
-func (c *PBKDF2Config) Clone() *PBKDF2Config {
-	if c == nil {
-		return nil
-	}
-	clone := &PBKDF2Config{
-		Iteration: c.Iteration,
-	}
-	if c.Salt != nil {
-		clone.Salt = make([]byte, len(c.Salt))
-		copy(clone.Salt, c.Salt)
-	}
-	if c.Key != nil {
-		clone.Key = make([]byte, len(c.Key))
-		copy(clone.Key, c.Key)
-	}
-	return clone
 }
 
 // PassphraseGetter is a function type for obtaining passphrases interactively.

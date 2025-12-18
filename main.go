@@ -40,6 +40,7 @@ import (
 	"github.com/couchbase/xdcrDiffer/base"
 	"github.com/couchbase/xdcrDiffer/dcp"
 	"github.com/couchbase/xdcrDiffer/differ"
+	"github.com/couchbase/xdcrDiffer/encryption"
 	"github.com/couchbase/xdcrDiffer/file"
 	"github.com/couchbase/xdcrDiffer/utils"
 	"github.com/stretchr/testify/mock"
@@ -383,7 +384,7 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 		srcToTgtColIdsMap:       make(map[uint32][]uint32),
 		colFilterToTgtColIdsMap: map[string][]uint32{},
 		xattrKeysForNoCompare:   map[string]bool{},
-		factory:                 file.NewFactory(options.encryptionPassphrase, utils.GetPassphrase),
+		factory:                 file.NewFactory(options.encryptionPassphrase, encryption.PBKDF2, utils.GetPassphrase),
 	}
 	if options.fileContaingXattrKeysForNoComapre != "" {
 		readFile, er := os.Open(options.fileContaingXattrKeysForNoComapre)
@@ -550,7 +551,7 @@ func setupEncryption(difftool *xdcrDiffTool) {
 	}
 	defer zeroBytes()
 
-	fmt.Fprintf(os.Stdout, "Initializing encryption at rest with AES-GCM-256 and calculating key...")
+	fmt.Fprintf(os.Stdout, "Initializing encryption at rest with AES-GCM-256 and calculating key...\n")
 
 	err = difftool.factory.InitEncryption(false, passphrase)
 	if err != nil {

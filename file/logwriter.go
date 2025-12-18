@@ -22,6 +22,7 @@ type stdoutTeeWriter struct {
 	file File
 }
 
+// Write writes data to both stdout and the underlying file.
 func (w *stdoutTeeWriter) Write(p []byte) (int, error) {
 	// Write to stdout first (ignore errors - logging shouldn't fail due to stdout)
 	_, _ = os.Stdout.Write(p)

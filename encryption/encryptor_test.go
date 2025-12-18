@@ -189,19 +189,19 @@ func TestDeriveKeyPBKDF2(t *testing.T) {
 	passphrase := []byte("correct horse battery staple")
 	salt := []byte("1234567890abcdef") // 16 bytes
 
-	key := DeriveKeyPBKDF2(passphrase, salt, 5000, 32)
+	key := DeriveKeyPBKDF2(passphrase, []byte(SaltPrefix+string(salt)), 5000, 32)
 	assert.Equal(t, 32, len(key))
 
 	// Same inputs should produce same key
-	key2 := DeriveKeyPBKDF2(passphrase, salt, 5000, 32)
+	key2 := DeriveKeyPBKDF2(passphrase, []byte(SaltPrefix+string(salt)), 5000, 32)
 	assert.True(t, bytes.Equal(key, key2))
 
 	// Different salt should produce different key
-	key3 := DeriveKeyPBKDF2(passphrase, []byte("different_salt16"), 5000, 32)
+	key3 := DeriveKeyPBKDF2(passphrase, []byte(SaltPrefix+"different_salt16"), 5000, 32)
 	assert.False(t, bytes.Equal(key, key3))
 
 	// Different iterations should produce different key
-	key4 := DeriveKeyPBKDF2(passphrase, salt, 6000, 32)
+	key4 := DeriveKeyPBKDF2(passphrase, []byte(SaltPrefix+string(salt)), 6000, 32)
 	assert.False(t, bytes.Equal(key, key4))
 }
 
@@ -225,7 +225,7 @@ func TestCalibrateIterations(t *testing.T) {
 	passphrase := []byte("test passphrase")
 	salt, _ := GenerateSalt(SaltLen)
 
-	iter := CalibrateIterations(passphrase, salt, 32, CalibrationBudget, TargetDerivationTime)
+	iter := CalibrateIterations(passphrase, []byte(SaltPrefix+string(salt)), 32, CalibrationBudget, TargetDerivationTime)
 	assert.Greater(t, iter, 0)
 
 	// Should be at least 1000 (minimum)

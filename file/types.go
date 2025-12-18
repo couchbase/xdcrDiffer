@@ -67,7 +67,8 @@ type EncryptedFile struct {
 	eof bool
 }
 
-func newEncryptedFile(fd *os.File, name string, enc encryption.EncryptorDecryptor, mode FileMode) *EncryptedFile {
+// NewEncryptedFile creates a new EncryptedFile instance.
+func NewEncryptedFile(fd *os.File, name string, enc encryption.EncryptorDecryptor, mode FileMode) *EncryptedFile {
 	return &EncryptedFile{
 		file:      fd,
 		name:      name,

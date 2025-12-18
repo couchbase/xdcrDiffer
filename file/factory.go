@@ -11,11 +11,11 @@ package file
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sync"
 
@@ -27,10 +27,8 @@ import (
 type Factory struct {
 	// encryptionEnabled denotes if encryption is enabled.
 	encryptionEnabled bool
-	// sessionSalt is the salt used to derive the key for.
-	sessionSalt []byte
-	// sessionIteration is the iteration count used to derive the key.
-	sessionIteration uint64
+	// sessionConfig denotes the key-derivation configuration parameters for this session.
+	sessionConfig *encryption.Config
 	// passphraseGetter is used to get the passphras.
 	passphraseGetter encryption.PassphraseGetter
 	// mtx is used to synchronize access to the encryptor cache.
@@ -43,10 +41,11 @@ type Factory struct {
 
 // NewFactory creates a Factory.
 // If encryptionEnabled is false, passphraseGetter can be nil.
-func NewFactory(encryptionEnabled bool, passphraseGetter encryption.PassphraseGetter) *Factory {
+func NewFactory(encryptionEnabled bool, kdf encryption.KDF, passphraseGetter encryption.PassphraseGetter) *Factory {
 	f := &Factory{
 		encryptionEnabled: encryptionEnabled,
 		passphraseGetter:  passphraseGetter,
+		sessionConfig:     &encryption.Config{KeyDerivationAlgo: kdf},
 	}
 	if encryptionEnabled {
 		f.encryptorCache = make(map[string]*encryption.AES256GCMEncryptor)
@@ -80,13 +79,18 @@ func (f *Factory) InitEncryption(decryptMode bool, passphrase []byte) error {
 	}
 
 	// Calibrate iteration count for this hardware
-	iteration := encryption.CalibrateIterations(passphrase, salt, encryption.KeyLen, encryption.CalibrationBudget, encryption.TargetDerivationTime)
+	iteration := encryption.CalibrateIterations(passphrase, []byte(encryption.SaltPrefix+string(salt)), encryption.KeyLen, encryption.CalibrationBudget, encryption.TargetDerivationTime)
 	if iteration == 0 {
 		return fmt.Errorf("calibration returned 0 iterations")
 	}
 
+	// Quantize iteration count to a value that can be exactly represented in the header.
+	// The header format stores iterations as 1024 * 2^exponent, so we must use a quantized value
+	// to ensure the same iteration count is used during both encryption and decryption.
+	iteration = quantizeIterationCount(iteration)
+
 	// Derive key from passphrase
-	key := encryption.DeriveKeyPBKDF2(passphrase, salt, iteration, encryption.KeyLen)
+	key := encryption.DeriveKeyPBKDF2(passphrase, []byte(encryption.SaltPrefix+string(salt)), iteration, encryption.KeyLen)
 
 	// Create session encryptor
 	encryptor, err := encryption.NewAES256GCMEncryptor(key)
@@ -99,8 +103,8 @@ func (f *Factory) InitEncryption(decryptMode bool, passphrase []byte) error {
 	f.mtx.Lock()
 	defer f.mtx.Unlock()
 
-	f.sessionSalt = salt
-	f.sessionIteration = uint64(iteration)
+	f.sessionConfig.Salt = salt
+	f.sessionConfig.Iteration = uint64(iteration)
 	f.initialized = true
 
 	// Cache session encryptor
@@ -153,6 +157,7 @@ func openPlainFile(path string, flag int, perm os.FileMode) (*PlainFile, error) 
 	return &PlainFile{file: fd, name: path}, nil
 }
 
+// openEncryptedFile opens an encrypted file, handling headers and encryptor setup.
 func (f *Factory) openEncryptedFile(path string, flag int, perm os.FileMode, mode FileMode) (*EncryptedFile, error) {
 	fd, err := os.OpenFile(path, flag, perm)
 	if err != nil {
@@ -181,20 +186,25 @@ func (f *Factory) openEncryptedFile(path string, flag int, perm os.FileMode, mod
 		return nil, err
 	}
 
-	return newEncryptedFile(fd, path, encryptor, mode), nil
+	return NewEncryptedFile(fd, path, encryptor, mode), nil
 }
 
 // setupNewFile writes the session header and returns the session encryptor.
 func (f *Factory) setupNewFile(fd *os.File) (*encryption.AES256GCMEncryptor, error) {
+	// Seek to start of file before writing header
+	if pos, err := fd.Seek(0, io.SeekStart); err != nil || pos != 0 {
+		return nil, fmt.Errorf("failed to seek to start: pos=%d err=%v", pos, err)
+	}
+
 	// Write header with session salt and iteration
-	if err := f.writeHeader(fd, f.sessionSalt, f.sessionIteration); err != nil {
+	if err := f.writeHeader(fd); err != nil {
 		return nil, fmt.Errorf("failed to write header: %w", err)
 	}
 
 	f.mtx.RLock()
 	defer f.mtx.RUnlock()
 
-	encryptor, exists := f.encryptorCache[hex.EncodeToString(f.sessionSalt)]
+	encryptor, exists := f.encryptorCache[hex.EncodeToString(f.sessionConfig.Salt)]
 	if !exists {
 		return nil, errors.New("encryptor not found in cache")
 	}
@@ -205,6 +215,10 @@ func (f *Factory) setupNewFile(fd *os.File) (*encryption.AES256GCMEncryptor, err
 // If the salt matches session salt, returns session encryptor.
 // Otherwise, derives a new key using passphraseGetter.
 func (f *Factory) setupExistingFile(fd *os.File) (*encryption.AES256GCMEncryptor, error) {
+	// Seek to start of file before reading header
+	if _, err := fd.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("failed to seek to start: %w", err)
+	}
 	salt, iteration, err := f.readHeader(fd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read header: %w", err)
@@ -249,7 +263,7 @@ func (f *Factory) deriveAndCacheEncryptor(salt []byte, iteration uint64) (*encry
 	defer zeroBytes()
 
 	// Derive key
-	key := encryption.DeriveKeyPBKDF2(passphrase, salt, int(iteration), encryption.KeyLen)
+	key := encryption.DeriveKeyPBKDF2(passphrase, []byte(encryption.SaltPrefix+string(salt)), int(iteration), encryption.KeyLen)
 
 	// Create encryptor
 	enc, err := encryption.NewAES256GCMEncryptor(key)
@@ -265,36 +279,105 @@ func (f *Factory) deriveAndCacheEncryptor(salt []byte, iteration uint64) (*encry
 }
 
 // writeHeader writes the encryption header to a file.
-// Header format: [8-byte magic][16-byte salt][8-byte iteration]
-func (f *Factory) writeHeader(fd *os.File, salt []byte, iteration uint64) error {
+// Header format: refer - https://github.com/couchbase/platform/blob/master/cbcrypto/EncryptedFileFormat.md
+// | offset | length | description                    |
+// +--------+--------+--------------------------------+
+// | 0      | 21     | magic: \0Couchbase Encrypted\0 |
+// | 21     | 1      | version                        |
+// | 22     | 1      | compression                    |
+// | 23     | 1      | key derivation                 |
+// | 24     | 3      | unused (should be set to 0)    |
+// | 27     | 1      | id len                         |
+// | 28     | 36     | id bytes                       |
+// | 64     | 16     | salt (uuid)                    |
+// +--------+--------+--------------------------------+
+// Total of 80 bytes
+
+// computeIterationFromHeaderValue computes the iteration count from the header byte.
+// The most significant 4 bits encode the iteration exponent.
+func computeIterationFromHeaderValue(kdf uint8) uint64 {
+	exponent := kdf >> 4
+	return 1024 * (1 << exponent)
+}
+
+// computeKDFFromHeaderValue computes the KDF from the header byte.
+// The least significant 4 bits determine the key derivation method.
+func computeKDFFromHeaderValue(kdf byte) encryption.KDF {
+	return encryption.KDF(kdf & 0x0F)
+}
+
+// quantizeIterationCount rounds down the iteration count to the nearest representable value.
+// The header format can only store iterations as 1024 * 2^exponent where exponent is 0-15.
+func quantizeIterationCount(iteration int) int {
+	if iteration < 1024 {
+		return 1024 // minimum
+	}
+	exponent := int(math.Log2(float64(iteration) / 1024))
+	if exponent > 15 {
+		// max exponent that fits in 4 bits
+		exponent = 15
+	}
+	return 1024 * (1 << exponent)
+}
+
+// computeKeyDerivationForHeader computes the header byte for the given iteration count and KDF.
+// iteration = 1024 * 2^exponent, so exponent = log2(iteration / 1024)
+// The least significant 4 bits encode the KDF method, the most significant 4 bits encode the iteration exponent.
+func computeKeyDerivationForHeader(iterationCount uint64, kdf encryption.KDF) byte {
+	exponent := uint8(math.Log2(float64(iterationCount) / 1024))
+	kdfByte := uint8(kdf)
+	return (exponent << 4) | (kdfByte & 0x0F)
+}
+
+// writeHeader writes the encryption header to the file descriptor.
+func (f *Factory) writeHeader(fd *os.File) error {
 	if fd == nil {
 		return fmt.Errorf("file descriptor is nil")
 	}
 
+	// Ensure file pointer is at start
+	if pos, err := fd.Seek(0, io.SeekCurrent); err != nil || pos != 0 {
+		return fmt.Errorf("file descriptor not at start of file: pos=%d err=%v", pos, err)
+	}
+
+	header := make([]byte, encryption.HeaderLength)
+	pos := 0
+
 	// 1. Magic header
-	if n, err := fd.Write(encryption.FileMagic); err != nil {
-		return err
-	} else if n != len(encryption.FileMagic) {
-		return fmt.Errorf("failed to write magic header: wrote %d of %d bytes", n, len(encryption.FileMagic))
+	copy(header[pos:encryption.MagicLength], encryption.FileMagic)
+	pos += encryption.MagicLength
+	// 2. Write the version
+	header[pos] = byte(encryption.VersionKeyDerivation)
+	pos++
+	// 3. Write the compression (no compression)
+	header[pos] = byte(encryption.Nocompression)
+	pos++
+	// 4. Write the KDF (PBKDF2)
+	header[pos] = computeKeyDerivationForHeader(f.sessionConfig.Iteration, encryption.PBKDF2)
+	pos++
+	// 5. Unused (3 bytes)
+	pos += 3
+	// 6. ID length (1 byte, 36 bytes for UUID)
+	header[pos] = byte(36)
+	pos++
+	// 7. ID bytes (36 bytes)
+	copy(header[pos:pos+36], []byte(encryption.KeyID))
+	pos += 36
+	// 8. Salt (16 bytes)
+	copy(header[pos:], f.sessionConfig.Salt)
+	pos += 16
+
+	if pos != 80 {
+		return fmt.Errorf("error constructing header: expected the pos to be at 80 but is at %v", pos)
 	}
 
-	// 2. 128-bits (16 bytes) salt
-	if len(salt) != encryption.SaltLen {
-		return fmt.Errorf("invalid salt length: %d != %d", len(salt), encryption.SaltLen)
+	// Write the header to the file
+	n, err := fd.Write(header)
+	if err != nil {
+		return fmt.Errorf("failed to write header: %w", err)
 	}
-	if n, err := fd.Write(salt); err != nil {
-		return err
-	} else if n != len(salt) {
-		return fmt.Errorf("failed to write salt: wrote %d of %d bytes", n, len(salt))
-	}
-
-	// 3. uint64 PBKDF2 iteration count (big endian)
-	var iterBuf [encryption.IterLen]byte
-	binary.BigEndian.PutUint64(iterBuf[:], iteration)
-	if n, err := fd.Write(iterBuf[:]); err != nil {
-		return err
-	} else if n != len(iterBuf) {
-		return fmt.Errorf("failed to write iteration count: wrote %d of %d bytes", n, len(iterBuf))
+	if n != 80 {
+		return fmt.Errorf("failed to write complete header: wrote %d of 80 bytes", n)
 	}
 
 	return nil
@@ -307,7 +390,7 @@ func (f *Factory) readHeader(fd *os.File) (salt []byte, iteration uint64, err er
 		return nil, 0, fmt.Errorf("file descriptor is nil")
 	}
 
-	headerLen := len(encryption.FileMagic) + encryption.SaltLen + encryption.IterLen
+	headerLen := 80
 
 	stat, err := fd.Stat()
 	if err != nil {
@@ -317,32 +400,79 @@ func (f *Factory) readHeader(fd *os.File) (salt []byte, iteration uint64, err er
 		return nil, 0, fmt.Errorf("file too small: %d < %d", stat.Size(), headerLen)
 	}
 
-	if _, err = fd.Seek(0, io.SeekStart); err != nil {
-		return nil, 0, fmt.Errorf("failed to seek to start of file: %w", err)
+	// Ensure file pointer is at start
+	if pos, err := fd.Seek(0, io.SeekCurrent); err != nil || pos != 0 {
+		return nil, 0, fmt.Errorf("file descriptor not at start of file: pos=%d err=%v", pos, err)
 	}
 
-	buf := make([]byte, headerLen)
-	if n, err := io.ReadFull(fd, buf); err != nil {
-		return nil, 0, fmt.Errorf("failed to read header: %w", err)
-	} else if n < headerLen {
-		return nil, 0, fmt.Errorf("failed to read header: read %d of %d bytes", n, headerLen)
+	// read the header
+	header := make([]byte, headerLen)
+	pos := 0
+	n, err := io.ReadFull(fd, header)
+	if n != 80 {
+		return nil, 0, fmt.Errorf("failed to read full header: read %d of 80 bytes, err=%v", n, err)
 	}
 
-	// Check magic
-	if !bytes.Equal(buf[:len(encryption.FileMagic)], encryption.FileMagic) {
+	// 1. Check magic
+	if !bytes.Equal(header[pos:pos+encryption.MagicLength], encryption.FileMagic) {
 		return nil, 0, encryption.ErrorEncryptionFormatUnrecog
 	}
-
-	// Extract salt
-	saltStart := len(encryption.FileMagic)
+	pos += encryption.MagicLength
+	// 2. Read the version and ensure it supports PBKDF
+	version := encryption.Version(header[pos])
+	pos++
+	if version < encryption.VersionKeyDerivation {
+		return nil, 0, encryption.ErrorEncryptionFormatUnsupported
+	}
+	// 3. Read the compression algo used (if any)
+	compression := encryption.Compression(header[pos])
+	pos++
+	if compression != encryption.Nocompression {
+		// Differ does not support compression currently
+		return nil, 0, encryption.ErrorCompressionUnsupported
+	}
+	// 4. Read the KDF and iteration exponent
+	kdfByte := header[pos]
+	pos++
+	kdf := computeKDFFromHeaderValue(kdfByte)
+	if kdf != encryption.PBKDF2 {
+		// Differ only supports PBKDF2 currently
+		return nil, 0, encryption.ErrorKDFUnsupported
+	}
+	iteration = computeIterationFromHeaderValue(kdfByte)
+	if iteration == 0 || iteration > encryption.MaxIterations {
+		return nil, 0, fmt.Errorf("invalid iteration count derived from header: %d", iteration)
+	}
+	// 5. Unused (3 bytes)
+	pos += 3
+	// 6. ID length (1 byte)
+	idLen := int(header[pos])
+	pos++
+	if idLen != 36 {
+		return nil, 0, fmt.Errorf("invalid key ID length: %d", idLen)
+	}
+	// 7. ID bytes (36 bytes)
+	idBytes := header[pos : pos+36]
+	keyIDBytes := []byte(encryption.KeyID)
+	keyIDLen := len(keyIDBytes)
+	// Check that ID starts with KeyID
+	if !bytes.Equal(idBytes[:keyIDLen], keyIDBytes) {
+		return nil, 0, fmt.Errorf("unrecognized key ID: %s", string(idBytes[:keyIDLen]))
+	}
+	// Check that remaining bytes are zero-padded
+	paddingLen := 36 - keyIDLen
+	zeroPadding := make([]byte, paddingLen)
+	if !bytes.Equal(idBytes[keyIDLen:], zeroPadding) {
+		return nil, 0, fmt.Errorf("invalid key ID padding: expected zero bytes")
+	}
+	pos += 36
+	// 8. Salt (16 bytes)
 	salt = make([]byte, encryption.SaltLen)
-	copy(salt, buf[saltStart:saltStart+encryption.SaltLen])
+	copy(salt, header[pos:pos+encryption.SaltLen])
+	pos += encryption.SaltLen
 
-	// Extract iteration
-	iterStart := saltStart + encryption.SaltLen
-	iteration = binary.BigEndian.Uint64(buf[iterStart:])
-	if iteration == 0 {
-		return nil, 0, fmt.Errorf("invalid iteration count 0")
+	if pos != headerLen {
+		return nil, 0, fmt.Errorf("error parsing header: expected the pos to be at %d but is at %d", headerLen, pos)
 	}
 
 	return salt, iteration, nil

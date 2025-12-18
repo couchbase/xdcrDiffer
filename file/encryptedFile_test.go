@@ -23,7 +23,7 @@ import (
 func newTestFactory(t *testing.T) *Factory {
 	t.Helper()
 	passphrase := []byte(hex.EncodeToString(randomBytes(t, 32)))
-	factory := NewFactory(true, nil)
+	factory := NewFactory(true, encryption.PBKDF2, nil)
 	if err := factory.InitEncryption(false, passphrase); err != nil {
 		t.Fatalf("Factory.Init failed: %v", err)
 	}
