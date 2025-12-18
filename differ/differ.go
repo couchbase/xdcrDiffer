@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -25,7 +26,7 @@ import (
 	crMeta "github.com/couchbase/goxdcr/v8/crMeta"
 	hlv "github.com/couchbase/goxdcr/v8/hlv"
 	xdcrLog "github.com/couchbase/goxdcr/v8/log"
-	"github.com/couchbase/xdcrDiffer/encryption"
+	"github.com/couchbase/xdcrDiffer/file"
 	fdp "github.com/couchbase/xdcrDiffer/fileDescriptorPool"
 	"github.com/couchbase/xdcrDiffer/utils"
 )
@@ -100,8 +101,8 @@ type FileAttributes struct {
 	closeOp       func() error
 }
 
-func NewFileAttribute(fileName string, encReader encryption.FileOps) (*FileAttributes, error) {
-	fileReaderOps, err := encReader.OpenFile(fileName)
+func NewFileAttribute(fileName string, factory *file.Factory) (*FileAttributes, error) {
+	f, err := factory.OpenFile(fileName, os.O_RDONLY, 0, file.ReadMode)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +111,8 @@ func NewFileAttribute(fileName string, encReader encryption.FileOps) (*FileAttri
 		name:          fileName,
 		entries:       make(map[uint32]map[string]*oneEntry),
 		sortedEntries: make(map[uint32][]*oneEntry),
-		readOp:        fileReaderOps.ReadAndFillBytes,
+		readOp:        f.Read,
+		closeOp:       f.Close,
 	}
 	return attr, nil
 }
@@ -235,12 +237,12 @@ func (srcEntry *oneEntry) MapsToTargetCol(tgtColId uint32, colFilterTgtIds []uin
 	return false
 }
 
-func NewFilesDiffer(file1, file2 string, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32, logger *xdcrLog.CommonLogger, encReader encryption.FileOps) (*FilesDiffer, error) {
-	file1Attr, err := NewFileAttribute(file1, encReader)
+func NewFilesDiffer(file1, file2 string, collectionMapping map[uint32][]uint32, colFilterStrings []string, colFilterTgtIds []uint32, logger *xdcrLog.CommonLogger, factory *file.Factory) (*FilesDiffer, error) {
+	file1Attr, err := NewFileAttribute(file1, factory)
 	if err != nil {
 		return nil, err
 	}
-	file2Attr, err := NewFileAttribute(file2, encReader)
+	file2Attr, err := NewFileAttribute(file2, factory)
 	if err != nil {
 		return nil, err
 	}

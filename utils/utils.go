@@ -11,6 +11,7 @@ package utils
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"io"
 	"math"
 	mrand "math/rand"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,10 +29,10 @@ import (
 	xdcrBase "github.com/couchbase/goxdcr/v8/base"
 	xdcrUtils "github.com/couchbase/goxdcr/v8/utils"
 	"github.com/couchbase/xdcrDiffer/base"
-	"github.com/couchbase/xdcrDiffer/encryption"
+	"golang.org/x/term"
 )
 
-func GetFileName(fileDir string, vbno uint16, bucketIndex int, encryptor encryption.FileOps) string {
+func GetFileName(fileDir string, vbno uint16, bucketIndex int, suffix string) string {
 	var buffer bytes.Buffer
 	buffer.WriteString(fileDir)
 	buffer.WriteString(base.FileDirDelimiter)
@@ -39,18 +41,18 @@ func GetFileName(fileDir string, vbno uint16, bucketIndex int, encryptor encrypt
 	buffer.WriteString(fmt.Sprintf("%v", vbno))
 	buffer.WriteString(base.FileNameDelimiter)
 	buffer.WriteString(fmt.Sprintf("%v", bucketIndex))
-	buffer.WriteString(encryptor.GetEncryptionFilenameSuffix())
+	buffer.WriteString(suffix)
 	return buffer.String()
 }
 
-func GetManifestFileName(fileDir string, encryptor encryption.FileOps) string {
+func GetManifestFileName(fileDir string, suffix string) string {
 	var buffer bytes.Buffer
 	buffer.WriteString(fileDir)
 	buffer.WriteString(base.FileDirDelimiter)
 	buffer.WriteString(base.FileNamePrefix)
 	buffer.WriteString(base.FileNameDelimiter)
 	buffer.WriteString(fmt.Sprintf("%v", base.ManifestFileName))
-	buffer.WriteString(encryptor.GetEncryptionFilenameSuffix())
+	buffer.WriteString(suffix)
 	return buffer.String()
 }
 
@@ -265,16 +267,16 @@ func PopulateCCCPConnectString(url string) string {
 	return cccpUrl
 }
 
-func DiffKeysFileName(isSource bool, diffFileDir, diffKeysFileName string, svc encryption.EncryptionSvc) string {
+func DiffKeysFileName(isSource bool, diffFileDir, diffKeysFileName string, fileSuffix string) string {
 	suffix := base.SourceClusterName
 	if !isSource {
 		suffix = base.TargetClusterName
 	}
-	return diffFileDir + base.FileDirDelimiter + diffKeysFileName + base.FileNameDelimiter + suffix + svc.GetEncryptionFilenameSuffix()
+	return diffFileDir + base.FileDirDelimiter + diffKeysFileName + base.FileNameDelimiter + suffix + fileSuffix
 }
 
-func DiffKeysSrcMigrationFileName(diffKeysFileName string, svc encryption.EncryptionSvc) string {
-	return fmt.Sprintf("%v_%v%v", diffKeysFileName, base.DiffKeysSrcMigrationHintSuffix+svc.GetEncryptionFilenameSuffix())
+func DiffKeysSrcMigrationFileName(diffKeysFileName string, fileSuffix string) string {
+	return fmt.Sprintf("%v_%v%v", diffKeysFileName, base.DiffKeysSrcMigrationHintSuffix, fileSuffix)
 }
 
 // Relevant fields from NS-Server's response to /pools/default/trustedCAs
@@ -413,4 +415,46 @@ func cbCrc(key []byte) uint32 {
 
 func CbcVbMap(key []byte, numVbs uint32) uint16 {
 	return uint16(cbCrc(key) % numVbs)
+}
+
+// zeroBytes securely zeros a byte slice to prevent sensitive data from remaining in memory.
+func ZeroBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+	// Prevent the compiler from eliminating the loop.
+	if len(b) > 0 {
+		_ = subtle.ConstantTimeByteEq(b[0], 0)
+	}
+}
+
+// GetPassphrase returns a passphrase, a function to zero the passphrase and an error.
+func GetPassphrase() ([]byte, func(), error) {
+	fmt.Print("Enter encryption passphrase: ")
+	passphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Println() // move to next line after input
+	if err != nil {
+		return nil, nil, fmt.Errorf("error reading passphrase: %v", err)
+	}
+	// Use passphrase as needed
+
+	fmt.Print("enter the same encryption passphrase again: ")
+	confirmPassphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
+	fmt.Println()
+
+	if err != nil {
+		ZeroBytes(passphraseBytes)
+		return nil, nil, fmt.Errorf("error reading confirm passphrase: %v", err)
+	}
+
+	if !bytes.Equal(passphraseBytes, confirmPassphraseBytes) {
+		ZeroBytes(passphraseBytes)
+		ZeroBytes(confirmPassphraseBytes)
+		return nil, nil, fmt.Errorf("passphrases do not match. exiting")
+	}
+
+	// zero the confirm passphrase
+	ZeroBytes(confirmPassphraseBytes)
+
+	return passphraseBytes, func() { ZeroBytes(passphraseBytes) }, nil
 }

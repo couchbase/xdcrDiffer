@@ -7,7 +7,7 @@ import (
 
 	xdcrLog "github.com/couchbase/goxdcr/v8/log"
 	"github.com/couchbase/xdcrDiffer/base"
-	"github.com/couchbase/xdcrDiffer/encryption"
+	"github.com/couchbase/xdcrDiffer/file"
 	"github.com/couchbase/xdcrDiffer/utils"
 )
 
@@ -16,13 +16,13 @@ type Bucket struct {
 	lock sync.RWMutex
 	// current index in data for next write
 	index    int
-	file     *os.File
+	file     file.File
 	fileName string
 
 	logger    *xdcrLog.CommonLogger
 	bufferCap int
-	encryptor encryption.FileOps
 }
+
 type FileHandler struct {
 	fileDir             string
 	numberOfVbuckets    uint16
@@ -32,45 +32,26 @@ type FileHandler struct {
 	BucketMap           map[uint16]map[int]*Bucket
 	BucketLock          sync.RWMutex
 	logger              *xdcrLog.CommonLogger
-	encryptor           encryption.FileOps
+	factory             *file.Factory
 }
 
-func NewBucket(fileDir string, vbno uint16, bucketIndex int, logger *xdcrLog.CommonLogger, bufferCap int, encryptor encryption.FileOps) (*Bucket, error) {
-	fileName := utils.GetFileName(fileDir, vbno, bucketIndex, encryptor)
-	var err error
-	var file *os.File
+func NewBucket(fileDir string, vbno uint16, bucketIndex int, logger *xdcrLog.CommonLogger, bufferCap int, factory *file.Factory) (*Bucket, error) {
+	fileName := utils.GetFileName(fileDir, vbno, bucketIndex, factory.GetSuffix())
 
-	_, statErr := os.Stat(fileName)
-	fileExisted := !os.IsNotExist(statErr)
-	file, err = os.OpenFile(fileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, base.FileModeReadWrite)
+	// Factory handles header writing/validation automatically based on whether file exists
+	f, err := factory.OpenFile(fileName, os.O_APPEND|os.O_WRONLY|os.O_CREATE, base.FileModeReadWrite, file.WriteMode)
 	if err != nil {
+		logger.Errorf("Error opening file %v. err=%v\n", fileName, err)
 		return nil, err
 	}
-	if !fileExisted {
-		err = encryptor.WriteEncHeader(file)
-		if err != nil {
-			logger.Errorf("Error writing encryption header to file %v.  err=%v\n", fileName, err)
-			file.Close()
-			return nil, err
-		}
-	} else {
-		_, isValid, err := encryptor.ValidateHeader(file)
-		if err != nil || !isValid {
-			file.Close()
-			if !isValid {
-				logger.Errorf("Error validating encryption header of pre-existing file %v.  err=%v\n", fileName, err)
-				return nil, encryption.ErrorEncryptionFormatUnrecog
-			}
-		}
-	}
+
 	return &Bucket{
 		data:      make([]byte, bufferCap),
 		index:     0,
-		file:      file,
+		file:      f,
 		fileName:  fileName,
 		logger:    logger,
 		bufferCap: bufferCap,
-		encryptor: encryptor,
 	}, nil
 }
 
@@ -91,9 +72,7 @@ func (b *Bucket) Write(item []byte) error {
 
 // caller should lock the bucket
 func (b *Bucket) FlushToFile() error {
-	var numOfBytes int
-	var err error
-	numOfBytes, err = b.encryptor.WriteToFile(b.file, b.data[:b.index])
+	numOfBytes, err := b.file.Write(b.data[:b.index])
 	if err != nil {
 		return err
 	}
@@ -117,7 +96,7 @@ func (b *Bucket) Close() {
 	}
 }
 
-func NewFileHandler(fileDir string, numberOfVbuckets uint16, numberOfBins int, bufferCapacity int, requiresVBRemapping bool, logger *xdcrLog.CommonLogger, encryptor encryption.FileOps) *FileHandler {
+func NewFileHandler(fileDir string, numberOfVbuckets uint16, numberOfBins int, bufferCapacity int, requiresVBRemapping bool, logger *xdcrLog.CommonLogger, factory *file.Factory) *FileHandler {
 	return &FileHandler{
 		fileDir:             fileDir,
 		numberOfVbuckets:    numberOfVbuckets,
@@ -125,7 +104,7 @@ func NewFileHandler(fileDir string, numberOfVbuckets uint16, numberOfBins int, b
 		bufferCapacity:      bufferCapacity,
 		RequiresVBRemapping: requiresVBRemapping,
 		logger:              logger,
-		encryptor:           encryptor,
+		factory:             factory,
 	}
 }
 
@@ -141,7 +120,7 @@ func (fh *FileHandler) Initialize() error {
 		innerMap := make(map[int]*Bucket)
 		fh.BucketMap[vbno] = innerMap
 		for bin := 0; bin < fh.numberOfBins; bin++ {
-			bucket, err := NewBucket(fh.fileDir, vbno, bin, fh.logger, fh.bufferCapacity, fh.encryptor)
+			bucket, err := NewBucket(fh.fileDir, vbno, bin, fh.logger, fh.bufferCapacity, fh.factory)
 			if err != nil {
 				return err
 			}

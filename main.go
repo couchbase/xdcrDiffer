@@ -11,8 +11,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -42,11 +40,9 @@ import (
 	"github.com/couchbase/xdcrDiffer/base"
 	"github.com/couchbase/xdcrDiffer/dcp"
 	"github.com/couchbase/xdcrDiffer/differ"
-	"github.com/couchbase/xdcrDiffer/encryption"
-	"github.com/couchbase/xdcrDiffer/serviceImpl"
+	"github.com/couchbase/xdcrDiffer/file"
 	"github.com/couchbase/xdcrDiffer/utils"
 	"github.com/stretchr/testify/mock"
-	"golang.org/x/term"
 	"gopkg.in/yaml.v3"
 )
 
@@ -325,7 +321,7 @@ type xdcrDiffTool struct {
 	logger                  *xdcrLog.CommonLogger
 
 	xdcrTopologySvc service_def.XDCRCompTopologySvc
-	encryptionSvc   encryption.EncryptionSvc
+	factory         *file.Factory
 
 	selfRef             *metadata.RemoteClusterReference
 	selfRefPopulated    uint32
@@ -387,7 +383,7 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 		srcToTgtColIdsMap:       make(map[uint32][]uint32),
 		colFilterToTgtColIdsMap: map[string][]uint32{},
 		xattrKeysForNoCompare:   map[string]bool{},
-		encryptionSvc:           serviceImpl.NewEncryptionService(),
+		factory:                 file.NewFactory(options.encryptionPassphrase, utils.GetPassphrase),
 	}
 	if options.fileContaingXattrKeysForNoComapre != "" {
 		readFile, er := os.Open(options.fileContaingXattrKeysForNoComapre)
@@ -409,8 +405,16 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 
 	if options.encryptionPassphrase {
 		if options.decryptModeFile != "" {
-			// decrypt mode
-			output, err := difftool.encryptionSvc.DecryptFile(options.decryptModeFile, passphraseGetter)
+			fmt.Fprintln(os.Stdout, "Preparing for decryption with AES-GCM-256")
+			difftool.factory.InitEncryption(true, nil)
+
+			f, err := difftool.factory.OpenFile(options.decryptModeFile, os.O_RDONLY, 0, file.ReadMode)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error opening file %v: %v\n", options.decryptModeFile, err)
+				os.Exit(1)
+			}
+			output, err := f.ReadAll()
+			f.Close()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error decrypting file %v: %v\n", options.decryptModeFile, err)
 				os.Exit(1)
@@ -538,72 +542,40 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 	return difftool, err
 }
 
-func passphraseGetter() ([]byte, error) {
-	fmt.Print("Enter encryption passphrase: ")
-	passphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Println() // move to next line after input
-	if err != nil {
-		return nil, fmt.Errorf("Error reading passphrase: %v\n", err)
-	}
-	// Use passphrase as needed
-
-	fmt.Print("Enter the same encryption passphrase again: ")
-	confirmPassphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Println()
-	defer func() {
-		for i := range confirmPassphraseBytes {
-			confirmPassphraseBytes[i] = 0
-		}
-		// Prevent the compiler from eliminating the loop.
-		// The subtle.ConstantTimeByteEq call forces the data to be read.
-		if len(confirmPassphraseBytes) > 0 {
-			_ = subtle.ConstantTimeByteEq(confirmPassphraseBytes[0], 0)
-		}
-	}()
-	if err != nil {
-		return nil, fmt.Errorf("Error reading passphrase: %v\n", err)
-	}
-	if !bytes.Equal(passphraseBytes, confirmPassphraseBytes) {
-		return nil, fmt.Errorf("Passphrases do not match. Exiting.")
-	}
-	return passphraseBytes, nil
-}
-
 func setupEncryption(difftool *xdcrDiffTool) {
-	passphrase, err := passphraseGetter()
+	passphrase, zeroBytes, err := utils.GetPassphrase()
 	if err != nil {
 		fmt.Printf("Error getting passphrase: %v\n", err)
 		os.Exit(1)
 	}
+	defer zeroBytes()
 
-	err = difftool.encryptionSvc.Init(passphrase)
+	fmt.Fprintf(os.Stdout, "Initializing encryption at rest with AES-GCM-256 and calculating key...")
+
+	err = difftool.factory.InitEncryption(false, passphrase)
 	if err != nil {
-		fmt.Printf("Error initializing encryption service: %v\n", err)
+		fmt.Printf("Error initializing encryption: %v\n", err)
 		os.Exit(1)
-	}
-
-	if len(passphrase) > 0 {
-		// Zero out the passphrase slice for security
-		for i := range passphrase {
-			passphrase[i] = 0
-		}
-		// Prevent the compiler from eliminating the loop.
-		// The subtle.ConstantTimeByteEq call forces the data to be read.
-		_ = subtle.ConstantTimeByteEq(passphrase[0], 0)
 	}
 }
 
 func setupEncryptedLogger(difftool *xdcrDiffTool) {
-	// Remove the quotes around the filename if any
-	trimmedFilename := strings.Trim(options.encryptedLogFile, "\"")
-	logFileName := trimmedFilename + difftool.encryptionSvc.GetEncryptionFilenameSuffix()
-	encryptedLogCtx, doneCb, err := difftool.encryptionSvc.GetLoggerContext(logFileName)
+	// Build the encrypted log file path with suffix
+	logFileName := strings.Trim(options.encryptedLogFile, "\"") + difftool.factory.GetSuffix()
+
+	logCtx, doneCb, err := file.NewEncryptedLoggerContext(difftool.factory, logFileName)
 	if err != nil {
-		fmt.Printf("Error setting up encrypted logger: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error creating encrypted logger: %v\n", err)
 		os.Exit(1)
 	}
-	difftool.logger = xdcrLog.NewLogger("xdcrDiffTool", encryptedLogCtx)
+
 	difftool.encryptedLogCloseFunc = doneCb
+	difftool.logger = xdcrLog.NewLogger("xdcrDiffTool", logCtx)
+
+	if options.debugMode {
+		logCtx.SetLogLevel(xdcrLog.LogLevelDebug)
+		gocb.SetLogger(gocb.VerboseStdioLogger())
+	}
 }
 
 func setupSecuritySvcMock(securitySvc *service_def_mock.SecuritySvc) {
@@ -980,7 +952,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		difftool.srcCapabilities, difftool.srcCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity,
 		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode(),
 		difftool.xattrKeysForNoCompare, difftool.vbInfo.sourceNoOfVbuckets, difftool.vbInfo.isVariableVB,
-		difftool.encryptionSvc)
+		difftool.factory)
 
 	delayDurationBetweenSourceAndTarget := time.Duration(options.delayBetweenSourceAndTarget) * time.Second
 	difftool.logger.Infof("Waiting for %v before starting target dcp clients\n", delayDurationBetweenSourceAndTarget)
@@ -996,7 +968,7 @@ func (difftool *xdcrDiffTool) generateDataFiles() error {
 		difftool.tgtCapabilities, difftool.tgtCollectionIds, difftool.colFilterOrderedKeys, difftool.utils, options.bucketBufferCapacity,
 		difftool.migrationMapping, difftool.specifiedSpec.Settings.GetMobileCompatible(), difftool.specifiedSpec.Settings.GetExpDelMode(),
 		difftool.xattrKeysForNoCompare, difftool.vbInfo.targetNoOfVbuckets, difftool.vbInfo.isVariableVB,
-		difftool.encryptionSvc)
+		difftool.factory)
 
 	difftool.curState.mtx.Lock()
 	difftool.curState.state = StateDcpStarted
@@ -1033,7 +1005,7 @@ func (difftool *xdcrDiffTool) diffDataFiles() error {
 		difftool.srcToTgtColIdsMap, difftool.colFilterOrderedKeys,
 		difftool.colFilterOrderedTargetColId, difftool.selfRef.Uuid_, difftool.specifiedRef.Uuid_,
 		difftool.specifiedSpec.SourceBucketUUID, difftool.specifiedSpec.TargetBucketUUID, difftool.bucketTopologySvc,
-		difftool.specifiedSpec, difftool.logger, numberOfVbuckets, difftool.encryptionSvc)
+		difftool.specifiedSpec, difftool.logger, numberOfVbuckets, difftool.factory)
 	err = difftoolDriver.Run()
 	if err != nil {
 		difftool.logger.Errorf("Error from diffDataFiles = %v\n", err)
@@ -1088,21 +1060,21 @@ func (difftool *xdcrDiffTool) runMutationDiffer() {
 		time.Duration(options.sendBatchRetryInterval)*time.Millisecond,
 		time.Duration(options.sendBatchMaxBackoff)*time.Second, options.compareType, difftool.logger, difftool.srcToTgtColIdsMap,
 		difftool.srcCapabilities, difftool.tgtCapabilities, difftool.utils, options.mutationDifferRetries,
-		options.mutationDifferRetriesWaitSecs, difftool.duplicatedMapping, difftool.encryptionSvc)
+		options.mutationDifferRetriesWaitSecs, difftool.duplicatedMapping, difftool.factory)
 	err = mutationDiffer.Run()
 	if err != nil {
 		difftool.logger.Errorf("Error from runMutationDiffer = %v\n", err)
 	}
 }
 
-func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bucketBufferCap int, migrationMapping metadata.CollectionNamespaceMapping, mobileCompat int, expDelMode xdcrBase.FilterExpDelType, xattrKeysForNoCompare map[string]bool, numberOfVbuckets uint16, isVariableVB bool, encryptionSvc encryption.EncryptionSvc) *dcp.DcpDriver {
+func startDcpDriver(logger *xdcrLog.CommonLogger, name, url, bucketName string, ref *metadata.RemoteClusterReference, fileDir, checkpointFileDir, oldCheckpointFileName, newCheckpointFileName string, numberOfDcpClients, numberOfWorkersPerDcpClient, numberOfBins, dcpHandlerChanSize, bucketOpTimeout, maxNumOfGetStatsRetry, getStatsRetryInterval, getStatsMaxBackoff, checkpointInterval uint64, errChan chan error, waitGroup *sync.WaitGroup, completeBySeqno bool, filter xdcrParts.Filter, capabilities metadata.Capability, collectionIDs []uint32, colMigrationFilters []string, utils xdcrUtils.UtilsIface, bucketBufferCap int, migrationMapping metadata.CollectionNamespaceMapping, mobileCompat int, expDelMode xdcrBase.FilterExpDelType, xattrKeysForNoCompare map[string]bool, numberOfVbuckets uint16, isVariableVB bool, factory *file.Factory) *dcp.DcpDriver {
 	waitGroup.Add(1)
 	dcpDriver := dcp.NewDcpDriver(logger, name, url, bucketName, ref, fileDir, checkpointFileDir, oldCheckpointFileName,
 		newCheckpointFileName, int(numberOfDcpClients), int(numberOfWorkersPerDcpClient), int(numberOfBins),
 		int(dcpHandlerChanSize), time.Duration(bucketOpTimeout)*time.Second, int(maxNumOfGetStatsRetry),
 		time.Duration(getStatsRetryInterval)*time.Second, time.Duration(getStatsMaxBackoff)*time.Second,
 		int(checkpointInterval), errChan, waitGroup, completeBySeqno, filter, capabilities, collectionIDs, colMigrationFilters,
-		utils, bucketBufferCap, migrationMapping, mobileCompat, expDelMode, xattrKeysForNoCompare, numberOfVbuckets, isVariableVB, encryptionSvc)
+		utils, bucketBufferCap, migrationMapping, mobileCompat, expDelMode, xattrKeysForNoCompare, numberOfVbuckets, isVariableVB, factory)
 	// dcp driver startup may take some time. Do it asynchronously
 	go startDcpDriverAysnc(dcpDriver, errChan, logger)
 	return dcpDriver
@@ -1443,39 +1415,27 @@ func (difftool *xdcrDiffTool) outputManifestsToFiles(err error) error {
 		return err
 	}
 
-	srcFd, err := os.OpenFile(utils.GetManifestFileName(options.sourceFileDir, difftool.encryptionSvc), os.O_WRONLY|os.O_CREATE, base.FileModeReadWrite)
+	srcFile, err := difftool.factory.OpenFile(utils.GetManifestFileName(options.sourceFileDir, difftool.factory.GetSuffix()), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, base.FileModeReadWrite, file.WriteMode)
 	if err != nil {
 		difftool.logger.Errorf("SrcManifestOpenFile - %v\n", err)
 		return err
 	}
-	defer srcFd.Close()
+	defer srcFile.Close()
 
-	tgtFd, err := os.OpenFile(utils.GetManifestFileName(options.targetFileDir, difftool.encryptionSvc), os.O_WRONLY|os.O_CREATE, base.FileModeReadWrite)
+	tgtFile, err := difftool.factory.OpenFile(utils.GetManifestFileName(options.targetFileDir, difftool.factory.GetSuffix()), os.O_WRONLY|os.O_CREATE|os.O_TRUNC, base.FileModeReadWrite, file.WriteMode)
 	if err != nil {
 		difftool.logger.Errorf("TgtManifestOpenFile - %v\n", err)
 		return err
 	}
-	defer tgtFd.Close()
+	defer tgtFile.Close()
 
-	err = difftool.encryptionSvc.WriteEncHeader(srcFd)
-	if err != nil {
-		difftool.logger.Errorf("SrcManifestWriteHeader - %v\n", err)
-		return err
-	}
-
-	err = difftool.encryptionSvc.WriteEncHeader(tgtFd)
-	if err != nil {
-		difftool.logger.Errorf("TgtManifestWriteHeader - %v\n", err)
-		return err
-	}
-
-	_, err = difftool.encryptionSvc.WriteToFile(srcFd, srcManJson)
+	_, err = srcFile.Write(srcManJson)
 	if err != nil {
 		difftool.logger.Errorf("SrcManifestWriteToFile - %v\n", err)
 		return err
 	}
 
-	_, err = difftool.encryptionSvc.WriteToFile(tgtFd, tgtManJson)
+	_, err = tgtFile.Write(tgtManJson)
 	if err != nil {
 		difftool.logger.Errorf("TgtManifestWriteToFile - %v\n", err)
 		return err

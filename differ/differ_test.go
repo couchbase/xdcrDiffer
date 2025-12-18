@@ -24,7 +24,7 @@ import (
 	"github.com/couchbase/gomemcached"
 	"github.com/couchbase/goxdcr/v8/log"
 	"github.com/couchbase/xdcrDiffer/dcp"
-	"github.com/couchbase/xdcrDiffer/serviceImpl"
+	"github.com/couchbase/xdcrDiffer/file"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -224,8 +224,8 @@ func TestLoader(t *testing.T) {
 	err = os.WriteFile(outputFileTemp2, data, 0644)
 	assert.Nil(err)
 
-	encSvc := &serviceImpl.EncryptionServiceImpl{}
-	differ, err := NewFilesDiffer(outputFileTemp1, outputFileTemp2, nil, nil, nil, testLogger, encSvc)
+	factory := file.NewFactory(false, nil)
+	differ, err := NewFilesDiffer(outputFileTemp1, outputFileTemp2, nil, nil, nil, testLogger, factory)
 	assert.Nil(err)
 	err = differ.file1.LoadFileIntoBuffer()
 	assert.Nil(err)
@@ -251,8 +251,8 @@ func TestLoaderWithColFilters(t *testing.T) {
 	err = os.WriteFile(outputFileTemp2, data, 0644)
 	assert.Nil(err)
 
-	encSvc := &serviceImpl.EncryptionServiceImpl{}
-	differ, err := NewFilesDiffer(outputFileTemp1, outputFileTemp2, nil, nil, nil, testLogger, encSvc)
+	factory := file.NewFactory(false, nil)
+	differ, err := NewFilesDiffer(outputFileTemp1, outputFileTemp2, nil, nil, nil, testLogger, factory)
 	assert.Nil(err)
 	err = differ.file1.LoadFileIntoBuffer()
 	assert.Nil(err)
@@ -278,8 +278,8 @@ func TestLoadSameFile(t *testing.T) {
 	err := genSameFiles(entries, file1, file2)
 	assert.Equal(nil, err)
 
-	encSvc := &serviceImpl.EncryptionServiceImpl{}
-	differ, err := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger, encSvc)
+	factory := file.NewFactory(false, nil)
+	differ, err := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger, factory)
 	assert.Nil(err)
 	assert.NotNil(differ)
 
@@ -308,8 +308,8 @@ func Disabled_TestLoadMismatchedFilesOnly(t *testing.T) {
 	keys, err := genMismatchedFiles(entries, numMismatch, file1, file2)
 	assert.Nil(err)
 
-	encSvc := &serviceImpl.EncryptionServiceImpl{}
-	differ, err := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger, encSvc)
+	factory := file.NewFactory(false, nil)
+	differ, err := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger, factory)
 	assert.Nil(err)
 	assert.NotNil(differ)
 
@@ -354,8 +354,8 @@ func Disabled_TestLoadMismatchedFilesAndUneven(t *testing.T) {
 	assert.Nil(err)
 	f.Close()
 
-	encSvc := &serviceImpl.EncryptionServiceImpl{}
-	differ, err := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger, encSvc)
+	factory := file.NewFactory(false, nil)
+	differ, err := NewFilesDiffer(file1, file2, nil, nil, nil, testLogger, factory)
 	assert.Nil(err)
 	assert.NotNil(differ)
 
