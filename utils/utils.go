@@ -438,7 +438,7 @@ func GetPassphrase() ([]byte, func(), error) {
 	}
 	// Use passphrase as needed
 
-	fmt.Print("enter the same encryption passphrase again: ")
+	fmt.Print("Enter the same encryption passphrase again: ")
 	confirmPassphraseBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Println()
 
