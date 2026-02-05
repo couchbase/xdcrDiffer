@@ -143,6 +143,9 @@ type inputOptions struct {
 	encryptedLogFile string
 	// path or identifier of file to decrypt
 	decryptModeFile string
+	// excludeDCPExpiryEvents means that expiry events will not be differentiated from deletions over DCP. The default
+	// will be false and can be optionally turned on if the server doesn't support expiry opcode (i.e. versions < 6.5).
+	excludeDCPExpiryEvents bool
 }
 
 var options inputOptions = inputOptions{}
@@ -261,6 +264,8 @@ func argParse() {
 		"path and filename (without .enc suffix) of the log file to be encrypted; required with -encryptionPassphrase")
 	flag.StringVar(&options.decryptModeFile, "decrypt", "",
 		" run the program specifically for the purpose of decrypting an encrypted file with the output to standard out")
+	flag.BoolVar(&options.excludeDCPExpiryEvents, "excludeDCPExpiryEvents", base.ExcludeExpiryDCPEvents,
+		"Set it to true if either the source or target cluster doesn't support DCP expiry opcode")
 	flag.Parse()
 
 	// Validation for encryption/log flags
@@ -810,6 +815,7 @@ func main() {
 	}
 
 	base.SetupTimeoutSeconds = options.setupTimeout
+	base.ExcludeExpiryDCPEvents = options.excludeDCPExpiryEvents
 	xdcrBase.GoxdcrHELOUserAgent = "xdcrDiffer"
 
 	validateCompareType(options.compareType)

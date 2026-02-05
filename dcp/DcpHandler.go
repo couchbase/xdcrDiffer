@@ -186,6 +186,15 @@ func (dh *DcpHandler) processMutation(mut *Mutation) {
 	}
 }
 
+// replicationFilter takes care of filter expression based filtering settings.
+//
+// Note that filterExpiration and filterDeletion settings are not taken care by this function. When these two settings are (or were) configured
+// in either sides of the XDCRed clusters, the differ will naturally report DeletedFromSource/DeletedFromTarget (tombstones) or
+// MissingFromSource/MissingFromTarget (tombstones purged), which needs to be kept in mind when analysing the differ output.
+// Also note that filterExpirationsWithExpression and filterDeletionsWithExpression are taken care by this function. However, when these settings
+// are updated over the lifetime of a replication, XDCR doesn't restream from seqno 0 by design. Therefore, there could be some potential
+// DeletedFromSource/DeletedFromTarget (tombstones) or MissingFromSource/MissingFromTarget (tombstones purged) reported by design, but only when these
+// two settings are updated since the time of replication creation.
 func (dh *DcpHandler) replicationFilter(mut *Mutation, matched bool, filterResult base.FilterResultType) base.FilterResultType {
 	var err error
 	var errStr string
