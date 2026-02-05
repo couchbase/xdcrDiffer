@@ -137,6 +137,9 @@ type inputOptions struct {
 	fileContaingXattrKeysForNoComapre string
 	//path to yaml config file
 	yamlConfigFilePath string
+	// excludeDCPExpiryEvents means that expiry events will not be differentiated from deletions over DCP. The default
+	// will be false and can be optionally turned on if the server doesn't support expiry opcode (i.e. versions < 6.5).
+	excludeDCPExpiryEvents bool
 }
 
 var options inputOptions = inputOptions{}
@@ -251,6 +254,8 @@ func argParse() {
 		"Path to the file containing the Xattr keys for NoCompare ")
 	flag.StringVar(&options.yamlConfigFilePath, "yamlConfigFilePath", "",
 		"Path to the file containing configuration for the difftool")
+	flag.BoolVar(&options.excludeDCPExpiryEvents, "excludeDCPExpiryEvents", base.ExcludeExpiryDCPEvents,
+		"Set it to true if either the source or target cluster doesn't support DCP expiry opcode")
 	flag.Parse()
 }
 
@@ -714,6 +719,7 @@ func main() {
 	}
 
 	base.SetupTimeoutSeconds = options.setupTimeout
+	base.ExcludeExpiryDCPEvents = options.excludeDCPExpiryEvents
 	xdcrBase.GoxdcrHELOUserAgent = "xdcrDiffer"
 
 	validateCompareType(options.compareType)

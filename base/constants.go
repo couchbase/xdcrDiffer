@@ -130,3 +130,8 @@ const (
 var MutationDiffCompareType = []string{MutationCompareTypeMetadata, MutationCompareTypeBodyOnly, MutationCompareTypeBodyAndMeta}
 
 const Uint32MaxVal uint32 = 1<<32 - 1
+
+// ExcludeExpiryDCPEvents governs how differ receives expiry events over DCP. The default is false, which
+// means that it'll be received as expiry event (supported >= 6.5) and if it's true, then it means that it's received as
+// deletion event (pre-6.5 behavior).
+var ExcludeExpiryDCPEvents bool = false

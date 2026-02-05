@@ -121,3 +121,5 @@ debugMode: false
 setupTimeout: 10
 # string denoting the xattrs that shouldn't be compared
 fileContaingXattrKeysForNoComapre: ""
+# represents that DCP expiry opcode is supported by both source and target cluster.
+excludeDCPExpiryEvents: false

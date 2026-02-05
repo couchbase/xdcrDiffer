@@ -42,6 +42,11 @@ func (f *GocbcoreDCPFeed) setupDCPAgent(auth interface{}, collections bool, ref 
 		flags |= memd.DcpOpenFlagNoValue
 	}
 
+	if !base.ExcludeExpiryDCPEvents {
+		// It's mandatory to request for delete times to receive expiry events.
+		flags |= memd.DcpOpenFlagIncludeDeleteTimes
+	}
+
 	err = f.setupGocbcoreDCPAgent(agentConfig, flags, shouldBeSecure)
 	return err
 }
@@ -74,7 +79,7 @@ func (f *GocbcoreDCPFeed) setupDCPAgentConfig(authMech interface{}, collections 
 	if auth == nil {
 		panic("Nil auth")
 	}
-	return &gocbcore.DCPAgentConfig{
+	config := &gocbcore.DCPAgentConfig{
 		UserAgent:  f.Name,
 		BucketName: f.BucketName,
 		SecurityConfig: gocbcore.SecurityConfig{
@@ -89,7 +94,15 @@ func (f *GocbcoreDCPFeed) setupDCPAgentConfig(authMech interface{}, collections 
 		CompressionConfig: gocbcore.CompressionConfig{Enabled: true},
 		IoConfig:          gocbcore.IoConfig{UseCollections: collections},
 		HTTPConfig:        gocbcore.HTTPConfig{ConnectTimeout: f.SetupTimeout},
-	}, useTLS, nil
+	}
+
+	if !base.ExcludeExpiryDCPEvents {
+		// true implies that expiry events will be sent as expiration opcode over DCP.
+		// Setting it to false implies that expiry events will be sent as deletion opcode over DCP.
+		config.DCPConfig.UseExpiryOpcode = true
+	}
+
+	return config, useTLS, nil
 }
 
 func getAgentConfigs(authMech interface{}, ref *metadata.RemoteClusterReference) (bool, func() *x509.CertPool, gocbcore.AuthProvider, error) {
