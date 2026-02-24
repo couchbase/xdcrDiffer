@@ -1,7 +1,23 @@
 PROJECT (xdcrDiffer)
 
+SET (LDFLAGS)
+
+IF (BUILD_ENTERPRISE)
+   MESSAGE(STATUS "Building EE edition of xdcrDiffer")
+   SET (xdcrGoTags "pcre")
+ELSE (BUILD_ENTERPRISE)
+   MESSAGE(STATUS "Building CE edition of xdcrDiffer")
+ENDIF (BUILD_ENTERPRISE)
+
+SET(CGO_INCLUDE_DIRS "${PCRE_INCLUDE_DIR}")
+SET(CGO_LIBRARY_DIRS "${PCRE_LIBRARY_DIR}")
+
 GoModBuild(TARGET xdcrDiffer PACKAGE github.com/couchbase/xdcrDiffer
   INSTALL_PATH bin OUTPUT xdcrDiffer
+  CGO_INCLUDE_DIRS "${CGO_INCLUDE_DIRS}"
+  CGO_LIBRARY_DIRS "${CGO_LIBRARY_DIRS}"
+  GOTAGS "${xdcrGoTags}"
+  LDFLAGS "${LDFLAGS}"
   GOVERSION SUPPORTED_NEWER)
 
 IF(NOT WIN32)
