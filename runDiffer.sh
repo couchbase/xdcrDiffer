@@ -48,6 +48,7 @@ Options:
 	[-x] OR [--encryptionPassphrase]                             : Runs the differ and asks for an encryption passphrase to encrypt data at rest. Cannot be used with yaml config.
 	[-y <path/to/yaml>] OR [--yamlFile=<path/to/yaml>]           : Specify the path to the yaml file containing the configuration.
 	[-w <setupTimeout>]                                          : Specify timeout duration.
+	[-g <numCPUs>] OR [--gomaxprocs=<numCPUs>]                   : Limit the Go runtime to <numCPUs> logical cores (sets GOMAXPROCS). Default: all cores. Lower this to reduce CPU usage at the cost of longer runtime.
 	[--xattrExcludeKeysFile=<path/to/file>]                      : Path to the file containing xattr keys to exclude for comparison.
 	[--newCkptFile=<path/to/file>]                               : Path to the new checkpoint file.
 	[--oldCkptFile=<path/to/file>]                               : Path to the old checkpoint file.
@@ -83,7 +84,7 @@ function killBgTail {
 	fi
 }
 
-while getopts ":h:p:u:r:s:t:cm:e:w:d:o:y:x-:" opt; do
+while getopts ":h:p:u:r:s:t:cm:e:w:d:o:y:xg:-:" opt; do
 	case ${opt} in
 	u)
 		username=$OPTARG
@@ -123,6 +124,9 @@ while getopts ":h:p:u:r:s:t:cm:e:w:d:o:y:x-:" opt; do
 		;;
 	o)
 		outputDirectory=$OPTARG
+		;;
+	g)
+		gomaxprocs=$OPTARG
 		;;
 	y)
 		# Validate yamlFile argument
@@ -176,6 +180,9 @@ while getopts ":h:p:u:r:s:t:cm:e:w:d:o:y:x-:" opt; do
 			;;
 		outputDir=*)
 			outputDirectory=${OPTARG#*=}
+			;;
+		gomaxprocs=*)
+			gomaxprocs=${OPTARG#*=}
 			;;
 
 		newCkptFile=*)
@@ -398,6 +405,14 @@ if [[ ! -z "$yamlFile" ]]; then
 	setupFromYaml
 else
 	setupFromCmdLine
+fi
+
+if [[ -n "$gomaxprocs" ]]; then
+	if ! [[ "$gomaxprocs" =~ ^[1-9][0-9]*$ ]]; then
+		echo "Error: gomaxprocs (-g) must be a positive integer, got: $gomaxprocs"
+		exit 1
+	fi
+	export GOMAXPROCS="$gomaxprocs"
 fi
 
 if [[ ! -z "$encryptionPassphrase" ]]; then
