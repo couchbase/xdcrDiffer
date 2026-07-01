@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -710,6 +711,9 @@ func UnmarshalYaml(path string) error {
 
 func main() {
 	argParse()
+
+	fmt.Printf("GOMAXPROCS is set to %v (out of %v logical CPUs available)\n", runtime.GOMAXPROCS(0), runtime.NumCPU())
+
 	if options.yamlConfigFilePath != "" {
 		err := UnmarshalYaml(options.yamlConfigFilePath)
 		if err != nil {

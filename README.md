@@ -50,6 +50,8 @@ It can be compiled using the accompanying make file.
 #### Preparing Couchbase Clusters
 Before running the differ to examine consistencies between two clusters, it is *highly recommended* to first set the Metadata Purge Interval to a low value, and then once that period has elapsed, run compaction on both clusters to ensure that tombstones are removed. Compaction will also ensure that the differ will only receive the minimum amount of data necessary, which will help minimize the storage requirement for the diff tool.
 
+If the differ consumes too much CPU during preprocessing (deduplication and key-based sorting), the `-g <numCPUs>` (or `--gomaxprocs=<numCPUs>`) option can be used to limit the Go runtime to a smaller number of logical cores (it sets `GOMAXPROCS` for the run). By default all cores are used. Lowering this reduces CPU pressure at the cost of a longer runtime, for example: `./runDiffer.sh -u Administrator -p password -h 127.0.0.1:9000 -r backupCluster -s beer-sample -t backupDumpster -c -g 4`.
+
 #### runDiffer
 The `runDiffer.sh` shell script will ask for the minimum required information to run the difftool. This information can either be passed through the command line or the script can also read from a YAML file. This is the *preferred* method.
 Refer to `sampleConfig.yaml` for example.
