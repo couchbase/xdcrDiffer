@@ -257,7 +257,7 @@ func NewFilesDiffer(file1, file2 string, collectionMapping map[uint32][]uint32, 
 		logger:              logger,
 	}
 	if len(collectionMapping) == 0 {
-		// This means this is legacy mode - no collection support
+		// No collection support on either cluster (pre-7.0) - diff the default collection only
 		differ.collectionIdMapping = make(map[uint32][]uint32)
 		differ.collectionIdMapping[0] = []uint32{0}
 	}

@@ -57,9 +57,6 @@ type inputOptions struct {
 	sourceBucketName                  string
 	remoteClusterName                 string
 	sourceFileDir                     string
-	targetUrl                         string
-	targetUsername                    string
-	targetPassword                    string
 	targetBucketName                  string
 	targetFileDir                     string
 	numberOfSourceDcpClients          uint64
@@ -152,8 +149,8 @@ type inputOptions struct {
 var options inputOptions = inputOptions{}
 
 func (o inputOptions) String() string {
-	return fmt.Sprintf("Options{sourceUrl: %s, sourceUsername: %s, sourcePassword: REDACTED, sourceBucketName: %s, remoteClusterName: %s, sourceFileDir: %s, targetUrl: %s, targetUsername: %s, targetPassword: REDACTED, targetBucketName: %s, targetFileDir: %s, numberOfSourceDcpClients: %d, numberOfWorkersPerSourceDcpClient: %d, numberOfTargetDcpClients: %d, numberOfWorkersPerTargetDcpClient: %d, numberOfWorkersForFileDiffer: %d, numberOfWorkersForMutationDiffer: %d, numberOfBins: %d, completeByDuration: %d, completeBySeqno: %t, checkpointFileDir: %s, oldCheckpointFileName: %s, newCheckpointFileName: %s, fileDifferDir: %s, mutationDifferDir: %s, mutationDifferBatchSize: %d, mutationDifferTimeout: %d, sourceDcpHandlerChanSize: %d, targetDcpHandlerChanSize: %d, bucketOpTimeout: %d, maxNumOfGetStatsRetry: %d, maxNumOfSendBatchRetry: %d, getStatsRetryInterval: %d, sendBatchRetryInterval: %d, getStatsMaxBackoff: %d, sendBatchMaxBackoff: %d, delayBetweenSourceAndTarget: %d, checkpointInterval: %d, runDataGeneration: %t, runFileDiffer: %t, runMutationDiffer: %t, enforceTLS: %t, bucketBufferCapacity: %d, compareType: %s, mutationDifferRetries: %d, mutationDifferRetriesWaitSecs: %d, numOfFiltersInFilterPool: %d, debugMode: %t, setupTimeout: %d, fileContaingXattrKeysForNoComapre: %s, yamlConfigFilePath: %s, encryptionPassphrase: %t encryptionLogFile: %s}",
-		o.sourceUrl, o.sourceUsername, o.sourceBucketName, o.remoteClusterName, o.sourceFileDir, o.targetUrl, o.targetUsername, o.targetBucketName, o.targetFileDir, o.numberOfSourceDcpClients, o.numberOfWorkersPerSourceDcpClient, o.numberOfTargetDcpClients, o.numberOfWorkersPerTargetDcpClient, o.numberOfWorkersForFileDiffer, o.numberOfWorkersForMutationDiffer, o.numberOfBins, o.completeByDuration, o.completeBySeqno, o.checkpointFileDir, o.oldCheckpointFileName, o.newCheckpointFileName, o.fileDifferDir, o.mutationDifferDir, o.mutationDifferBatchSize, o.mutationDifferTimeout, o.sourceDcpHandlerChanSize, o.targetDcpHandlerChanSize, o.bucketOpTimeout, o.maxNumOfGetStatsRetry, o.maxNumOfSendBatchRetry, o.getStatsRetryInterval, o.sendBatchRetryInterval, o.getStatsMaxBackoff, o.sendBatchMaxBackoff, o.delayBetweenSourceAndTarget, o.checkpointInterval, o.runDataGeneration, o.runFileDiffer, o.runMutationDiffer, o.enforceTLS, o.bucketBufferCapacity, o.compareType, o.mutationDifferRetries, o.mutationDifferRetriesWaitSecs, o.numOfFiltersInFilterPool, o.debugMode, o.setupTimeout, o.fileContaingXattrKeysForNoComapre, o.yamlConfigFilePath, o.encryptionPassphrase, o.encryptedLogFile)
+	return fmt.Sprintf("Options{sourceUrl: %s, sourceUsername: %s, sourcePassword: REDACTED, sourceBucketName: %s, remoteClusterName: %s, sourceFileDir: %s, targetBucketName: %s, targetFileDir: %s, numberOfSourceDcpClients: %d, numberOfWorkersPerSourceDcpClient: %d, numberOfTargetDcpClients: %d, numberOfWorkersPerTargetDcpClient: %d, numberOfWorkersForFileDiffer: %d, numberOfWorkersForMutationDiffer: %d, numberOfBins: %d, completeByDuration: %d, completeBySeqno: %t, checkpointFileDir: %s, oldCheckpointFileName: %s, newCheckpointFileName: %s, fileDifferDir: %s, mutationDifferDir: %s, mutationDifferBatchSize: %d, mutationDifferTimeout: %d, sourceDcpHandlerChanSize: %d, targetDcpHandlerChanSize: %d, bucketOpTimeout: %d, maxNumOfGetStatsRetry: %d, maxNumOfSendBatchRetry: %d, getStatsRetryInterval: %d, sendBatchRetryInterval: %d, getStatsMaxBackoff: %d, sendBatchMaxBackoff: %d, delayBetweenSourceAndTarget: %d, checkpointInterval: %d, runDataGeneration: %t, runFileDiffer: %t, runMutationDiffer: %t, enforceTLS: %t, bucketBufferCapacity: %d, compareType: %s, mutationDifferRetries: %d, mutationDifferRetriesWaitSecs: %d, numOfFiltersInFilterPool: %d, debugMode: %t, setupTimeout: %d, fileContaingXattrKeysForNoComapre: %s, yamlConfigFilePath: %s, encryptionPassphrase: %t encryptionLogFile: %s}",
+		o.sourceUrl, o.sourceUsername, o.sourceBucketName, o.remoteClusterName, o.sourceFileDir, o.targetBucketName, o.targetFileDir, o.numberOfSourceDcpClients, o.numberOfWorkersPerSourceDcpClient, o.numberOfTargetDcpClients, o.numberOfWorkersPerTargetDcpClient, o.numberOfWorkersForFileDiffer, o.numberOfWorkersForMutationDiffer, o.numberOfBins, o.completeByDuration, o.completeBySeqno, o.checkpointFileDir, o.oldCheckpointFileName, o.newCheckpointFileName, o.fileDifferDir, o.mutationDifferDir, o.mutationDifferBatchSize, o.mutationDifferTimeout, o.sourceDcpHandlerChanSize, o.targetDcpHandlerChanSize, o.bucketOpTimeout, o.maxNumOfGetStatsRetry, o.maxNumOfSendBatchRetry, o.getStatsRetryInterval, o.sendBatchRetryInterval, o.getStatsMaxBackoff, o.sendBatchMaxBackoff, o.delayBetweenSourceAndTarget, o.checkpointInterval, o.runDataGeneration, o.runFileDiffer, o.runMutationDiffer, o.enforceTLS, o.bucketBufferCapacity, o.compareType, o.mutationDifferRetries, o.mutationDifferRetriesWaitSecs, o.numOfFiltersInFilterPool, o.debugMode, o.setupTimeout, o.fileContaingXattrKeysForNoComapre, o.yamlConfigFilePath, o.encryptionPassphrase, o.encryptedLogFile)
 }
 
 func argParse() {
@@ -169,12 +166,6 @@ func argParse() {
 		"Remote cluster reference name used when creating it")
 	flag.StringVar(&options.sourceFileDir, "sourceFileDir", base.SourceFileDir,
 		"directory to store mutations in source cluster")
-	flag.StringVar(&options.targetUrl, "targetUrl", "",
-		"url for target cluster")
-	flag.StringVar(&options.targetUsername, "targetUsername", "",
-		"username for target cluster")
-	flag.StringVar(&options.targetPassword, "targetPassword", "",
-		"password for target cluster")
 	flag.StringVar(&options.targetBucketName, "targetBucketName", "",
 		"bucket name for target cluster")
 	flag.StringVar(&options.targetFileDir, "targetFileDir", base.TargetFileDir,
@@ -369,7 +360,6 @@ type xdcrDiffTool struct {
 
 	curState difftoolState
 
-	legacyMode bool
 	// Xattr Keys to be excluded for comparison
 	xattrKeysForNoCompare map[string]bool
 	// Includes vBucket details for both the source and target buckets.
@@ -382,11 +372,10 @@ func staticHostAddr() string {
 	return "http://" + options.sourceUrl
 }
 
-func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
+func NewDiffTool() (*xdcrDiffTool, error) {
 	var err error
 	difftool := &xdcrDiffTool{
 		utils:                   xdcrUtils.NewUtilities(),
-		legacyMode:              legacyMode,
 		srcToTgtColIdsMap:       make(map[uint32][]uint32),
 		colFilterToTgtColIdsMap: map[string][]uint32{},
 		xattrKeysForNoCompare:   map[string]bool{},
@@ -461,84 +450,78 @@ func NewDiffTool(legacyMode bool) (*xdcrDiffTool, error) {
 	difftool.selfRef, _ = metadata.NewRemoteClusterReference(sourceClusterUUID, base.SelfReferenceName, options.sourceUrl, options.sourceUsername, options.sourcePassword,
 		"", false, "", nil, nil, nil, nil)
 
-	if !legacyMode {
-		difftool.metadataSvc, err = metadata_svc.NewMetaKVMetadataSvc(nil, difftool.utils, true /*readOnly*/)
+	difftool.metadataSvc, err = metadata_svc.NewMetaKVMetadataSvc(nil, difftool.utils, true /*readOnly*/)
+	if err != nil {
+		return nil, err
+	}
+
+	uiLogSvcMock := &service_def_mock.UILogSvc{}
+	uiLogSvcMock.On("Write", mock.Anything).Run(func(args mock.Arguments) { fmt.Printf("%v", args.Get(0).(string)) }).Return(nil)
+	xdcrTopologyMock := &service_def_mock.XDCRCompTopologySvc{}
+	xdcrTopologyMock.On("MyClusterUUID").Return(sourceClusterUUID, nil)
+	xdcrTopologyMockSetupCb := func() {
+		setupXdcrToplogyMock(xdcrTopologyMock, difftool)
+	}
+	resolverSvcMock := &service_def_mock.ResolverSvcIface{}
+	checkpointSvcMock := &service_def_mock.CheckpointsService{}
+	manifestsSvcMock := &service_def_mock.ManifestsService{}
+	manifestsSvcMock.On("GetSourceManifests", mock.Anything).Return(nil, service_def.MetadataNotFoundErr)
+	manifestsSvcMock.On("GetTargetManifests", mock.Anything).Return(nil, service_def.MetadataNotFoundErr)
+
+	replicationSettingSvc := metadata_svc.NewReplicationSettingsSvc(difftool.metadataSvc, nil, xdcrTopologyMock)
+
+	difftool.remoteClusterSvc, err = metadata_svc.NewRemoteClusterService(uiLogSvcMock, difftool.metadataSvc, xdcrTopologyMock,
+		xdcrLog.DefaultLoggerContext, difftool.utils)
+	if err != nil {
+		return nil, err
+	}
+
+	if err = difftool.retrieveClustersCapabilities(xdcrTopologyMockSetupCb); err != nil {
+		return nil, err
+	}
+
+	difftool.replicationSpecSvc, err = metadata_svc.NewReplicationSpecService(uiLogSvcMock, difftool.remoteClusterSvc,
+		difftool.metadataSvc, xdcrTopologyMock, resolverSvcMock, difftool.logger.LoggerContext(), difftool.utils,
+		replicationSettingSvc)
+	if err != nil {
+		return nil, err
+	}
+
+	err = difftool.retrieveReplicationSpecInfo()
+	if err != nil {
+		return nil, err
+	}
+
+	securitySvc := &service_def_mock.SecuritySvc{}
+	setupSecuritySvcMock(securitySvc)
+	err = setupMyKVNodes(xdcrTopologyMock, difftool)
+	if err != nil {
+		return nil, err
+	}
+
+	difftool.bucketTopologySvc, err = service_impl.NewBucketTopologyService(xdcrTopologyMock, difftool.remoteClusterSvc,
+		difftool.utils, xdcrBase.TopologyChangeCheckInterval, difftool.logger.LoggerContext(),
+		difftool.replicationSpecSvc, securitySvc, streamApiWatcher.GetStreamApiWatcher)
+	if err != nil {
+		return nil, err
+	}
+	difftool.collectionsManifestsSvc, err = metadata_svc.NewCollectionsManifestService(difftool.remoteClusterSvc,
+		difftool.replicationSpecSvc, uiLogSvcMock, difftool.logger.LoggerContext(), difftool.utils, checkpointSvcMock,
+		xdcrTopologyMock, difftool.bucketTopologySvc, manifestsSvcMock)
+	if err != nil {
+		return nil, err
+	}
+
+	difftool.logger.Infof("Source cluster supports collections: %v Target cluster supports collections: %v\n",
+		difftool.srcCapabilities.HasCollectionSupport(), difftool.tgtCapabilities.HasCollectionSupport())
+
+	if difftool.srcCapabilities.HasCollectionSupport() || difftool.tgtCapabilities.HasCollectionSupport() {
+		err = difftool.populateCollectionsPreReq()
 		if err != nil {
-			return nil, err
-		}
-
-		uiLogSvcMock := &service_def_mock.UILogSvc{}
-		uiLogSvcMock.On("Write", mock.Anything).Run(func(args mock.Arguments) { fmt.Printf("%v", args.Get(0).(string)) }).Return(nil)
-		xdcrTopologyMock := &service_def_mock.XDCRCompTopologySvc{}
-		xdcrTopologyMock.On("MyClusterUUID").Return(sourceClusterUUID, nil)
-		xdcrTopologyMockSetupCb := func() {
-			setupXdcrToplogyMock(xdcrTopologyMock, difftool)
-		}
-		resolverSvcMock := &service_def_mock.ResolverSvcIface{}
-		checkpointSvcMock := &service_def_mock.CheckpointsService{}
-		manifestsSvcMock := &service_def_mock.ManifestsService{}
-		manifestsSvcMock.On("GetSourceManifests", mock.Anything).Return(nil, service_def.MetadataNotFoundErr)
-		manifestsSvcMock.On("GetTargetManifests", mock.Anything).Return(nil, service_def.MetadataNotFoundErr)
-
-		replicationSettingSvc := metadata_svc.NewReplicationSettingsSvc(difftool.metadataSvc, nil, xdcrTopologyMock)
-
-		difftool.remoteClusterSvc, err = metadata_svc.NewRemoteClusterService(uiLogSvcMock, difftool.metadataSvc, xdcrTopologyMock,
-			xdcrLog.DefaultLoggerContext, difftool.utils)
-		if err != nil {
-			return nil, err
-		}
-
-		if err = difftool.retrieveClustersCapabilities(legacyMode, xdcrTopologyMockSetupCb); err != nil {
-			return nil, err
-		}
-
-		difftool.replicationSpecSvc, err = metadata_svc.NewReplicationSpecService(uiLogSvcMock, difftool.remoteClusterSvc,
-			difftool.metadataSvc, xdcrTopologyMock, resolverSvcMock, difftool.logger.LoggerContext(), difftool.utils,
-			replicationSettingSvc)
-		if err != nil {
-			return nil, err
-		}
-
-		err = difftool.retrieveReplicationSpecInfo()
-		if err != nil {
-			return nil, err
-		}
-
-		securitySvc := &service_def_mock.SecuritySvc{}
-		setupSecuritySvcMock(securitySvc)
-		err = setupMyKVNodes(xdcrTopologyMock, difftool)
-		if err != nil {
-			return nil, err
-		}
-
-		difftool.bucketTopologySvc, err = service_impl.NewBucketTopologyService(xdcrTopologyMock, difftool.remoteClusterSvc,
-			difftool.utils, xdcrBase.TopologyChangeCheckInterval, difftool.logger.LoggerContext(),
-			difftool.replicationSpecSvc, securitySvc, streamApiWatcher.GetStreamApiWatcher)
-		if err != nil {
-			return nil, err
-		}
-		difftool.collectionsManifestsSvc, err = metadata_svc.NewCollectionsManifestService(difftool.remoteClusterSvc,
-			difftool.replicationSpecSvc, uiLogSvcMock, difftool.logger.LoggerContext(), difftool.utils, checkpointSvcMock,
-			xdcrTopologyMock, difftool.bucketTopologySvc, manifestsSvcMock)
-		if err != nil {
-			return nil, err
-		}
-
-		difftool.logger.Infof("Source cluster supports collections: %v Target cluster supports collections: %v\n",
-			difftool.srcCapabilities.HasCollectionSupport(), difftool.tgtCapabilities.HasCollectionSupport())
-
-		if difftool.srcCapabilities.HasCollectionSupport() || difftool.tgtCapabilities.HasCollectionSupport() {
-			err = difftool.populateCollectionsPreReq()
-			if err != nil {
-				return nil, err
-			}
-		}
-	} else {
-		// Need to do this outside of legacy mode
-		if err := difftool.retrieveClustersCapabilities(legacyMode, nil); err != nil {
 			return nil, err
 		}
 	}
+
 	difftool.vbInfo, err = difftool.getVbInfo()
 	if err != nil {
 		return nil, err
@@ -754,6 +737,15 @@ func UnmarshalYaml(path string) error {
 		return err
 	}
 
+	// The unsupported legacy mode used to be triggered by these keys. Reject them explicitly
+	// since unknown keys are otherwise silently ignored. Empty values are tolerated because
+	// older sample configs shipped with them.
+	for _, legacyKey := range []string{"targetUrl", "targetUsername", "targetPassword"} {
+		if value, ok := data[legacyKey].(string); ok && value != "" {
+			return fmt.Errorf("%v is no longer supported; create an XDCR remote cluster reference on the source cluster and specify remoteClusterName instead", legacyKey)
+		}
+	}
+
 	v := reflect.ValueOf(&options)
 	if v.Kind() != reflect.Ptr || v.Elem().Kind() != reflect.Struct {
 		return fmt.Errorf("v must be a pointer to a struct")
@@ -825,14 +817,13 @@ func main() {
 	validateCompareType(options.compareType)
 
 	fmt.Printf("differ is run with options: %+v\n", options)
-	legacyMode := len(options.targetUsername) > 0
 
 	if err := setupDirectories(); err != nil {
 		fmt.Printf("Unable to set up directory structure: %v\n", err)
 		os.Exit(1)
 	}
 
-	difftool, err := NewDiffTool(legacyMode)
+	difftool, err := NewDiffTool()
 	if err != nil {
 		fmt.Printf("Error creating difftool: %v\n", err)
 		os.Exit(1)
@@ -843,18 +834,6 @@ func main() {
 		// source cluster's certificate to prevent sniffing
 		if !isURLLoopBack(options.sourceUrl) {
 			fmt.Printf("enforceTLS options requires that source addr %v to use loopback device\n", options.sourceUrl)
-			os.Exit(1)
-		}
-	}
-
-	if legacyMode {
-		if options.enforceTLS {
-			fmt.Printf("enforceTLS option is not compatible with legacyMode")
-			os.Exit(1)
-		}
-		// OK to ignore metakv err in manual mode
-		if err := difftool.populateTemporarySpecAndRef(); err != nil {
-			fmt.Printf("%v\n", err)
 			os.Exit(1)
 		}
 	}
@@ -1155,12 +1134,6 @@ func (difftool *xdcrDiffTool) retrieveReplicationSpecInfo() error {
 		return err
 	}
 
-	if options.targetUsername != "" && options.targetUsername != difftool.specifiedRef.UserName() && options.targetPassword != "" && options.targetPassword != difftool.specifiedRef.Password() {
-		err = fmt.Errorf("user-specified username and password is different from that of the credentials from reference %v", difftool.specifiedRef.Name())
-		difftool.logger.Errorf(err.Error())
-		return err
-	}
-
 	specMap, err := difftool.replicationSpecSvc.AllReplicationSpecs()
 	if err != nil {
 		difftool.logger.Errorf("Error retrieving specs: %v\n", err)
@@ -1186,27 +1159,6 @@ func (difftool *xdcrDiffTool) retrieveReplicationSpecInfo() error {
 
 	difftool.logger.Infof("Found Remote Cluster: %v and Replication Spec: %v\n", difftool.specifiedRef.String(), difftool.specifiedSpec.String())
 	return nil
-}
-
-func (difftool *xdcrDiffTool) populateTemporarySpecAndRef() error {
-	var err error
-	difftool.specifiedSpec, err = metadata.NewReplicationSpecification(options.sourceBucketName, "", /*sourceBucketUUID*/
-		"" /*targetClusterUUID*/, options.targetBucketName, "" /*targetBucketUUID*/)
-	if err != nil {
-		return fmt.Errorf("populateTemporarySpecAndRef() - %v", err)
-	}
-
-	difftool.specifiedRef, err = metadata.NewRemoteClusterReference("" /*uuid*/, options.remoteClusterName /*name*/, options.targetUrl, options.targetUsername, options.targetPassword,
-		"", false, "", nil, nil, nil, nil)
-	if err != nil {
-		return fmt.Errorf("populateTemporarySpecAndRef() - %v", err)
-	}
-
-	err = difftool.populateSelfRef()
-	if err != nil {
-		return fmt.Errorf("populateTemporarySpecAndRef() - %v", err)
-	}
-	return err
 }
 
 func (difftool *xdcrDiffTool) monitorInterruptSignal() {
@@ -1292,7 +1244,7 @@ func (difftool *xdcrDiffTool) populateSelfRef() error {
 	return nil
 }
 
-func (difftool *xdcrDiffTool) retrieveClustersCapabilities(legacyMode bool, xdcrCompTopologyMockCb func()) error {
+func (difftool *xdcrDiffTool) retrieveClustersCapabilities(xdcrCompTopologyMockCb func()) error {
 	var err error
 	difftool.specifiedRef, err = difftool.remoteClusterSvc.RemoteClusterByRefName(options.remoteClusterName, true /*refresh*/)
 	if err != nil {
@@ -1310,16 +1262,14 @@ func (difftool *xdcrDiffTool) retrieveClustersCapabilities(legacyMode bool, xdcr
 		return err
 	}
 
-	if !legacyMode {
-		ref, err := difftool.remoteClusterSvc.RemoteClusterByRefName(difftool.specifiedRef.Name(), false)
-		if err != nil {
-			return fmt.Errorf("retrieveClusterCapabilities.RemoteClusterByRefName(%v) - %v", difftool.specifiedRef.Name(), err)
-		}
+	ref, err := difftool.remoteClusterSvc.RemoteClusterByRefName(difftool.specifiedRef.Name(), false)
+	if err != nil {
+		return fmt.Errorf("retrieveClusterCapabilities.RemoteClusterByRefName(%v) - %v", difftool.specifiedRef.Name(), err)
+	}
 
-		difftool.tgtCapabilities, err = difftool.remoteClusterSvc.GetCapability(ref)
-		if err != nil {
-			return fmt.Errorf("retrieveClusterCapabilities.GetCapability(%v) - %v", difftool.specifiedRef.Name(), err)
-		}
+	difftool.tgtCapabilities, err = difftool.remoteClusterSvc.GetCapability(ref)
+	if err != nil {
+		return fmt.Errorf("retrieveClusterCapabilities.GetCapability(%v) - %v", difftool.specifiedRef.Name(), err)
 	}
 
 	// Self capabilities

@@ -271,8 +271,8 @@ function setupFromCmdLine {
 		echo "Missing targetBucket"
 		printHelp
 		exit 1
-	elif [[ -z "$remoteClusterName" ]] && [[ -z "$targetUrl" ]]; then
-		echo "Missing remoteCluster name or target URL"
+	elif [[ -z "$remoteClusterName" ]]; then
+		echo "Missing remoteCluster name"
 		printHelp
 		exit 1
 	fi
@@ -295,19 +295,8 @@ function setupFromCmdLine {
 	execString="${execString} -targetBucketName"
 	execString="${execString} $targetBucketName"
 
-	if [[ ! -z "$remoteClusterUsername" ]] && [[ ! -z "$remoteClusterPassword" ]]; then
-		execString="${execString} -targetUsername"
-		execString="${execString} $remoteClusterUsername"
-		execString="${execString} -targetPassword"
-		execString="${execString} $remoteClusterPassword"
-	fi
-	if [[ ! -z "$remoteClusterName" ]]; then
-		execString="${execString} -remoteClusterName"
-		execString="${execString} $remoteClusterName"
-	elif [[ ! -z "$targetUrl" ]]; then
-		execString="${execString} -targetUrl"
-		execString="${execString} $targetUrl"
-	fi
+	execString="${execString} -remoteClusterName"
+	execString="${execString} $remoteClusterName"
 	if [[ ! -z "$compareType" ]]; then
 		execString="${execString} -compareType"
 		execString="${execString} $compareType"

@@ -13,12 +13,6 @@ remoteClusterName: "Target"
 
 # Target cluster details
 
-# target cluster url
-targetUrl: ""
-# target cluster username
-targetUsername: ""
-# target cluster password
-targetPassword: ""
 # target bucket name
 targetBucketName: "travel-sample"
 
