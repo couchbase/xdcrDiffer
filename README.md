@@ -17,6 +17,7 @@ If an XDCR is ongoing, it is quite possible that the tool will show documents as
         + [Running with TLS encrypted traffic](#running-with-tls-encrypted-traffic)
         + [Running with Encryption-At-Rest](#running-with-encryption-at-rest)
             - [Decrypt encrypted output files](#decrypt-encrypted-output-files)
+            - [Decrypt encrypted log file](#decrypt-encrypted-log-file)
 - [DiffTool Process Flow](#difftool-process-flow)
 - [Output](#output)
     * [Manifests](#manifests)
@@ -128,7 +129,7 @@ Once the above are in place, the xdcrDiffer will:
 5. Use the remote cluster reference's root certificate to contact remote cluster's KV services over KV SSL ports
 
 #### Running with Encryption-At-Rest
-The xdcrDiffer supports encryption at rest such that sensitive that lands on disk is encrypted.
+The xdcrDiffer supports encryption at rest such that sensitive data that lands on disk is encrypted.
 To run the xdcrDiffer in encryption mode, issue “-x” to the runDiffer shell script, and it will prompt at the command line prompt to enter an encryption passphrase:
 
 ```
@@ -136,14 +137,30 @@ To run the xdcrDiffer in encryption mode, issue “-x” to the runDiffer shell 
 …
 Enter encryption passphrase:
 Enter the same encryption passphrase again:
-2025-11-24T14:12:56.877-08:00 INFO GOXDCR.differEncryption: Initializing encryption at rest with AES-GCM-256 and calculating key...
+Initializing encryption at rest with AES-GCM-256 and calculating key...
 ```
 
-Output of the encrypted files will be encrypted with an .enc suffix.
+> [!WARNING]
+> The encryption passphrase is the only way to decrypt these files. There is no recovery mechanism, backup key, or admin override — if the passphrase is lost, every file encrypted with it is permanently inaccessible.
+
+`runDiffer.sh -x` automatically wires up the `-encryptedLogFile` flag to the standard log path. If invoking the `xdcrDiffer` binary directly (bypassing the shell script) in encryption mode, `-encryptedLogFile <path>` (the log path without the `.enc` suffix) must be supplied explicitly, or the binary will exit with an error.
+
+Output files, including the log file, will be encrypted with a `.enc` suffix. `-x`/`--encryptionPassphrase` cannot be combined with a YAML config file (`-y`/`--yamlFile`).
 
 ##### Decrypt encrypted output files
 
-To decrypt an encrypted file, use the differ as a decryptor tool with the following parameters:
+To decrypt an encrypted output file (manifests, diff details, mutation diff results, etc.), use the differ as a decryptor tool with the following parameters:
+
+```
+$ ./xdcrDiffer -encryptionPassphrase -decrypt outputs/mutationDiff/mutationDiffDetails.enc
+Enter encryption passphrase:
+Enter the same encryption passphrase again:
+<decrypted output to STDOUT>
+```
+
+##### Decrypt encrypted log file
+
+The tool's own log file (the path given to `-encryptedLogFile`, or the standard log path when using `runDiffer.sh -x`) is encrypted the same way as any other output file, and is decrypted the same way:
 
 ```
 $ ./xdcrDiffer -encryptionPassphrase -decrypt outputs/xdcrDiffer.log.enc
@@ -151,7 +168,6 @@ Enter encryption passphrase:
 Enter the same encryption passphrase again:
 <decrypted output to STDOUT>
 ```
-
 
 ## DiffTool Process Flow
 The difftool performs the following in order:
